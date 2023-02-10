@@ -1,0 +1,23 @@
+{
+	"folders": [
+		{
+			"path": "../../../../media/duvanelt/TD002/geo/edytem"
+		},
+		{
+			"path": "../../../../media/duvanelt/TD002/sandbox_gmc"
+		},
+		{
+			"path": "."
+		},
+		{
+			"path": "../rgdyn_up"
+		},
+		{
+			"path": "../rgdyn_reg"
+		},
+		{
+			"path": "../../../qgisplugins/GeoMultiCorr_qgis"
+		}
+	],
+	"settings": {}
+}
