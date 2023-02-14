@@ -1,8 +1,7 @@
 import sys
-import os
 from pathlib import Path
 sys.path.append("..")
-from src.gmc_project import GMC_Project
+from gmc_project import GMC_Project
 import json
 import unittest
 
