@@ -100,6 +100,9 @@ class GMC_Project:
         # Push it into the geodatabase
         updated = pd.concat([stables, addeds])
         updated.to_file(self.p_geodb, layer='Thumbs')
+
+        # Update instance
+        self._thumbs = updated
         return updated
 
     def update_pairs(self):
@@ -117,6 +120,9 @@ class GMC_Project:
         # Push it into the geodatabase        
         updated = gpd.GeoDataFrame(updated).set_crs(epsg=2154)
         updated.to_file(self.p_geodb, layer='Pairs')
+
+        # Update instance
+        self._pairs = updated
         return updated
 
     ###############################
@@ -156,6 +162,4 @@ class GMC_Project:
                     return pz_layer
 
 p = GMC_Project('/media/duvanelt/TD002/sandbox_gmc/vanoise')
-p.get_pairs_overview()
-p.update_pairs()
 # %%

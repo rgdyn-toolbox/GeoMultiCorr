@@ -1,7 +1,9 @@
+import os
 from pathlib import Path
 import pandas as pd
 from telenvi import raster_tools as rt
 import gmc_thumb as gmc_th
+ROOT_OUTPUTS  = Path(__file__).parent.with_name('_temp')
 
 class GMC_Pair:
 
@@ -39,19 +41,31 @@ class GMC_Pair:
         assert left.th_pz_name == right.th_pz_name, 'left and right have not the same pzone'
         assert left.th_path != right.th_path, 'left thumb is right thumb'
 
-        # Attributes writing
+        # Metadata
         self.pa_pz_name = left.th_pz_name
         self.pa_key = f"{self.pa_pz_name}_{left.th_date}-{left.th_sensor}_{right.th_date}-{right.th_sensor}"
-        self.pa_path = Path(Path(left.th_path).parent.parent, 'displacements',f"{self.pa_key}")
-        self.pa_dispf_path = Path(self.pa_path, 'asp_outputs', f"{self.pa_key}_run-F.tif")
-        self.pa_snr_path = Path(self.pa_path, 'asp_outputs', f"{self.pa_key}_SNR-run-F.tif")
-        self.pa_magn_path = Path(self.pa_path, f"{self.pa_key}_magn.tif")
         self.pa_left = left
         self.pa_right = right
 
+        # Base path
+        self.pa_path        = Path(Path(left.th_path).parent.parent, 'displacements',f"{self.pa_key}")
+
+        # Path for the clip outputs and correlation inputs
+        self.pa_inputs_path = Path(self.pa_path, 'inputs')
+
+        # Outputs 1
+        self.pa_asp_path    = Path(self.pa_path, 'asp_outputs')
+        self.pa_dispf_path  = Path(self.pa_asp_path, f"{self.pa_key}_run-F.tif")
+        self.pa_snr_path    = Path(self.pa_asp_path, f"{self.pa_key}_SNR-run-F.tif")
+
+        # Outputs 2
+        self.pa_magn_path   = Path(self.pa_path, f"{self.pa_key}_magn.tif")
+        
         if self.pa_path.exists():
             if self.pa_dispf_path.exists():
                 pa_status = 'complete'
+            elif self.pa_inputs_path.exists():
+                pa_status = 'clipped'
             else:
                 pa_status = 'corrupt'
         else :
@@ -92,4 +106,94 @@ status : {self.pa_status}
     
     def get_dispf_geoim(self):
         return rt.pre_process(str(self.pa_dispf_path), geoim=True)
+    
+    def clip(self, numBand = 1):
+        if self.pa_status in ['complete', 'clipped']:
+            return True
+        cleft = rt.pre_process(
+            target = self.pa_left.get_ds(),
+            clip   = self.pa_right.get_ds(),
+            nBands = numBand)
+
+        cright = rt.pre_process(
+            target = self.pa_right.get_ds(),
+            clip   = self.pa_left.get_ds(),
+            nBands = numBand)
+
+        if not self.pa_path.exists():
+            self.pa_path.mkdir()
+
+        if not self.pa_inputs_path.exists():
+            self.pa_inputs_path.mkdir()
+
+        rt.write(cleft,  os.path.join(self.pa_inputs_path, self.pa_left.th_key  + '_clipped.tif'))
+        rt.write(cright, os.path.join(self.pa_inputs_path, self.pa_right.th_key + '_clipped.tif'))
+        self.pa_status='clipped'
+        return True
+
+    def corr(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, active=False):
+        
+        # Check clip
+        self.clip()
+
+        # Check existing correlation
+        if self.pa_status == 'completed':
+            return True
+
+        # Create a directory in a place where ASP can write their outputs : the temp directory, inside GeoMultiCorr app
+        temp = Path(ROOT_OUTPUTS, self.pa_key)
+        if not temp.exists():
+            temp.mkdir()
+
+        # Write correlation command
+        corr_command = f"parallel_stereo {self.pa_left.th_path} {self.pa_right.th_path} {temp}/{self.pa_key}_run \
+            --correlator-mode \
+            --threads-multiprocess 8 \
+            --processes 1 \
+            --stereo-algorithm {corr_algorithm} \
+            --corr-kernel {corr_kernel_size} {corr_kernel_size} \
+            --xcorr-threshold {corr_xthreshold} \
+            --corr-tile-size 2048 \
+            --corr-memory-limit-mb 8000 \
+            --save-left-right-disparity-difference\
+            --ip-per-tile 200 \
+            --min-num-ip 5"
+
+        # Launch
+        if active:
+            os.system(corr_command)
+
+    def move_corrdata(self, verbose=False):
+        verbose_mode = {False:' > /dev/null 2>&1', True:''}
+        departure = Path(ROOT_OUTPUTS, self.pa_key)
+        destination = self.pa_asp_path
+        if not departure.exists():
+            return None
+        os.system(f"mv {departure} {destination} {verbose_mode[verbose]}")
+        if self.pa_asp_path.exists():
+            os.system(f"rm -rf {departure}")
+            return True
+    
+    def compute_magnitude(self):
+
+        if not self.pa_dispf_path.exists():
+            self.corr()
+            self.move_corrdata()
+
+        # Open the stack with horizontal and vertical displacements
+        xDisp, yDisp = rt.pre_process(str(self.pa_dispf_path), nBands=[1,2], geoim=True).splitBands()
+
+        # We switch values using negative values because ASP gives displacements 
+        # in pixel coordinates using as reference upper-left corner
+        yDisp *= -1.0
+
+        # Get Metadata
+        pxSizeX,_ = xDisp.getPixelSize()
+
+        # Magnitude raster creation
+        magn = ((xDisp ** 2 + yDisp ** 2) ** 0.5)
+
+        # Magnitude in meters
+        magn_in_meters = magn * pxSizeX
+        magn_in_meters.save(str(self.pa_magn_path))
 # %%
