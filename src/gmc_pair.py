@@ -60,18 +60,11 @@ class GMC_Pair:
 
         # Outputs 2
         self.pa_magn_path   = Path(self.pa_path, f"{self.pa_key}_magn.tif")
-        
-        if self.pa_path.exists():
-            if self.pa_dispf_path.exists():
-                pa_status = 'complete'
-            elif self.pa_inputs_path.exists():
-                pa_status = 'clipped'
-            else:
-                pa_status = 'corrupt'
-        else :
-            pa_status = 'empty'
 
-        self.pa_status = pa_status
+        # Current state of the pair
+        self.pa_status = self.get_status()
+
+        # Pair spatial extent
         self.geometry = left.geometry
 
     def __repr__(self):
@@ -83,6 +76,18 @@ right  : {self.pa_right.th_date}-{self.pa_right.th_sensor}
 status : {self.pa_status}
 ---------
 """
+
+    def get_status(self):
+        if self.pa_path.exists():
+            if self.pa_dispf_path.exists():
+                pa_status = 'complete'
+            elif self.pa_inputs_path.exists():
+                pa_status = 'clipped'
+            else:
+                pa_status = 'corrupt'
+        else :
+            pa_status = 'empty'
+        return pa_status
 
     def to_pdserie(self):
         return pd.Series({
