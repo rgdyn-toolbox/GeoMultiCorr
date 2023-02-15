@@ -6,6 +6,7 @@ import geopandas as gpd
 import gmc_thumb as gmc_th
 import gmc_pzone as gmc_pz
 import gmc_pair as gmc_pa
+import gmc_geomorph as gmc_ge
 import pandas as pd
 
 ROOT_TEMPLATE = Path(__file__).parent.with_name('template')
@@ -41,6 +42,7 @@ class GMC_Project:
         self.p_geodb = os.path.join(target_root_path, 'database.gpkg')
         self._pzones = gpd.read_file(self.p_geodb, layer='Pzones')
         self._thumbs = gpd.read_file(self.p_geodb, layer='Thumbs')
+        self._geomorphs = gpd.read_file(self.p_geodb, layer='Geomorphs')
         self._pairs  = gpd.read_file(self.p_geodb, layer='Pairs')
         self.pz_names = list(self._pzones.pz_name.unique())
 
@@ -49,7 +51,7 @@ class GMC_Project:
     def get_thumbs_overview(self, criterias=''):
         """Send a dataframe with informations about each thumb raster file meeting the criterias.
            If there's no criterias, send informations about all the thumbs of the project """
-        return self.search_engine('Thumbs', criterias)
+        return self._search_engine('Thumbs', criterias)
 
     def get_thumbs(self, criterias=''):
         """Send a list of GMC_Thumb objects meeting the criterias"""
@@ -58,18 +60,25 @@ class GMC_Project:
 
     def get_pairs_overview(self, criterias=''):
         """Send a dataframe with each possible Pair according to the Thumbs"""
-        return self.search_engine('Pairs', criterias)
+        return self._search_engine('Pairs', criterias)
     
     def get_pairs(self, criterias=''):
         selected_pairs = self.get_pairs_overview(criterias)
         return [gmc_pa.GMC_Pair(self, target_path = x.pa_path) for x in selected_pairs.iloc]
 
     def get_pzones_overview(self, pz_name=''):
-        return self.search_engine('Pzones', pz_name)
+        return self._search_engine('Pzones', pz_name)
 
     def get_pzones(self, pz_name=''):
         selected_pzones = self.get_pzones_overview(pz_name)
         return [gmc_pz.GMC_Pzone(x.pz_name, self) for x in selected_pzones.iloc]
+
+    def get_geomorphs_overview(self, criterias=''):
+        return self._search_engine('Geomorphs', criterias)
+
+    def get_geomorphs(self, criterias=''):
+        selected_geomorphs = self.get_geomorphs_overview(criterias)
+        return [gmc_ge.GMC_Geomorph(self, x.ge_rginv_key) for x in selected_geomorphs.iloc]
 
     ###############################
 
@@ -127,7 +136,7 @@ class GMC_Project:
 
     ###############################
 
-    def search_engine(self, layername, criterias=''):
+    def _search_engine(self, layername, criterias=''):
         """A search engine among project layers"""
 
         # if there is only one criteria we store it in a list
@@ -161,5 +170,21 @@ class GMC_Project:
                 else:
                     return pz_layer
 
+            case 'Geomorphs':
+                """ on part du principe qu'on ne peut donner comme critere soit un identifiant de rg soit un pz_name"""
+                selection = self._geomorphs
+                if criterias!=['']:
+                    for criteria in criterias:
+                        if criteria in self.pz_names:
+                            selection = selection[selection.ge_pz_name == criteria]
+                        else:
+                            selection = selection[selection.ge_rginv_key == criteria]
+                    return selection
+                else:
+                    return selection
+
 p = GMC_Project('/media/duvanelt/TD002/sandbox_gmc/vanoise')
+ise = p.get_geomorphs('iseran')[0]
+q = ise.get_pairs_on_period_overview(2014,2021)
+q[q.pa_status=='complete']
 # %%
