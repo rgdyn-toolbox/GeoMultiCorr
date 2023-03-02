@@ -46,4 +46,5 @@ class GMC_Geomorph:
         pairs['chrono_max'] = pairs.apply(lambda row: max(int(row.pa_left_date.split('-')[0]), int(row.pa_right_date.split('-')[0])), axis=1)
         pairs = pairs[(pairs.chrono_min>=ymin)&(pairs.chrono_max>=ymax)]
         return pairs        
-        
+    
+    

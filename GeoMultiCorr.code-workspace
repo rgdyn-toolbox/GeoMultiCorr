@@ -17,6 +17,9 @@
 		},
 		{
 			"path": "../../../qgisplugins/GeoMultiCorr_qgis"
+		},
+		{
+			"path": "../../../media/duvanelt/TD002/geo/geopixels/TELENVI_PACKAGE/master/telenvi"
 		}
 	],
 	"settings": {}
