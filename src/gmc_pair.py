@@ -48,7 +48,7 @@ class GMC_Pair:
         self.pa_right = right
 
         # Base path
-        self.pa_path        = Path(Path(left.th_path).parent.parent, 'displacements',f"{self.pa_key}")
+        self.pa_path = Path(Path(left.th_path).parent.parent, 'displacements',f"{self.pa_key}")
 
         # Path for the clip outputs and correlation inputs
         self.pa_inputs_path = Path(self.pa_path, 'inputs')
@@ -126,7 +126,11 @@ status : {self.pa_status}
             nBands = numBand)
 
         if not self.pa_path.exists():
-            self.pa_path.mkdir()
+            try:
+                self.pa_path.mkdir()
+            except FileNotFoundError:
+                self.pa_path.parent.mkdir()
+                self.pa_path.mkdir()
 
         if not self.pa_inputs_path.exists():
             self.pa_inputs_path.mkdir()
