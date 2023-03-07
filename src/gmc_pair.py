@@ -186,7 +186,7 @@ status : {self.pa_status}
     def compute_magnitude(self):
 
         if not self.pa_dispf_path.exists():
-            self.corr()
+            self.corr(active=True)
             self.move_corrdata()
 
         # Open the stack with horizontal and vertical displacements

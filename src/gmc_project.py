@@ -111,7 +111,7 @@ class GMC_Project:
     def get_geomorphs(self, criterias=''):
         """Send a list of GMC_Geomorphs objects"""
         selected_geomorphs = self.get_geomorphs_overview(criterias)
-        return [gmc_ge.GMC_Geomorph(self, x.ge_rginv_key) for x in selected_geomorphs.iloc]
+        return [gmc_ge.GMC_Geomorph(self, x.ge_frogi_id) for x in selected_geomorphs.iloc]
 
     def get_protomap(self, rawpath, extensions=['tif', 'jp2']):
         """make a vector layer with the extents of all the rasters stored under the rawpath
@@ -378,7 +378,7 @@ class GMC_Project:
                         if criteria in self.pz_names:
                             selection = selection[selection.ge_pz_name == criteria]
                         else:
-                            selection = selection[selection.ge_rginv_key == criteria]
+                            selection = selection[selection.ge_frogi_id == criteria]
                     return selection
                 else:
                     return selection
