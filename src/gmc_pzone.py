@@ -1,5 +1,6 @@
 from pathlib import Path
 import geopandas as gpd
+import gmc_thumb
 
 class GMC_Pzone:
 
@@ -29,7 +30,7 @@ class GMC_Pzone:
         """
         Ne va pas chercher l'info dans les paires existantes mais la reconstruit à partir
         de l'état courant du layer thumbs. Sinon, pas de mise à jour possible de la base
-        des des vignettes !
+        des vignettes !
         """
         pairs = []
         thumbs = self.get_thumbs()
@@ -40,3 +41,38 @@ class GMC_Pzone:
                 except AssertionError:
                     continue
         return pairs
+
+    def get_valid_thumbs(self):
+        """
+        Renvoie les vignettes selectionnées par l'user dans qgis, en modifiant la valeur attributaire "th_valid" dans la table Thumbs
+        """
+        ths = self.proj.get_thumbs_overview(self.pz_name)
+        ths_valid = ths[ths.th_valid=='1']
+        gmc_ths_valid = [gmc_thumb.GMC_Thumb(th.th_path) for th in ths_valid.iloc]
+        return gmc_ths_valid
+
+    def get_valid_pairs(self):
+        ps = []
+        for left in self.get_valid_thumbs():
+            for right in self.get_valid_thumbs():
+                try:
+                    ps.append(left+right)
+                except AssertionError:
+                    continue
+        return ps
+
+    def pz_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10):
+        logs = {}
+        logs['COMPLETE'] = []
+        logs['ABORT'] = []
+        for p in self.get_valid_pairs():
+            try:
+                p.pa_full(corr_algorithm, corr_kernel_size, corr_xthreshold)
+                logs['COMPLETE'].append(p.pa_key)
+            except ValueError:
+                logs['ABORT'].append(p.pa_key)
+                continue
+            except AssertionError:
+                logs['ABORT'].append(p.pa_key)
+                continue
+        return logs

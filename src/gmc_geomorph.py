@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 import geopandas as gpd
 
 class GMC_Geomorph:
-    
+        
     def __init__(self, project, ge_key):
         
         # Check existence and unique
@@ -55,9 +55,10 @@ class GMC_Geomorph:
         return pairs
     
     def get_mean_disp_on_pair(self, magn_path):
-        target = rt.GeoIm.GeoIm(magn_path)
-        target.maskFromVector(gpd.GeoDataFrame([{'geometry':self.geometry}]).set_crs(epsg=2154))
-        return target.mean()
+        target = gpd.GeoDataFrame([{'geometry':self.geometry}]).set_crs(epsg=2154)
+        data = rt.pre_process(magn_path, geoExtent=target, geoim=True)
+        data.maskFromVector(target)
+        return data.mean()
 
     def get_disp_overview(self):
         disps = []
@@ -71,16 +72,23 @@ class GMC_Geomorph:
             disps.append(row)
         return pd.DataFrame(disps)
     
-    def show_mean_velocities(self,  savepath=None):
+    def show_mean_velocities(self, savepath=None, bounds=None):
         fig, ax = plt.subplots(figsize=(10,6.5))
         disps = self.get_disp_overview()
         for pair in disps.iloc:
             ya = pair.L
             yb = pair.R
+            if ya > yb:
+                color = 'black'
+            else:
+                color = 'red'
             meters = pair.V
-            ax.plot([int(ya), int(yb)],[meters, meters], linewidth=1)
-        ax.set_ybound(lower=0, upper=1.7)
+            ax.plot([int(ya), int(yb)],[meters, meters], linewidth=1, color=color, alpha=0.7)
+            ax.plot([int(ya), int(yb)],[meters, meters], 'bo', color=color, alpha=0.7)
+
+        if bounds != None:
+            ax.set_ybound(lower=bounds[0], upper=bounds[1])
         ax.set_xticks(np.arange(2001,2023,2))
-        ax.set_title(f"Vitesses annuelles moyennes par paire sur zone {self.ge_key}")
+        ax.set_title(f"Vitesses annuelles moyennes sur {self.ge_key}")
         if savepath != None:
             fig.savefig(savepath)

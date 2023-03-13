@@ -34,7 +34,7 @@ class GMC_Pair:
             right_path = Path(thumbs_pzone_path, right_key)
 
             # Make Thumbs from them
-            left =  gmc_th.GMC_Thumb(left_path)
+            left  = gmc_th.GMC_Thumb(left_path)
             right = gmc_th.GMC_Thumb(right_path)
 
         # Construction from two thumbs
@@ -140,13 +140,13 @@ status : {self.pa_status}
         self.pa_status='clipped'
         return True
 
-    def corr(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, active=False):
+    def corr(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10):
         
         # Check clip
         self.clip()
 
         # Check existing correlation
-        if self.pa_status == 'completed':
+        if self.pa_status == 'complete':
             return True
 
         # Create a directory in a place where ASP can write their outputs : the temp directory, inside GeoMultiCorr app
@@ -169,15 +169,25 @@ status : {self.pa_status}
             --min-num-ip 5"
 
         # Launch
-        if active:
-            os.system(corr_command)
+        os.system(corr_command)
 
-    def move_corrdata(self, verbose=False):
+    def save_corrdata(self, verbose=False):
+        """
+        Move the ASP outputs from GeoMultiCorr temporal storage location
+        """
+
+        # Hide ugly warnings about symlinks
         verbose_mode = {False:' > /dev/null 2>&1', True:''}
+
+        # get the GeoMultiCorr storage location
         departure = Path(ROOT_OUTPUTS, self.pa_key)
-        destination = self.pa_asp_path
         if not departure.exists():
             return None
+
+        # get the displacements folder path in the current project
+        destination = self.pa_asp_path
+
+        # send the command to bring back the temporal data in the current project
         os.system(f"mv {departure} {destination} {verbose_mode[verbose]}")
         if self.pa_asp_path.exists():
             os.system(f"rm -rf {departure}")
@@ -185,9 +195,11 @@ status : {self.pa_status}
     
     def compute_magnitude(self):
 
-        if not self.pa_dispf_path.exists():
-            self.corr(active=True)
-            self.move_corrdata()
+        assert self.pa_dispf_path.exists(), 'this pair is not yet correlate'
+
+        # Check if the file is ever existing
+        if self.pa_magn_path.exists():
+            return True
 
         # Open the stack with horizontal and vertical displacements
         xDisp, yDisp = rt.pre_process(str(self.pa_dispf_path), nBands=[1,2], geoim=True).splitBands()
@@ -205,4 +217,24 @@ status : {self.pa_status}
         # Magnitude in meters
         magn_in_meters = magn * pxSizeX
         magn_in_meters.save(str(self.pa_magn_path))
+    
+    def vectorize_displacements(self):
+        pass
+
+    def pa_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10):
+
+        # Clip
+        self.clip()
+
+        # Corr
+        self.corr(corr_algorithm, corr_kernel_size, corr_xthreshold)
+
+        # Save
+        self.save_corrdata()
+
+        # Magn
+        self.compute_magnitude()
+
+        # Vectors
+        self.vectorize_displacements()
 # %%
