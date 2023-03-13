@@ -336,6 +336,12 @@ class GMC_Project:
                     # Write the thumb
                     rt.write(thumb, thumb_path)
 
+    def pr_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10):
+        logs = []
+        for pzone in self.get_pzones():
+            logs.append(pzone.pz_full(corr_algorithm, corr_kernel_size, corr_xthreshold))
+        return pd.DataFrame(logs)
+
     def _search_engine(self, layername, criterias=''):
         """A search engine among project layers"""
 
