@@ -10,6 +10,9 @@ import gmc_thumb as gmc_th
 import gmc_pzone as gmc_pz
 import gmc_pair as gmc_pa
 import gmc_geomorph as gmc_ge
+import gmc_xzone as gmc_xz
+import gmc_spine as gmc_sp
+import gmc_rib as gmc_ri
 
 VERSION = '0.0.0'
 print(f"""---------
@@ -68,11 +71,15 @@ class GMC_Project:
         self._thumbs = gpd.read_file(self.p_geodb, layer='Thumbs')
         self._geomorphs = gpd.read_file(self.p_geodb, layer='Geomorphs')
         self._pairs  = gpd.read_file(self.p_geodb, layer='Pairs')
+        self._xzones = gpd.read_file(self.p_geodb, layer='Xzones')
+        self._spines = gpd.read_file(self.p_geodb, layer='Spines')
+        self._ribs = gpd.read_file(self.p_geodb, layer='Ribs')
         self.pz_names = list(self._pzones.pz_name.unique())
 
     def update_vector_data(self):
         self._pzones = gpd.read_file(self.p_geodb, layer='Pzones')
         self._geomorphs = gpd.read_file(self.p_geodb, layer='Geomorphs')
+        self._xzones = gpd.read_file(self.p_geodb, layer='Xzones')
 
     ########### GETTERS ###########
 
@@ -112,6 +119,18 @@ class GMC_Project:
         """Send a list of GMC_Geomorphs objects"""
         selected_geomorphs = self.get_geomorphs_overview(criterias)
         return [gmc_ge.GMC_Geomorph(self, x.ge_frogi_id) for x in selected_geomorphs.iloc]
+
+    def get_xzone(self, xz_id):
+        """Send a GMC_Xzone object"""
+        return gmc_xz.GMC_Xzones(self, xz_id)
+
+    def get_spine(self, sp_id):
+        """Send a GMC_Spine object"""
+        return gmc_sp.GMC_Spine(self, sp_id)
+
+    def get_rib(self, ri_id):
+        """Send a GMC_Rib object"""
+        return gmc_ri.GMC_Rib(self, ri_id)
 
     def get_protomap(self, rawpath, extensions=['tif', 'jp2']):
         """make a vector layer with the extents of all the rasters stored under the rawpath

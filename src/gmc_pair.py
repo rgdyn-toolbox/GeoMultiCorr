@@ -1,7 +1,13 @@
+from matplotlib import pyplot as plt
+import geopandas as gpd
+import shapely
+import numpy as np
 import os
 from pathlib import Path
+from tqdm import tqdm
 import pandas as pd
 from telenvi import raster_tools as rt
+from telenvi import vector_tools as vt
 import gmc_thumb as gmc_th
 ROOT_OUTPUTS  = Path(__file__).parent.with_name('_temp')
 
@@ -104,14 +110,42 @@ status : {self.pa_status}
             'geometry':self.geometry})
 
     def get_magn_geoim(self):
-        return rt.pre_process(str(self.pa_magn_path), geoim=True)
+        try:
+            return self.pa_magn_geoim
+        except AttributeError:
+            self.pa_magn_geoim = rt.pre_process(str(self.pa_magn_path), geoim=True)
+            return self.pa_magn_geoim
 
     def get_snr_geoim(self):
-        return rt.pre_process(str(self.pa_snr_path), geoim=True)
+        try:
+            return self.pa_snr_geoim
+        except AttributeError:
+            self.pa_snr_geoim = rt.pre_process(str(self.pa_snr_path), geoim=True)
+            return self.pa_snr_geoim
+
+    def get_dispX_geoim(self):
+        try:
+            return self.pa_dispX_geoim
+        except AttributeError:
+            self.pa_dispX_geoim = rt.pre_process(str(self.pa_dispf_path), geoim=True, nBands=1)
+            return self.pa_dispX_geoim
+
+    def get_dispY_geoim(self):
+        try:
+            return self.pa_dispY_geoim
+        except AttributeError:
+            self.pa_dispY_geoim = rt.pre_process(str(self.pa_dispf_path), geoim=True, nBands=2)
+            return self.pa_dispY_geoim
     
-    def get_dispf_geoim(self):
-        return rt.pre_process(str(self.pa_dispf_path), geoim=True)
-    
+    def get_vx_geoim(self):
+        return self.get_dispX_geoim() / abs(self.pa_left.th_year - self.pa_right.th_year)
+
+    def get_vy_geoim(self):
+        return self.get_dispY_geoim() / abs(self.pa_left.th_year - self.pa_right.th_year)
+
+    def get_vmagn_geoim(self):
+        return self.get_magn_geoim() / abs(self.pa_left.th_year - self.pa_right.th_year)
+
     def clip(self, numBand = 1):
         if self.pa_status in ['complete', 'clipped']:
             return True
@@ -237,4 +271,32 @@ status : {self.pa_status}
 
         # Vectors
         self.vectorize_displacements()
+        return True
+
+    def get_interesting_geoim(self, mode):
+        match mode.lower():
+            case 'm':
+                target = self.get_magn_geoim()
+            case 'x':
+                target = self.get_dispX_geoim()
+            case 'y':
+                target = self.get_dispY_geoim()            
+            case 'vm':
+                target = self.get_vmagn_geoim()
+            case 'vx':
+                target = self.get_vx_geoim()
+            case 'vy':
+                target = self.get_vy_geoim()
+        return target
+
+    def get_slice(self, geoLine, mode='m'):
+        """
+        geoline = [gpd.GeoSeries, path, gpd.GeoDataFrame, shapely.geometry.LineString, (A, B)]
+        mode = [m, x, y, vm, vx, vy]
+        """
+        return self.get_interesting_geoim(mode).inspectGeoLine(geoLine)
+
+    def get_slices(self, geoLine, ribLength, ribStep, ribOrientation='v', mode='m'):
+        return self.get_interesting_geoim(mode).inspectRibsAlongSpine(geoLine, ribLength, ribStep, ribOrientation)
+
 # %%
