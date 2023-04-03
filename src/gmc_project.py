@@ -12,7 +12,6 @@ import gmc_pair as gmc_pa
 import gmc_geomorph as gmc_ge
 import gmc_xzone as gmc_xz
 import gmc_spine as gmc_sp
-import gmc_rib as gmc_ri
 
 VERSION = '0.0.0'
 print(f"""---------
@@ -127,10 +126,6 @@ class GMC_Project:
     def get_spine(self, sp_id):
         """Send a GMC_Spine object"""
         return gmc_sp.GMC_Spine(self, sp_id)
-
-    def get_rib(self, ri_id):
-        """Send a GMC_Rib object"""
-        return gmc_ri.GMC_Rib(self, ri_id)
 
     def get_protomap(self, rawpath, extensions=['tif', 'jp2']):
         """make a vector layer with the extents of all the rasters stored under the rawpath
