@@ -122,16 +122,20 @@ class GMC_Project:
         """Send a GMC_Xzone object"""
         return gmc_xz.GMC_Xzones(self, xz_id)
 
-    """modif 16:12 Thib"""
-
     def get_pairs_overview_on_period(self, ymin, ymax, criterias=''):
-        """Retourne les paires completement incluses dans la période [yMin;yMax]"""
+        """Retourne un tableau des paires completement incluses dans la période [yMin;yMax]"""
         pairs = self.get_pairs_overview(criterias)
         pairs['chrono_min'] = pairs.apply(lambda row: min(int(row.pa_left_date.split('-')[0]), int(row.pa_right_date.split('-')[0])), axis=1)
         pairs['chrono_max'] = pairs.apply(lambda row: max(int(row.pa_left_date.split('-')[0]), int(row.pa_right_date.split('-')[0])), axis=1)
         pairs = pairs[(pairs.chrono_min>=ymin)&(pairs.chrono_max<=ymax)]
         return pairs
-    
+
+    def get_pairs_on_period(self, ymin, ymax, criterias=''):
+        """Retourne les paires completement incluses dans la période [yMin;yMax]"""
+        board = self.get_pairs_overview_on_period(ymin, ymax, criterias)
+        pairs = [gmc_pa.GMC_Pair(self, p.pa_path) for p in board.iloc]
+        return pairs
+
     def get_spine(self, sp_id):
         """Send a GMC_Spine object"""
         return gmc_sp.GMC_Spine(self, sp_id)
