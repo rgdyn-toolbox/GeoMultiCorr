@@ -122,6 +122,8 @@ class GMC_Project:
         """Send a GMC_Xzone object"""
         return gmc_xz.GMC_Xzones(self, xz_id)
 
+    """modif 16:12 Thib"""
+
     def get_pairs_overview_on_period(self, ymin, ymax, criterias=''):
         """Retourne les paires completement incluses dans la période [yMin;yMax]"""
         pairs = self.get_pairs_overview(criterias)
