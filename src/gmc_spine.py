@@ -9,7 +9,7 @@ import warnings
 from shapely.errors import ShapelyDeprecationWarning
 from tqdm import tqdm
 
-class GMC_spine:
+class GMC_Spine:
 
     def __init__(self, project, sp_id):
 

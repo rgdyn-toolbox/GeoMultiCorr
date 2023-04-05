@@ -72,7 +72,6 @@ class GMC_Project:
         self._pairs  = gpd.read_file(self.p_geodb, layer='Pairs')
         self._xzones = gpd.read_file(self.p_geodb, layer='Xzones')
         self._spines = gpd.read_file(self.p_geodb, layer='Spines')
-        self._ribs = gpd.read_file(self.p_geodb, layer='Ribs')
         self.pz_names = list(self._pzones.pz_name.unique())
 
     def update_vector_data(self):
@@ -123,6 +122,14 @@ class GMC_Project:
         """Send a GMC_Xzone object"""
         return gmc_xz.GMC_Xzones(self, xz_id)
 
+    def get_pairs_overview_on_period(self, ymin, ymax, criterias=''):
+        """Retourne les paires completement incluses dans la période [yMin;yMax]"""
+        pairs = self.get_pairs_overview(criterias)
+        pairs['chrono_min'] = pairs.apply(lambda row: min(int(row.pa_left_date.split('-')[0]), int(row.pa_right_date.split('-')[0])), axis=1)
+        pairs['chrono_max'] = pairs.apply(lambda row: max(int(row.pa_left_date.split('-')[0]), int(row.pa_right_date.split('-')[0])), axis=1)
+        pairs = pairs[(pairs.chrono_min>=ymin)&(pairs.chrono_max<=ymax)]
+        return pairs
+    
     def get_spine(self, sp_id):
         """Send a GMC_Spine object"""
         return gmc_sp.GMC_Spine(self, sp_id)
