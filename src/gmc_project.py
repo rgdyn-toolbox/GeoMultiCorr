@@ -74,6 +74,10 @@ class GMC_Project:
         self._spines = gpd.read_file(self.p_geodb, layer='Spines')
         self.pz_names = list(self._pzones.pz_name.unique())
 
+    """
+    modif Ronan
+    """
+
     def update_vector_data(self):
         self._pzones = gpd.read_file(self.p_geodb, layer='Pzones')
         self._geomorphs = gpd.read_file(self.p_geodb, layer='Geomorphs')
