@@ -123,6 +123,10 @@ status : {self.pa_status}
             self.pa_snr_geoim = rt.pre_process(str(self.pa_snr_path), geoim=True)
             return self.pa_snr_geoim
 
+    def get_disp_corr_geoim(self):
+            self.pa_dispf_geoim = rt.pre_process(str(self.pa_dispf_path), geoim=True, nBands=3)
+            return self.pa_dispf_geoim
+        
     def get_dispX_geoim(self):
         try:
             return self.pa_dispX_geoim
