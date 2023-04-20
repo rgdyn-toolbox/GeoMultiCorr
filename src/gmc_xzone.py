@@ -5,6 +5,16 @@ from telenvi import raster_tools as rt
 from matplotlib import pyplot as plt
 import geopandas as gpd
 
+disps = pd.DataFrame([
+{'period':(2001,2006), 'vs':0.183350, 'vm':0.352077},
+{'period':(2006,2009), 'vs':0.158703, 'vm':0.383952},
+{'period':(2009,2013), 'vs':0.160116, 'vm':0.491599},
+{'period':(2013,2014), 'vs':0.178329, 'vm':0.541328},
+{'period':(2014,2017), 'vs':0.183350, 'vm':0.700086},
+{'period':(2017,2018), 'vs':0.178329, 'vm':0.775959},
+{'period':(2018,2019), 'vs':0.178329, 'vm':0.880695},
+{'period':(2019,2021), 'vs':0.161985, 'vm':0.859764}])
+
 class GMC_Xzones:
         
     def __init__(self, project, xz_key):
@@ -72,6 +82,7 @@ class GMC_Xzones:
     def show_mean_velocities(self, savepath=None, bounds=None):
         fig, ax = plt.subplots(figsize=(10,6.5))
         disps = self.get_disp_overview()
+        
         for pair in disps.iloc:
             ya = pair.L
             yb = pair.R
@@ -85,7 +96,53 @@ class GMC_Xzones:
 
         if bounds != None:
             ax.set_ybound(lower=bounds[0], upper=bounds[1])
+
         ax.set_xticks(np.arange(2001,2023,2))
-        ax.set_title(f"Vitesses annuelles moyennes sur {self.xz_key}")
+        ax.set_title(f"Vitesses annuelles moyennes consolidées sur {self.xz_key}")
         if savepath != None:
             fig.savefig(savepath)
+
+def draw_time_series(disps=disps, color='black', bounds=None, savepath=None):
+
+    # Create plot figure
+    fig, ax = plt.subplots(figsize=(10,6.5))
+
+    for period in disps.iloc:
+        
+        # Recupere les bornes de la periode d'etude
+        ya = period.period[0]
+        yb = period.period[1]
+
+        # Récupère les valeurs de déplacements pour zone mouvante et stable
+        mean_velocity = period.vm
+        uncertainity = period.vs
+
+        # Calcule l'incertitude
+        uncertainity_max = mean_velocity + uncertainity
+        uncertainity_min = mean_velocity - uncertainity
+
+        # Affiche l'incertitude
+        ax.plot([int(ya), int(yb)],[uncertainity_max, uncertainity_max], color='red')
+        ax.plot([int(ya), int(yb)],[uncertainity_min, uncertainity_min], color='red')
+
+        # Trace la serie temporelle
+        ax.plot([int(ya), int(yb)],[mean_velocity, mean_velocity], color=color)
+        ax.plot([int(ya), int(yb)],[mean_velocity, mean_velocity], 'bo', linewidth=0.5, color=color)
+
+        # Verrouille les bornes inférieure et supérieure de l'axe Y du graphe
+        if bounds != None:
+            ax.set_ybound(lower=bounds[0], upper=bounds[1])
+
+        # Verrouille les bornes des périodes à afficher
+        ax.set_xticks(np.arange(2001,2023,2))
+
+        # Titre le graphe
+        ax.set_title(f"Vitesses annuelles moyennes consolidées dans le polygone 1")
+
+        # Sauve si demandé
+        if savepath != None:
+            fig.savefig(savepath)
+
+        # fig.show()
+
+    return None
