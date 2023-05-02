@@ -1,23 +1,27 @@
-from random import choice
+import sys
+sys.path.append("../..")
+
 import numpy as np
 import pandas as pd
-from telenvi import raster_tools as rt
 from matplotlib import pyplot as plt
+
 import geopandas as gpd
-import gmc_spine as gmc_sp
+from telenvi import raster_tools as rt
+
+from src.GeoMultiCorr.common import GMC_Spine
 
 class GMC_Geomorph:
         
-    def __init__(self, project, ge_id):
+    def __init__(self, session, ge_id):
         
         # Check existence and unique
-        assert ge_id in project._geomorphs.ge_frogi_id.values, 'key not found in Geomorphs layer'
-        assert project._geomorphs.value_counts('ge_frogi_id')[ge_id] == 1, f'more than 1 geomorph have the key {ge_id}'
+        assert ge_id in session._geomorphs.ge_frogi_id.values, 'key not found in Geomorphs layer'
+        assert session._geomorphs.value_counts('ge_frogi_id')[ge_id] == 1, f'more than 1 geomorph have the key {ge_id}'
 
         # Attributes
-        self.project = project
-        self.data = project._geomorphs[project._geomorphs.ge_frogi_id == ge_id].iloc[0]
-        self.ge_pz = project.get_pzones(self.data.ge_pz_name)[0]
+        self.session = session
+        self.data = session._geomorphs[session._geomorphs.ge_frogi_id == ge_id].iloc[0]
+        self.ge_pz = session.get_pzones(self.data.ge_pz_name)[0]
         self.geometry = self.data.geometry
         self.ge_id = ge_id
 
@@ -45,7 +49,7 @@ class GMC_Geomorph:
         except IndexError:
             print(f'0 thumbs for year {criterias[0]} on this geomorph')
         thumb = thumb.cropFromVector(self.geometry)
-        thumb.maskFromVector(self.project.get_geomorphs_overview(criterias))
+        thumb.maskFromVector(self.session.get_geomorphs_overview(criterias))
         thumb.show()
     
     def get_pairs_on_period_overview(self, ymin, ymax):
@@ -74,9 +78,9 @@ class GMC_Geomorph:
         return pd.DataFrame(disps)
     
     def get_spines(self):
-        all_spines = self.project._spines
+        all_spines = self.session._spines
         ge_spines  = all_spines[all_spines.sp_ge_id == self.ge_id]
-        return [gmc_sp.GMC_spine(self.project, spine.sp_id) for spine in ge_spines.iloc]
+        return [GMC_Spine(self.session, spine.sp_id) for spine in ge_spines.iloc]
 
     def show_mean_velocities(self, savepath=None, bounds=None):
         fig, ax = plt.subplots(figsize=(10,6.5))

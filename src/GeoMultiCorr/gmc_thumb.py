@@ -1,9 +1,14 @@
-from pathlib import Path
 import re
+import sys
+sys.path.append("../..")
+from pathlib import Path
+
+import pandas as pd
+
 from osgeo import gdal
 from telenvi import raster_tools as rt
-import pandas as pd
-import gmc_pair
+
+from src.GeoMultiCorr.common import GMC_Pair
 
 THUMBNAME_PATTERN = re.compile('^([a-z]|[A-Z]|-)+_[0-9]{4}(-[0-9]{2}){2}_.*.(tif|TIF)$')
 
@@ -35,7 +40,7 @@ class GMC_Thumb:
             'geometry':self.geometry})
 
     def __add__(self, right):
-        return gmc_pair.GMC_Pair(left=self, right=right)
+        return GMC_Pair(left=self, right=right)
 
     def __repr__(self):
         return f"""---------
@@ -54,3 +59,5 @@ sensor : {self.th_sensor}
 
     def show(self):
         self.get_geoim().show()
+
+# %%

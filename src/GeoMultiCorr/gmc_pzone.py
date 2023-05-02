@@ -1,6 +1,10 @@
+import sys
+sys.path.append("../..")
 from pathlib import Path
+
 import geopandas as gpd
-import gmc_thumb
+
+from src.GeoMultiCorr.common import GMC_Thumb
 
 class GMC_Pzone:
 
@@ -48,7 +52,7 @@ class GMC_Pzone:
         """
         ths = self.proj.get_thumbs_overview(self.pz_name)
         ths_valid = ths[ths.th_valid=='1']
-        gmc_ths_valid = [gmc_thumb.GMC_Thumb(th.th_path) for th in ths_valid.iloc]
+        gmc_ths_valid = [GMC_Thumb(th.th_path) for th in ths_valid.iloc]
         return gmc_ths_valid
 
     def get_valid_pairs(self):
@@ -61,13 +65,13 @@ class GMC_Pzone:
                     continue
         return ps
 
-    def pz_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10):
+    def pz_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, vector_res=20, method='average'):
         logs = {}
         logs['COMPLETE'] = []
         logs['ABORT'] = []
         for p in self.get_valid_pairs():
             try:
-                p.pa_full(corr_algorithm, corr_kernel_size, corr_xthreshold)
+                p.pa_full(corr_algorithm, corr_kernel_size, corr_xthreshold, vector_res, method)
                 logs['COMPLETE'].append(p.pa_key)
             except ValueError:
                 logs['ABORT'].append(p.pa_key)

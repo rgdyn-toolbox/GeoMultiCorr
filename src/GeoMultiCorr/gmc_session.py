@@ -1,24 +1,29 @@
 import os
 import re
+import sys
+sys.path.append("../..")
 from pathlib import Path
+
 import tqdm
-import geopandas as gpd
 import pandas as pd
+
 from osgeo import gdal
+import geopandas as gpd
 from telenvi import raster_tools as rt
-import gmc_thumb as gmc_th
-import gmc_pzone as gmc_pz
-import gmc_pair as gmc_pa
-import gmc_geomorph as gmc_ge
-import gmc_xzone as gmc_xz
-import gmc_spine as gmc_sp
+
+from src.GeoMultiCorr.common import GMC_Thumb
+from src.GeoMultiCorr.common import GMC_Pzone
+from src.GeoMultiCorr.common import GMC_Pair
+from src.GeoMultiCorr.common import GMC_Geomorph
+from src.GeoMultiCorr.common import GMC_Xzones
+from src.GeoMultiCorr.common import GMC_Spine
 
 VERSION = '0.0.0'
 print(f"""---------
 GeoMultiCorr {VERSION}
 ---------""")
 
-ROOT_TEMPLATE = Path(__file__).parent.with_name('template')
+ROOT_TEMPLATE = Path(__file__).parent.with_name('template-project')
 
 def is_conform_to_gmc_template(target_root_path):
     for thing in os.listdir(ROOT_TEMPLATE):
@@ -40,44 +45,70 @@ def sensors(sensors_names=['spot6', 'spot7', 'aerial']):
     s = s[:-1]
     return s
 
-def create_new(location):
-    return GMC_Project(location)
+def open(location):
+    return GMC_Session(location)
 
-class GMC_Project:
+class GMC_Session:
+
+    """
+    Manipulate data specific to a sample of sites relative to an earth surface displacement study
+    """
 
     def __init__(self, target_root_path : str):
+        
+        # pathlib.Path conversion of the string target_root_path
         target_root_path = Path(target_root_path)
 
-        # Vérification de la validité de l'adresse
+        # Check the adress validity
         assert target_root_path.parent.exists(), 'adresse invalide'
  
-        # Si elle existe et que c'est pas un projet geomulticorr
+        # The adress exist but it's something different than a geomulticorr project
         if target_root_path.exists() and not is_conform_to_gmc_template(target_root_path):
             raise ValueError("autre chose existe à cette adresse")
 
-        # Si elle existe et que c'est un projett geomulticorr
+        # The adress exist and it's a geomulticorr project
         elif target_root_path.exists() and is_conform_to_gmc_template(target_root_path):
             pass
 
-        # Si elle n'existe pas : on la créée
+        # The adress is valid but don't exist : we create a new geomulticorr project
         else:
+            
+            project_name = Path(self.p_root).name
+            
+            # Here we copy the template
             os.system(f"cp -r {ROOT_TEMPLATE} {target_root_path}")
 
+            # Here we change the name of the initial data
+            os.rename(
+                src = f"{os.path.join(target_root_path, 'raster-data_template-project')}",
+                dst = f"{os.path.join(target_root_path, 'raster-data_' + project_name)}")
+
+            os.rename(
+                src = f"{os.path.join(target_root_path, 'geodatabase_template-project.gpkg')}",
+                dst = f"{os.path.join(target_root_path, 'geodatabase_' + project_name + '.gpkg')}")
+
+            os.rename(
+                src = f"{os.path.join(target_root_path, 'map_template-project.qgz')}",
+                dst = f"{os.path.join(target_root_path, 'map_' + project_name + '.qgz')}")
+
+        # Load project data into the current session
+        self.project_name = Path(self.p_root).name
         self.p_root = str(target_root_path)
-        self.p_raster_data = str(Path(self.p_root, 'raster_data'))
-        self.p_geodb = os.path.join(target_root_path, 'database.gpkg')
+        self.p_raster_data = str(Path(self.p_root, f'raster-data_{self.project_name}'))
+        self.p_geodb = os.path.join(target_root_path, f'geodatabase_{self.project_name}.gpkg')
+
+        # There is underscore before the attribute name because 
+        # user have to access to this data from the getters
+        # to ensure that the data is up to date
         self._pzones = gpd.read_file(self.p_geodb, layer='Pzones')
         self._thumbs = gpd.read_file(self.p_geodb, layer='Thumbs')
         self._geomorphs = gpd.read_file(self.p_geodb, layer='Geomorphs')
         self._pairs  = gpd.read_file(self.p_geodb, layer='Pairs')
         self._xzones = gpd.read_file(self.p_geodb, layer='Xzones')
         self._spines = gpd.read_file(self.p_geodb, layer='Spines')
-        self.pz_names = list(self._pzones.pz_name.unique())
 
-    def update_vector_data(self):
-        self._pzones = gpd.read_file(self.p_geodb, layer='Pzones')
-        self._geomorphs = gpd.read_file(self.p_geodb, layer='Geomorphs')
-        self._xzones = gpd.read_file(self.p_geodb, layer='Xzones')
+        # List the processing zones names
+        self.pz_names = list(self._pzones.pz_name.unique())
 
     ########### GETTERS ###########
 
@@ -89,7 +120,7 @@ class GMC_Project:
     def get_thumbs(self, criterias=''):
         """Send a list of GMC_Thumb objects meeting the criterias"""
         selected_thumbs = self.get_thumbs_overview(criterias)
-        return [gmc_th.GMC_Thumb(x.th_path) for x in selected_thumbs.iloc]
+        return [GMC_Thumb(x.th_path) for x in selected_thumbs.iloc]
 
     def get_pairs_overview(self, criterias=''):
         """Send a dataframe with each possible Pair according to the Thumbs"""
@@ -98,7 +129,7 @@ class GMC_Project:
     def get_pairs(self, criterias=''):
         """Send a list of GMC_Pairs objects meeting the criterias"""
         selected_pairs = self.get_pairs_overview(criterias)
-        return [gmc_pa.GMC_Pair(self, target_path = x.pa_path) for x in selected_pairs.iloc]
+        return [GMC_Pair(self, target_path = x.pa_path) for x in selected_pairs.iloc]
 
     def get_pzones_overview(self, pz_name=''):
         """Send a dataframe with each pzone"""
@@ -107,7 +138,7 @@ class GMC_Project:
     def get_pzones(self, pz_name=''):
         """Send a list of GMC_Pzones objects"""
         selected_pzones = self.get_pzones_overview(pz_name)
-        return [gmc_pz.GMC_Pzone(x.pz_name, self) for x in selected_pzones.iloc]
+        return [GMC_Pzone(x.pz_name, self) for x in selected_pzones.iloc]
 
     def get_geomorphs_overview(self, criterias=''):
         """Send a dataframe with each geomorph"""
@@ -116,11 +147,11 @@ class GMC_Project:
     def get_geomorphs(self, criterias=''):
         """Send a list of GMC_Geomorphs objects"""
         selected_geomorphs = self.get_geomorphs_overview(criterias)
-        return [gmc_ge.GMC_Geomorph(self, x.ge_frogi_id) for x in selected_geomorphs.iloc]
+        return [GMC_Geomorph(self, x.ge_frogi_id) for x in selected_geomorphs.iloc]
 
     def get_xzone(self, xz_id):
         """Send a GMC_Xzone object"""
-        return gmc_xz.GMC_Xzones(self, xz_id)
+        return GMC_Xzones(self, xz_id)
 
     def get_pairs_overview_on_period(self, ymin, ymax, criterias=''):
         """Retourne un tableau des paires completement incluses dans la période [yMin;yMax]"""
@@ -133,12 +164,12 @@ class GMC_Project:
     def get_pairs_on_period(self, ymin, ymax, criterias=''):
         """Retourne les paires completement incluses dans la période [yMin;yMax]"""
         board = self.get_pairs_overview_on_period(ymin, ymax, criterias)
-        pairs = [gmc_pa.GMC_Pair(self, p.pa_path) for p in board.iloc]
+        pairs = [GMC_Pair(self, p.pa_path) for p in board.iloc]
         return pairs
 
     def get_spine(self, sp_id):
         """Send a GMC_Spine object"""
-        return gmc_sp.GMC_Spine(self, sp_id)
+        return GMC_Spine(self, sp_id)
 
     def get_protomap(self, rawpath, extensions=['tif', 'jp2']):
         """make a vector layer with the extents of all the rasters stored under the rawpath
@@ -191,8 +222,9 @@ class GMC_Project:
             # Get acquisition date : aerial way
             elif 'aerial' in ft['sensor'].lower():
                 """
+                GMC ISSUE 2
                 ############### /!\ 
-                IMPLIQUE QUE LES IMAGES AERIENNES SOIENT NOMMEES DE LA MEME MANIERE QUE LES NOTRES 
+                IMPLIQUE QUE LES NOMS DES IMAGES AERIENNES SOIENT FORMATEES DE LA MEME MANIERE QUE LES NOTRES 
                 ############### /!\ 
                 """
 
@@ -212,15 +244,17 @@ class GMC_Project:
         layer = gpd.GeoDataFrame(features).set_crs(2154)
         return layer
 
-    ###############################
-
-    def copy_geodb(self):
-        """quickly create a copy of the project geopackage named backup_geodb.gpkg"""
-        backup_path = Path(self.p_root, 'backup_geodb.gpkg')
-        os.system(f"cp -r {self.p_geodb} {backup_path}")
-        return Path(self.p_root, 'backup_geodb.gpkg').exists()
-
     ########### SETTERS ###########
+
+    def update_vector_data(self):
+        """
+        Update the instance session attributes from database geopackage layers
+        Useful when user modify the data from Qgis
+        """
+        self._spines = gpd.read_file(self.p_geodb, layer='Spines')
+        self._pzones = gpd.read_file(self.p_geodb, layer='Pzones')
+        self._geomorphs = gpd.read_file(self.p_geodb, layer='Geomorphs')
+        self._xzones = gpd.read_file(self.p_geodb, layer='Xzones')
 
     def update_thumbs(self):
         """add or remove rows in Thumbs layer, according to the thumbs stored in the project"""
@@ -231,7 +265,7 @@ class GMC_Project:
         # Get 2 version of the Thumbs layer
         opt_root = Path(self.p_raster_data)
         old = self._thumbs
-        new = gpd.GeoDataFrame([gmc_th.GMC_Thumb(target_path).to_pdserie() for target_path in filter(lambda x: gmc_th.THUMBNAME_PATTERN.match(x.name), list(opt_root.glob(pattern='**/opticals/*.tif')))])
+        new = gpd.GeoDataFrame([GMC_Thumb(target_path).to_pdserie() for target_path in filter(lambda x: gmc_th.THUMBNAME_PATTERN.match(x.name), list(opt_root.glob(pattern='**/opticals/*.tif')))])
 
         # Comparison
         common = new.merge(old, on=['th_path'])
@@ -275,6 +309,12 @@ class GMC_Project:
             protomap = self.get_protomap(rawpath, extensions)
         protomap.to_file(self.p_geodb, layer='Protomap')
 
+    def copy_geodb(self):
+        """quickly create a copy of the project geopackage named backup_geodb.gpkg"""
+        backup_path = Path(self.p_root, 'backup_geodb.gpkg')
+        os.system(f"cp -r {self.p_geodb} {backup_path}")
+        return Path(self.p_root, 'backup_geodb.gpkg').exists()
+
     ###############################
 
     def sieve(self, rawpath='', res=1, alg='nearest', band=1):
@@ -306,9 +346,11 @@ class GMC_Project:
             # Get the images intersecting the zone
             selection = protomap[protomap['geometry'].intersects(pz['geometry'])]
 
-            # We have to regroup the lines of 'selection' where the acquisition date and the sensor are identicals
-            # Then we loop on thoses groups
-            # And we merge the part of each group
+            """
+            Here we have to regroup the lines of 'selection' where the acquisition date and the sensor are identicals
+            Then we loop on thoses groups
+            And we merge the part of each group
+            """
 
             # Group by acquisition date and sensor
             selection_merged_by_date_and_sensor = selection.groupby(['acq_date', 'sensor'])['filepath'].apply(list)
@@ -353,7 +395,8 @@ class GMC_Project:
                     # we accept that it is the initial same image and we merged them together
                     # because gdal considered as nodata the places outside each part, the merged work easily 
                     """
-                    ############### but it's not working if we don't extract a band with rt.pre_process
+                    TELENVI ISSUE 1
+                    ############### but it's not working if we don't extract a band with rt.pre_process()
                     """
                     if len(fully) > 1:
                         thumb = rt.merge(fully)
@@ -364,6 +407,7 @@ class GMC_Project:
                     rt.write(thumb, thumb_path)
 
     def pr_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10):
+        """Launch all the possible correlations accross all the valid images among the project pzones"""
         logs = []
         for pzone in self.get_pzones():
             logs.append(pzone.pz_full(corr_algorithm, corr_kernel_size, corr_xthreshold))
@@ -404,7 +448,7 @@ class GMC_Project:
                     return pz_layer
 
             case 'Geomorphs':
-                """ on part du principe qu'on ne peut donner comme critere qu'un identifiant de rg ou un pz_name"""
+                # We suppose than the criteria can only be a Geomorph ID or a pz_name
                 selection = self._geomorphs
                 if criterias!=['']:
                     for criteria in criterias:
@@ -419,7 +463,7 @@ class GMC_Project:
     def __repr__(self):
         return f"""
 ------------
-this is a GeoMultiCorr Project named {Path(self.p_root).name}
-the processing zones registered on it are : {self.pz_names}
+this is a GeoMultiCorr Session open on the project named {self.project_name}
+their processing zones are : {self.pz_names}
 ------------
 """

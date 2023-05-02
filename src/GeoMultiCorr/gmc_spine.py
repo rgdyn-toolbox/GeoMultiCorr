@@ -1,28 +1,31 @@
-from telenvi import raster_tools as rt
-import shutil
 from pathlib import Path
+import shutil
+
+import warnings
+from tqdm import tqdm
+
 import numpy as np
 from matplotlib import pyplot as plt
+
 import geopandas as gpd
+from telenvi import raster_tools as rt
 from telenvi import vector_tools as vt
-import warnings
 from shapely.errors import ShapelyDeprecationWarning
-from tqdm import tqdm
 
 class GMC_Spine:
 
-    def __init__(self, project, sp_id):
+    def __init__(self, session, sp_id):
 
         # Check existence and unique
-        assert sp_id in project._spines.sp_id.values, 'key not found in spines layer'
-        assert project._spines.value_counts('sp_id')[sp_id] == 1, f'more than 1 spine have the key {sp_id}'
+        assert sp_id in session._spines.sp_id.values, 'key not found in spines layer'
+        assert session._spines.value_counts('sp_id')[sp_id] == 1, f'more than 1 spine have the key {sp_id}'
 
         # Attributes
-        self.project = project
-        self.data = project._spines[project._spines.sp_id == sp_id].iloc[0]
+        self.session = session
+        self.data = session._spines[session._spines.sp_id == sp_id].iloc[0]
         self.sp_id = sp_id
-        self.sp_ge = project.get_geomorphs(self.data.sp_ge_id)[0]
-        self.sp_pz = project.get_pzones(self.data.sp_pz_name)[0]
+        self.sp_ge = session.get_geomorphs(self.data.sp_ge_id)[0]
+        self.sp_pz = session.get_pzones(self.data.sp_pz_name)[0]
         self.geometry = self.data.geometry
 
     def set_ribs(self,  ribLength = None, ribStep = None, ribOrientation=None):
@@ -66,7 +69,7 @@ class GMC_Spine:
         cmap = plt.cm.rainbow(np.linspace(0, 1, len(pairs)))
 
         # Get the directory to store the graphics
-        figspath = Path(self.project.p_root, 'profils', f"{note}_{self.sp_id}")
+        figspath = Path(self.session.p_root, 'profils', f"{note}_{self.sp_id}")
         if figspath.exists():
             shutil.rmtree(figspath)
         figspath.mkdir()
@@ -75,7 +78,7 @@ class GMC_Spine:
         ribs = self.set_ribs(ribLength, ribStep, ribOrientation)
 
         # Ouvre l'image d'arriere-plan
-        backmappath = self.project.get_thumbs([self.sp_pz.pz_name, backmapyear, backmapsensor])[0].th_path
+        backmappath = self.session.get_thumbs([self.sp_pz.pz_name, backmapyear, backmapsensor])[0].th_path
         backmap = rt.pre_process(backmappath, geoim=True).cropFromVector(self.sp_ge.geometry)
 
         # Pour chaque Rib
@@ -112,7 +115,13 @@ class GMC_Spine:
                     ax.set_ybound((yMin, yMax))
 
                     # Titre du graphique : nom de la composante
-                    ax.set_title(f"{componant}")
+                    if componant == 'x':
+                        titre_figure = "Deplacement vers l'Est (metres)"
+                    elif componant == 'y':
+                        titre_figure = "Deplacement vers le Sud (metres)"
+                    else:
+                        titre_figure = "Deplacement bi-directionnel (metres)"
+                    ax.set_title(f"{titre_figure}")
 
             # On fixe la légende liant les couleurs des courbes
             # aux années de chaque paire
