@@ -1,18 +1,15 @@
 import os
-import sys
-sys.path.append("../..")
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from telenvi import raster_tools as rt
-from src.GeoMultiCorr.common import GMC_Thumb
 
 ROOT_OUTPUTS  = Path(__file__).parent.with_name('temp')
 ROOT_TEMPLATE = Path(__file__).parent.with_name('template')
 
-class GMC_Pair:
+class Pair:
 
     def __init__(self, session=None, target_path=None, left=None, right=None):
 

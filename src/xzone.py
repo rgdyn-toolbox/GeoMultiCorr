@@ -5,7 +5,7 @@ from matplotlib import pyplot as plt
 import geopandas as gpd
 from telenvi import raster_tools as rt
 
-class GMC_Xzones:
+class Xzone:
         
     def __init__(self, session, xz_key):
         

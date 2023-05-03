@@ -1,6 +1,4 @@
 import re
-import sys
-sys.path.append("../..")
 from pathlib import Path
 
 import pandas as pd
@@ -8,11 +6,9 @@ import pandas as pd
 from osgeo import gdal
 from telenvi import raster_tools as rt
 
-from src.GeoMultiCorr.common import GMC_Pair
-
 THUMBNAME_PATTERN = re.compile('^([a-z]|[A-Z]|-)+_[0-9]{4}(-[0-9]{2}){2}_.*.(tif|TIF)$')
 
-class GMC_Thumb:
+class Thumb:
 
     def __init__(self, target_path):
         target_path = Path(target_path)
