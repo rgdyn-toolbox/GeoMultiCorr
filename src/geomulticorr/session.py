@@ -9,14 +9,14 @@ from osgeo import gdal
 import geopandas as gpd
 from telenvi import raster_tools as rt
 
-import geomulticorr.src.geomorph
-import geomulticorr.src.pzone
-import geomulticorr.src.pair
-import geomulticorr.src.spine
-import geomulticorr.src.thumb
-import geomulticorr.src.xzone
+import src.geomulticorr.geomorph
+import src.geomulticorr.pzone
+import src.geomulticorr.pair
+import src.geomulticorr.spine
+import src.geomulticorr.thumb
+import src.geomulticorr.xzone
 
-project_template_location = Path(Path(__file__).parent.parent, 'resources/project_template')
+project_template_location = Path(Path(__file__).parent, 'resources', 'project_template')
 
 def is_conform_to_gmc_template(target_root_path):
     """
@@ -27,19 +27,16 @@ def is_conform_to_gmc_template(target_root_path):
     target_name = target_root_path.name
 
     # Firstly, there is a folder named raster-data_parent-folder-name
-    print(Path(target_root_path, f"raster-data_{target_name}"))
     target_raster_data_expected_path = Path(target_root_path, f"raster-data_{target_name}")
     if not target_raster_data_expected_path.is_dir():
         return False
 
     # Secondly, there is a file map_parent-folder-name.qgz
-    print(Path(target_root_path, f"map_{target_name}.qgz"))
     target_map_expected_path = Path(target_root_path, f"map_{target_name}.qgz")
     if not target_map_expected_path.exists():
         return False
 
     # Thirdly, there is a file geodatabase_parent-folder-name.gpkg
-    print(Path(target_root_path, f"geodatabase_{target_name}.gpkg"))
     target_map_expected_path = Path(target_root_path, f"geodatabase_{target_name}.gpkg")
     if not target_map_expected_path.exists():
         return False
@@ -133,40 +130,40 @@ class Session:
         return self._search_engine('Thumbs', criterias)
 
     def get_thumbs(self, criterias=''):
-        """Send a list of geomulticorr.src.thumb.Thumb objects meeting the criterias"""
+        """Send a list of src.geomulticorr.thumb.Thumb objects meeting the criterias"""
         selected_thumbs = self.get_thumbs_overview(criterias)
-        return [geomulticorr.src.thumb.Thumb(x.th_path) for x in selected_thumbs.iloc]
+        return [src.geomulticorr.thumb.Thumb(x.th_path) for x in selected_thumbs.iloc]
 
     def get_pairs_overview(self, criterias=''):
         """Send a dataframe with each possible Pair according to the Thumbs"""
         return self._search_engine('Pairs', criterias)
     
     def get_pairs(self, criterias=''):
-        """Send a list of geomulticorr.src.pair.Pairs objects meeting the criterias"""
+        """Send a list of src.geomulticorr.pair.Pairs objects meeting the criterias"""
         selected_pairs = self.get_pairs_overview(criterias)
-        return [geomulticorr.src.pair.Pair(self, target_path = x.pa_path) for x in selected_pairs.iloc]
+        return [src.geomulticorr.pair.Pair(self, target_path = x.pa_path) for x in selected_pairs.iloc]
 
     def get_pzones_overview(self, pz_name=''):
         """Send a dataframe with each pzone"""
         return self._search_engine('Pzones', pz_name)
 
     def get_pzones(self, pz_name=''):
-        """Send a list of geomulticorr.src.pzone.Pzones objects"""
+        """Send a list of src.geomulticorr.pzone.Pzones objects"""
         selected_pzones = self.get_pzones_overview(pz_name)
-        return [geomulticorr.src.pzone.Pzone(x.pz_name, self) for x in selected_pzones.iloc]
+        return [src.geomulticorr.pzone.Pzone(x.pz_name, self) for x in selected_pzones.iloc]
 
     def get_geomorphs_overview(self, criterias=''):
         """Send a dataframe with each geomorph"""
         return self._search_engine('Geomorphs', criterias)
 
     def get_geomorphs(self, criterias=''):
-        """Send a list of geomulticorr.src.geomorph.Geomorphs objects"""
+        """Send a list of src.geomulticorr.geomorph.Geomorphs objects"""
         selected_geomorphs = self.get_geomorphs_overview(criterias)
-        return [geomulticorr.src.geomorph.Geomorph(self, x.ge_frogi_id) for x in selected_geomorphs.iloc]
+        return [src.geomulticorr.geomorph.Geomorph(self, x.ge_frogi_id) for x in selected_geomorphs.iloc]
 
     def get_xzone(self, xz_id):
-        """Send a geomulticorr.src.xzones.Xzones object"""
-        return geomulticorr.src.xzones.Xzones(self, xz_id)
+        """Send a src.geomulticorr.xzones.Xzones object"""
+        return src.geomulticorr.xzones.Xzones(self, xz_id)
 
     def get_pairs_overview_on_period(self, ymin, ymax, criterias=''):
         """Retourne un tableau des paires completement incluses dans la période [yMin;yMax]"""
@@ -179,12 +176,12 @@ class Session:
     def get_pairs_on_period(self, ymin, ymax, criterias=''):
         """Retourne les paires completement incluses dans la période [yMin;yMax]"""
         board = self.get_pairs_overview_on_period(ymin, ymax, criterias)
-        pairs = [geomulticorr.src.pair.Pair(self, p.pa_path) for p in board.iloc]
+        pairs = [src.geomulticorr.pair.Pair(self, p.pa_path) for p in board.iloc]
         return pairs
 
     def get_spine(self, sp_id):
-        """Send a geomulticorr.src.spine.Spine object"""
-        return geomulticorr.src.spine.Spine(self, sp_id)
+        """Send a src.geomulticorr.spine.Spine object"""
+        return src.geomulticorr.spine.Spine(self, sp_id)
 
     def get_protomap(self, rawpath, extensions=['tif', 'jp2']):
         """make a vector layer with the extents of all the rasters stored under the rawpath
@@ -280,7 +277,7 @@ class Session:
         # Get 2 version of the Thumbs layer
         opt_root = Path(self.p_raster_data)
         old = self._thumbs
-        new = gpd.GeoDataFrame([geomulticorr.src.thumb.Thumb(target_path).to_pdserie() for target_path in filter(lambda x: geomulticorr.src.thumb.THUMBNAME_PATTERN.match(x.name), list(opt_root.glob(pattern='**/opticals/*.tif')))])
+        new = gpd.GeoDataFrame([src.geomulticorr.thumb.Thumb(target_path).to_pdserie() for target_path in filter(lambda x: src.geomulticorr.thumb.THUMBNAME_PATTERN.match(x.name), list(opt_root.glob(pattern='**/opticals/*.tif')))])
 
         # Comparison
         common = new.merge(old, on=['th_path'])
