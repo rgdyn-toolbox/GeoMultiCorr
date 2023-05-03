@@ -9,7 +9,12 @@ from osgeo import gdal
 import geopandas as gpd
 from telenvi import raster_tools as rt
 
+import geomulticorr.src.geomorph
+import geomulticorr.src.pzone
 import geomulticorr.src.pair
+import geomulticorr.src.spine
+import geomulticorr.src.thumb
+import geomulticorr.src.xzone
 
 project_template_location = Path(Path(__file__).parent.parent, 'resources/project_template')
 
@@ -128,40 +133,40 @@ class Session:
         return self._search_engine('Thumbs', criterias)
 
     def get_thumbs(self, criterias=''):
-        """Send a list of GMC_Thumb objects meeting the criterias"""
+        """Send a list of geomulticorr.src.thumb.Thumb objects meeting the criterias"""
         selected_thumbs = self.get_thumbs_overview(criterias)
-        return [GMC_Thumb(x.th_path) for x in selected_thumbs.iloc]
+        return [geomulticorr.src.thumb.Thumb(x.th_path) for x in selected_thumbs.iloc]
 
     def get_pairs_overview(self, criterias=''):
         """Send a dataframe with each possible Pair according to the Thumbs"""
         return self._search_engine('Pairs', criterias)
     
     def get_pairs(self, criterias=''):
-        """Send a list of GMC_Pairs objects meeting the criterias"""
+        """Send a list of geomulticorr.src.pair.Pairs objects meeting the criterias"""
         selected_pairs = self.get_pairs_overview(criterias)
-        return [GMC_Pair(self, target_path = x.pa_path) for x in selected_pairs.iloc]
+        return [geomulticorr.src.pair.Pair(self, target_path = x.pa_path) for x in selected_pairs.iloc]
 
     def get_pzones_overview(self, pz_name=''):
         """Send a dataframe with each pzone"""
         return self._search_engine('Pzones', pz_name)
 
     def get_pzones(self, pz_name=''):
-        """Send a list of GMC_Pzones objects"""
+        """Send a list of geomulticorr.src.pzone.Pzones objects"""
         selected_pzones = self.get_pzones_overview(pz_name)
-        return [GMC_Pzone(x.pz_name, self) for x in selected_pzones.iloc]
+        return [geomulticorr.src.pzone.Pzone(x.pz_name, self) for x in selected_pzones.iloc]
 
     def get_geomorphs_overview(self, criterias=''):
         """Send a dataframe with each geomorph"""
         return self._search_engine('Geomorphs', criterias)
 
     def get_geomorphs(self, criterias=''):
-        """Send a list of GMC_Geomorphs objects"""
+        """Send a list of geomulticorr.src.geomorph.Geomorphs objects"""
         selected_geomorphs = self.get_geomorphs_overview(criterias)
-        return [GMC_Geomorph(self, x.ge_frogi_id) for x in selected_geomorphs.iloc]
+        return [geomulticorr.src.geomorph.Geomorph(self, x.ge_frogi_id) for x in selected_geomorphs.iloc]
 
     def get_xzone(self, xz_id):
-        """Send a GMC_Xzone object"""
-        return GMC_Xzones(self, xz_id)
+        """Send a geomulticorr.src.xzones.Xzones object"""
+        return geomulticorr.src.xzones.Xzones(self, xz_id)
 
     def get_pairs_overview_on_period(self, ymin, ymax, criterias=''):
         """Retourne un tableau des paires completement incluses dans la période [yMin;yMax]"""
@@ -174,12 +179,12 @@ class Session:
     def get_pairs_on_period(self, ymin, ymax, criterias=''):
         """Retourne les paires completement incluses dans la période [yMin;yMax]"""
         board = self.get_pairs_overview_on_period(ymin, ymax, criterias)
-        pairs = [GMC_Pair(self, p.pa_path) for p in board.iloc]
+        pairs = [geomulticorr.src.pair.Pair(self, p.pa_path) for p in board.iloc]
         return pairs
 
     def get_spine(self, sp_id):
-        """Send a GMC_Spine object"""
-        return GMC_Spine(self, sp_id)
+        """Send a geomulticorr.src.spine.Spine object"""
+        return geomulticorr.src.spine.Spine(self, sp_id)
 
     def get_protomap(self, rawpath, extensions=['tif', 'jp2']):
         """make a vector layer with the extents of all the rasters stored under the rawpath
@@ -258,7 +263,7 @@ class Session:
 
     def update_vector_data(self):
         """
-        Update the instance session attributes from database geopackage layers
+        Update the instance session attributes from geodatabase layers
         Useful when user modify the data from Qgis
         """
         self._spines = gpd.read_file(self.p_geodb, layer='Spines')
@@ -269,13 +274,13 @@ class Session:
     def update_thumbs(self):
         """add or remove rows in Thumbs layer, according to the thumbs stored in the project"""
 
-        # Copy the database before the transaction
+        # Copy the geodatabase before the transaction
         assert self.copy_geodb()
 
         # Get 2 version of the Thumbs layer
         opt_root = Path(self.p_raster_data)
         old = self._thumbs
-        new = gpd.GeoDataFrame([GMC_Thumb(target_path).to_pdserie() for target_path in filter(lambda x: gmc_th.THUMBNAME_PATTERN.match(x.name), list(opt_root.glob(pattern='**/opticals/*.tif')))])
+        new = gpd.GeoDataFrame([geomulticorr.src.thumb.Thumb(target_path).to_pdserie() for target_path in filter(lambda x: geomulticorr.src.thumb.THUMBNAME_PATTERN.match(x.name), list(opt_root.glob(pattern='**/opticals/*.tif')))])
 
         # Comparison
         common = new.merge(old, on=['th_path'])
@@ -297,7 +302,7 @@ class Session:
     def update_pairs(self):
         """add or remove rows in Pairs layer, according to the thumbs stored in the project"""
 
-        # Copy the database before the transaction
+        # Copy the geodatabase before the transaction
         assert self.copy_geodb()
 
         # For each processing zone we
@@ -305,7 +310,7 @@ class Session:
         for pz in self.get_pzones():
             pairs = pz.get_pairs_overview()
             [updated.append(pa) for pa in pairs.iloc()]
-
+    
         # Push it into the geodatabase        
         updated = gpd.GeoDataFrame(updated).set_crs(epsg=2154)
         updated.to_file(self.p_geodb, layer='Pairs')
@@ -346,7 +351,7 @@ class Session:
             print(f"\n---\n{pz['pz_name']}")
 
             # Create a directory to store the raster_data of the pzone
-            pz_rasterdata = Path(self.p_root, 'raster_data', pz['pz_name'])
+            pz_rasterdata = Path(self.p_root, f'raster-data_{self.project_name}', pz['pz_name'])
             pz_opticals = Path(pz_rasterdata, 'opticals')
             pz_disps = Path(pz_rasterdata, 'displacements')
             for p in [pz_rasterdata, pz_opticals, pz_disps]:
@@ -371,7 +376,7 @@ class Session:
                 acq_date = selection_merged_by_date_and_sensor.index[group_id][0]
                 sensor = selection_merged_by_date_and_sensor.index[group_id][1]
 
-                # Define output filename and full path (ex: raster_data/sachette/opticals/sachette_2021-03-08_AERIAL.tif)
+                # Define output filename and full path (ex: raster-data_vanoise/sachette/opticals/sachette_2021-03-08_AERIAL.tif)
                 thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}.tif"
                 thumb_path = str(Path(pz_opticals, thumb_name))
 

@@ -6,6 +6,8 @@ import pandas as pd
 
 from telenvi import raster_tools as rt
 
+import geomulticorr.src.thumb
+
 ROOT_OUTPUTS  = Path(__file__).parent.with_name('temp')
 ROOT_TEMPLATE = Path(__file__).parent.with_name('template')
 
@@ -21,6 +23,7 @@ class Pair:
         # Construction from a pair path
         if type(target_path) in (str, Path):
             target_path = Path(target_path)
+            print(target_path)
             assert Path(target_path).parent.exists() and Path(target_path).parent.name.lower() == 'displacements', 'this path is not leading to a well-formed pair'
 
             # Get metadata about the thumbs component of the pair
@@ -38,8 +41,8 @@ class Pair:
             right_path = Path(thumbs_pzone_path, right_key)
 
             # Make Thumbs from them
-            left  = GMC_Thumb(left_path)
-            right = GMC_Thumb(right_path)
+            left  = geomulticorr.src.thumb.Thumb(left_path)
+            right = geomulticorr.src.thumb.Thumb(right_path)
 
         # Construction from two thumbs
         assert left.th_pz_name == right.th_pz_name, 'left and right have not the same pzone'
