@@ -1,7 +1,5 @@
 import os
 import re
-import sys
-sys.path.append("../..")
 from pathlib import Path
 
 import tqdm
@@ -11,24 +9,36 @@ from osgeo import gdal
 import geopandas as gpd
 from telenvi import raster_tools as rt
 
-from src.GeoMultiCorr.common import GMC_Thumb
-from src.GeoMultiCorr.common import GMC_Pzone
-from src.GeoMultiCorr.common import GMC_Pair
-from src.GeoMultiCorr.common import GMC_Geomorph
-from src.GeoMultiCorr.common import GMC_Xzones
-from src.GeoMultiCorr.common import GMC_Spine
+import geomulticorr.src.pair
 
-VERSION = '0.0.0'
-print(f"""---------
-GeoMultiCorr {VERSION}
----------""")
-
-ROOT_TEMPLATE = Path(__file__).parent.with_name('template-project')
+project_template_location = Path(Path(__file__).parent.parent, 'resources/project_template')
 
 def is_conform_to_gmc_template(target_root_path):
-    for thing in os.listdir(ROOT_TEMPLATE):
-        if not thing in os.listdir(target_root_path):
-            return False
+    """
+    check the 3 conditions to be sure than the target root path is leading to a folder conform to the geomulticorr project data architecture
+    """
+
+    target_root_path = Path(target_root_path)
+    target_name = target_root_path.name
+
+    # Firstly, there is a folder named raster-data_parent-folder-name
+    print(Path(target_root_path, f"raster-data_{target_name}"))
+    target_raster_data_expected_path = Path(target_root_path, f"raster-data_{target_name}")
+    if not target_raster_data_expected_path.is_dir():
+        return False
+
+    # Secondly, there is a file map_parent-folder-name.qgz
+    print(Path(target_root_path, f"map_{target_name}.qgz"))
+    target_map_expected_path = Path(target_root_path, f"map_{target_name}.qgz")
+    if not target_map_expected_path.exists():
+        return False
+
+    # Thirdly, there is a file geodatabase_parent-folder-name.gpkg
+    print(Path(target_root_path, f"geodatabase_{target_name}.gpkg"))
+    target_map_expected_path = Path(target_root_path, f"geodatabase_{target_name}.gpkg")
+    if not target_map_expected_path.exists():
+        return False
+
     return True
 
 def re_searcher(string, pattern):
@@ -46,9 +56,9 @@ def sensors(sensors_names=['spot6', 'spot7', 'aerial']):
     return s
 
 def open(location):
-    return GMC_Session(location)
+    return Session(location)
 
-class GMC_Session:
+class Session:
 
     """
     Manipulate data specific to a sample of sites relative to an earth surface displacement study
@@ -73,10 +83,10 @@ class GMC_Session:
         # The adress is valid but don't exist : we create a new geomulticorr project
         else:
             
-            project_name = Path(self.p_root).name
-            
+            project_name = Path(target_root_path).name
+
             # Here we copy the template
-            os.system(f"cp -r {ROOT_TEMPLATE} {target_root_path}")
+            os.system(f"cp -r {project_template_location} {target_root_path}")
 
             # Here we change the name of the initial data
             os.rename(
@@ -92,8 +102,8 @@ class GMC_Session:
                 dst = f"{os.path.join(target_root_path, 'map_' + project_name + '.qgz')}")
 
         # Load project data into the current session
-        self.project_name = Path(self.p_root).name
         self.p_root = str(target_root_path)
+        self.project_name = Path(self.p_root).name
         self.p_raster_data = str(Path(self.p_root, f'raster-data_{self.project_name}'))
         self.p_geodb = os.path.join(target_root_path, f'geodatabase_{self.project_name}.gpkg')
 

@@ -1,6 +1,4 @@
-import sys
-sys.path.append("../..")
-
+#%%
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
@@ -8,9 +6,7 @@ from matplotlib import pyplot as plt
 import geopandas as gpd
 from telenvi import raster_tools as rt
 
-from src.GeoMultiCorr.common import GMC_Spine
-
-class GMC_Geomorph:
+class Geomorph:
         
     def __init__(self, session, ge_id):
         
@@ -102,3 +98,4 @@ class GMC_Geomorph:
         ax.set_title(f"Vitesses annuelles moyennes sur {self.ge_id}")
         if savepath != None:
             fig.savefig(savepath)
+# %%

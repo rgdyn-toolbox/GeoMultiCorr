@@ -12,7 +12,7 @@ from telenvi import raster_tools as rt
 from telenvi import vector_tools as vt
 from shapely.errors import ShapelyDeprecationWarning
 
-class GMC_Spine:
+class Spine:
 
     def __init__(self, session, sp_id):
 

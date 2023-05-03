@@ -1,12 +1,8 @@
-import sys
-sys.path.append("../..")
 from pathlib import Path
 
 import geopandas as gpd
 
-from src.GeoMultiCorr.common import GMC_Thumb
-
-class GMC_Pzone:
+class Pzone:
 
     def __init__(self, target_pz_name, project):
         
