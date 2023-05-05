@@ -6,7 +6,7 @@ import pandas as pd
 
 from telenvi import raster_tools as rt
 
-import src.geomulticorr.thumb
+import geomulticorr.thumb
 
 ROOT_OUTPUTS  = Path(__file__).parent.with_name('temp')
 ROOT_TEMPLATE = Path(__file__).parent.with_name('template')
@@ -41,8 +41,8 @@ class Pair:
             right_path = Path(thumbs_pzone_path, right_key)
 
             # Make Thumbs from them
-            left  = src.geomulticorr.thumb.Thumb(left_path)
-            right = src.geomulticorr.thumb.Thumb(right_path)
+            left  = geomulticorr.thumb.Thumb(left_path)
+            right = geomulticorr.thumb.Thumb(right_path)
 
         # Construction from two thumbs
         assert left.th_pz_name == right.th_pz_name, 'left and right have not the same pzone'
