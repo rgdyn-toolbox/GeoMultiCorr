@@ -2,8 +2,8 @@
 A python lib to study earth-surface displacements from optical images with Ames Stereo Pipeline
 
 # Requirements
-> Unix OS
-> Ames Stereo Pipeline
+$ Unix OS
+$ Ames Stereo Pipeline
 
 > telenvi
 > geocube
