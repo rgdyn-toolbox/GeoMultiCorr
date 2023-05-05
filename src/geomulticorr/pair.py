@@ -11,8 +11,7 @@ try:
 except ModuleNotFoundError:
     import src.geomulticorr.thumb as gmc_thumb
 
-ROOT_OUTPUTS  = Path(__file__).parent.with_name('temp')
-ROOT_TEMPLATE = Path(__file__).parent.with_name('template')
+ROOT_OUTPUTS  = Path(__file__).with_name('temp')
 
 class Pair:
 
@@ -189,7 +188,7 @@ status : {self.pa_status}
         self.clip()
 
         # Check existing correlation
-        if self.pa_status == 'complete':
+        if self.get_status() == 'complete':
             return True
 
         # Create a directory in a place where ASP can write their outputs : the temp directory, inside GeoMultiCorr app
@@ -213,6 +212,7 @@ status : {self.pa_status}
 
         # Launch
         os.system(corr_command)
+        return True
 
     def save_corrdata(self, verbose=False):
         """
@@ -222,10 +222,8 @@ status : {self.pa_status}
         # Hide ugly warnings about symlinks
         verbose_mode = {False:' > /dev/null 2>&1', True:''}
 
-        # get the GeoMultiCorr storage location
+        # get the GeoMultiCorr temp storage location
         departure = Path(ROOT_OUTPUTS, self.pa_key)
-        if not departure.exists():
-            return None
 
         # get the displacements folder path in the current session
         destination = self.pa_asp_path
@@ -235,14 +233,16 @@ status : {self.pa_status}
         if self.pa_asp_path.exists():
             os.system(f"rm -rf {departure}")
             return True
-    
+
+        return False
+
     def compute_magnitude(self):
 
         assert self.pa_dispf_path.exists(), 'this pair is not yet correlate'
 
         # Check if the file is ever existing
         if self.pa_magn_path.exists():
-            return True
+            return self.get_magn_geoim()
 
         # Open the stack with horizontal and vertical displacements
         xDisp, yDisp = rt.pre_process(str(self.pa_dispf_path), nBands=[1,2], geoim=True).splitBands()
@@ -260,6 +260,8 @@ status : {self.pa_status}
         # Magnitude in meters
         magn_in_meters = magn * pxSizeX
         magn_in_meters.save(str(self.pa_magn_path))
+
+        return magn_in_meters
 
     def vectorize(self, output_pixel_size=None, method='average', write=True):
         """
@@ -310,7 +312,7 @@ status : {self.pa_status}
         direction = d_in_meters.copy()
         direction.array = array_direction
 
-        # Make a big GeoIm with all this lovely data
+        # Make a big GeoIm with all this lovely dataset
         to_vectorize = rt.stack([
             dx_in_pixels,
             dy_in_pixels,
@@ -322,9 +324,9 @@ status : {self.pa_status}
             d_in_meters_per_year,
             direction
         ])
-
-        vectors = rt.vectorize(to_vectorize).set_crs(epsg=2154)
         
+        vectors = rt.vectorize(to_vectorize).set_crs(epsg=2154)
+    
         # Write vector layer in geopackage
         if write == True:
             current_vector_layer_name = f"{output_pixel_size}_{self.pa_key}"
@@ -341,16 +343,16 @@ status : {self.pa_status}
     def pa_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, vector_res=20, method='average'):
 
         # Clip
-        # self.clip()
+        self.clip()
 
         # Corr
-        # self.corr(corr_algorithm, corr_kernel_size, corr_xthreshold)
+        self.corr(corr_algorithm, corr_kernel_size, corr_xthreshold)
 
         # Save
-        # self.save_corrdata()
+        self.save_corrdata()
 
         # Magn
-        # self.compute_magnitude()
+        self.compute_magnitude()
 
         # Vectors
         self.vectorize(output_pixel_size=vector_res, method=method)
