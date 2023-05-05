@@ -9,12 +9,23 @@ from osgeo import gdal
 import geopandas as gpd
 from telenvi import raster_tools as rt
 
-import geomulticorr.geomorph
-import geomulticorr.pzone
-import geomulticorr.pair
-import geomulticorr.spine
-import geomulticorr.thumb
-import geomulticorr.xzone
+## User
+try:
+    import geomulticorr.geomorph as gmc_geomorph
+    import geomulticorr.pzone    as gmc_pzone
+    import geomulticorr.pair     as gmc_pair
+    import geomulticorr.spine    as gmc_spine
+    import geomulticorr.thumb    as gmc_thumb
+    import geomulticorr.xzone    as gmc_xzone
+
+# Developer
+except ModuleNotFoundError:
+    import src.geomulticorr.geomorph as gmc_geomorph
+    import src.geomulticorr.pzone    as gmc_pzone
+    import src.geomulticorr.pair     as gmc_pair
+    import src.geomulticorr.spine    as gmc_spine
+    import src.geomulticorr.thumb    as gmc_thumb
+    import src.geomulticorr.xzone    as gmc_xzone
 
 file_location = Path(__file__)
 if file_location.parent.parent.name == 'site-packages':
@@ -140,40 +151,40 @@ class Session:
         return self._search_engine('Thumbs', criterias)
 
     def get_thumbs(self, criterias=''):
-        """Send a list of geomulticorr.thumb.Thumb objects meeting the criterias"""
+        """Send a list of thumb.Thumb objects meeting the criterias"""
         selected_thumbs = self.get_thumbs_overview(criterias)
-        return [geomulticorr.thumb.Thumb(x.th_path) for x in selected_thumbs.iloc]
+        return [gmc_thumb.Thumb(x.th_path) for x in selected_thumbs.iloc]
 
     def get_pairs_overview(self, criterias=''):
         """Send a dataframe with each possible Pair according to the Thumbs"""
         return self._search_engine('Pairs', criterias)
     
     def get_pairs(self, criterias=''):
-        """Send a list of geomulticorr.pair.Pairs objects meeting the criterias"""
+        """Send a list of pair.Pairs objects meeting the criterias"""
         selected_pairs = self.get_pairs_overview(criterias)
-        return [geomulticorr.pair.Pair(self, target_path = x.pa_path) for x in selected_pairs.iloc]
+        return [gmc_pair.Pair(self, target_path = x.pa_path) for x in selected_pairs.iloc]
 
     def get_pzones_overview(self, pz_name=''):
         """Send a dataframe with each pzone"""
         return self._search_engine('Pzones', pz_name)
 
     def get_pzones(self, pz_name=''):
-        """Send a list of geomulticorr.pzone.Pzones objects"""
+        """Send a list of pzone.Pzones objects"""
         selected_pzones = self.get_pzones_overview(pz_name)
-        return [geomulticorr.pzone.Pzone(x.pz_name, self) for x in selected_pzones.iloc]
+        return [gmc_pzone.Pzone(x.pz_name, self) for x in selected_pzones.iloc]
 
     def get_geomorphs_overview(self, criterias=''):
         """Send a dataframe with each geomorph"""
         return self._search_engine('Geomorphs', criterias)
 
     def get_geomorphs(self, criterias=''):
-        """Send a list of geomulticorr.geomorph.Geomorphs objects"""
+        """Send a list of geomorph.Geomorphs objects"""
         selected_geomorphs = self.get_geomorphs_overview(criterias)
-        return [geomulticorr.geomorph.Geomorph(self, x.ge_frogi_id) for x in selected_geomorphs.iloc]
+        return [gmc_geomorph.Geomorph(self, x.ge_frogi_id) for x in selected_geomorphs.iloc]
 
     def get_xzone(self, xz_id):
-        """Send a geomulticorr.xzones.Xzones object"""
-        return geomulticorr.xzones.Xzones(self, xz_id)
+        """Send a xzones.Xzones object"""
+        return gmc_xzone.Xzones(self, xz_id)
 
     def get_pairs_overview_on_period(self, ymin, ymax, criterias=''):
         """Retourne un tableau des paires completement incluses dans la période [yMin;yMax]"""
@@ -186,14 +197,20 @@ class Session:
     def get_pairs_on_period(self, ymin, ymax, criterias=''):
         """Retourne les paires completement incluses dans la période [yMin;yMax]"""
         board = self.get_pairs_overview_on_period(ymin, ymax, criterias)
-        pairs = [geomulticorr.pair.Pair(self, p.pa_path) for p in board.iloc]
+        pairs = [gmc_pair.Pair(self, p.pa_path) for p in board.iloc]
         return pairs
 
     def get_spine(self, sp_id):
-        """Send a geomulticorr.spine.Spine object"""
-        return geomulticorr.spine.Spine(self, sp_id)
+        """Send a spine.Spine object"""
+        return gmc_spine.Spine(self, sp_id)
 
-    def get_protomap(self, rawpath, extensions=['tif', 'jp2']):
+    def get_protomap(self):
+        try:
+            return gpd.read_file(self.p_geodb, layer='Protomap')
+        except ValueError:
+            print('You have to create a protomap first with my_session.create_protomap()')
+
+    def create_new_protomap(self, rawpath, extensions=['tif', 'jp2'], save_in_geodatabase=True):
         """make a vector layer with the extents of all the rasters stored under the rawpath
            and write metadata in hte layer attribute table"""
 
@@ -264,6 +281,8 @@ class Session:
 
         # Transform the list of GeoSeries features into a GeoDataFrame, and set his CRS
         layer = gpd.GeoDataFrame(features).set_crs(2154)
+        if save_in_geodatabase == True:
+            layer.to_file(self.p_geodb, layer='Protomap')
         return layer
 
     ########### SETTERS ###########
@@ -287,7 +306,7 @@ class Session:
         # Get 2 version of the Thumbs layer
         opt_root = Path(self.p_raster_data)
         old = self._thumbs
-        new = gpd.GeoDataFrame([geomulticorr.thumb.Thumb(target_path).to_pdserie() for target_path in filter(lambda x: geomulticorr.thumb.THUMBNAME_PATTERN.match(x.name), list(opt_root.glob(pattern='**/opticals/*.tif')))])
+        new = gpd.GeoDataFrame([gmc_thumb.Thumb(target_path).to_pdserie() for target_path in filter(lambda x: gmc_thumb.THUMBNAME_PATTERN.match(x.name), list(opt_root.glob(pattern='**/opticals/*.tif')))])
 
         # Comparison
         common = new.merge(old, on=['th_path'])

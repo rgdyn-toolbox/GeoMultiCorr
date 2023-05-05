@@ -5,7 +5,10 @@ from matplotlib import pyplot as plt
 import geopandas as gpd
 from telenvi import raster_tools as rt
 
-import geomulticorr.spine
+try:
+    import geomulticorr.spine as gmc_spine
+except ModuleNotFoundError:
+    import src.geomulticorr.spine as gmc_spine
 
 class Geomorph:
         
@@ -77,7 +80,7 @@ class Geomorph:
     def get_spines(self):
         all_spines = self.session._spines
         ge_spines  = all_spines[all_spines.sp_ge_id == self.ge_id]
-        return [geomulticorr.spine.Spine(self.session, spine.sp_id) for spine in ge_spines.iloc]
+        return [gmc_spine.Spine(self.session, spine.sp_id) for spine in ge_spines.iloc]
 
     def show_mean_velocities(self, savepath=None, bounds=None):
         fig, ax = plt.subplots(figsize=(10,6.5))
