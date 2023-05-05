@@ -1,4 +1,3 @@
-#%%
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
@@ -6,7 +5,7 @@ from matplotlib import pyplot as plt
 import geopandas as gpd
 from telenvi import raster_tools as rt
 
-import src.geomulticorr.spine
+import geomulticorr.spine
 
 class Geomorph:
         
@@ -78,7 +77,7 @@ class Geomorph:
     def get_spines(self):
         all_spines = self.session._spines
         ge_spines  = all_spines[all_spines.sp_ge_id == self.ge_id]
-        return [src.geomulticorr.spine.Spine(self.session, spine.sp_id) for spine in ge_spines.iloc]
+        return [geomulticorr.spine.Spine(self.session, spine.sp_id) for spine in ge_spines.iloc]
 
     def show_mean_velocities(self, savepath=None, bounds=None):
         fig, ax = plt.subplots(figsize=(10,6.5))
@@ -100,4 +99,3 @@ class Geomorph:
         ax.set_title(f"Vitesses annuelles moyennes sur {self.ge_id}")
         if savepath != None:
             fig.savefig(savepath)
-# %%

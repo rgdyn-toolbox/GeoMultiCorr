@@ -6,7 +6,7 @@ import pandas as pd
 from osgeo import gdal
 from telenvi import raster_tools as rt
 
-import src.geomulticorr.pair
+import geomulticorr.pair
 
 THUMBNAME_PATTERN = re.compile('^([a-z]|[A-Z]|-)+_[0-9]{4}(-[0-9]{2}){2}_.*.(tif|TIF)$')
 
@@ -38,7 +38,7 @@ class Thumb:
             'geometry':self.geometry})
 
     def __add__(self, right):
-        return src.geomulticorr.pair.GMC_Pair(left=self, right=right)
+        return geomulticorr.pair.GMC_Pair(left=self, right=right)
 
     def __repr__(self):
         return f"""---------
