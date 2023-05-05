@@ -6,7 +6,10 @@ import pandas as pd
 
 from telenvi import raster_tools as rt
 
-import geomulticorr.thumb
+try:
+    import geomulticorr.thumb as gmc_thumb
+except ModuleNotFoundError:
+    import src.geomulticorr.thumb as gmc_thumb
 
 ROOT_OUTPUTS  = Path(__file__).parent.with_name('temp')
 ROOT_TEMPLATE = Path(__file__).parent.with_name('template')
@@ -41,8 +44,8 @@ class Pair:
             right_path = Path(thumbs_pzone_path, right_key)
 
             # Make Thumbs from them
-            left  = geomulticorr.thumb.Thumb(left_path)
-            right = geomulticorr.thumb.Thumb(right_path)
+            left  = gmc_thumb.Thumb(left_path)
+            right = gmc_thumb.Thumb(right_path)
 
         # Construction from two thumbs
         assert left.th_pz_name == right.th_pz_name, 'left and right have not the same pzone'
@@ -378,6 +381,6 @@ status : {self.pa_status}
         return self.get_interesting_geoim(mode).inspectGeoLine(geoLine)
 
     def get_slices(self, geoLine, ribLength, ribStep, ribOrientation='v', mode='m'):
-        return self.get_interesting_geoim(mode).inspectRibsAlongSpine(geoLine, ribLength, ribStep, ribOrientation)
+        return self.get_interesting_geoim(mode).inspectRibsAlongthumb(geoLine, ribLength, ribStep, ribOrientation)
 
 # %%

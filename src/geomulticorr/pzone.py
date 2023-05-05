@@ -1,18 +1,22 @@
-# test gitignore
 from pathlib import Path
 
 import geopandas as gpd
 
+try:
+    import geomulticorr.thumb as gmc_thumb
+except ModuleNotFoundError:
+    import src.geomulticorr.thumb as gmc_thumb
+
 class Pzone:
 
-    def __init__(self, target_pz_name, project):
+    def __init__(self, target_pz_name, session):
         
         # Vérification de la validité du nom de pzone par rapport au projet
-        assert target_pz_name in project.pz_names, f'{target_pz_name} not existing in the Pzones layer'
-        assert Path(project.p_root, 'raster_data', target_pz_name).exists(), f'no raster data folder for {target_pz_name}'
+        assert target_pz_name in session.pz_names, f'{target_pz_name} not existing in the Pzones layer'
+        assert Path(session.p_root, session.p_raster_data, target_pz_name).exists(), f'no raster data folder for {target_pz_name}'
 
         # Ecriture attributs
-        self.proj = project
+        self.proj = session
         self.pz_name = target_pz_name
 
     def get_thumbs_overview(self, criterias=''):
@@ -49,7 +53,7 @@ class Pzone:
         """
         ths = self.proj.get_thumbs_overview(self.pz_name)
         ths_valid = ths[ths.th_valid=='1']
-        gmc_ths_valid = [GMC_Thumb(th.th_path) for th in ths_valid.iloc]
+        gmc_ths_valid = [gmc_thumb.Thumb(th.th_path) for th in ths_valid.iloc]
         return gmc_ths_valid
 
     def get_valid_pairs(self):
