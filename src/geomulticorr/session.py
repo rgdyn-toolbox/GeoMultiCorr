@@ -78,7 +78,7 @@ def sensors(sensors_names=['spot6', 'spot7', 'aerial']):
     s = s[:-1]
     return s
 
-def open(location):
+def Open(location):
     return Session(location)
 
 class Session:
@@ -344,11 +344,6 @@ class Session:
         # Update instance
         self._pairs = updated
         return updated
-
-    def update_protomap(self, rawpath, protomap=None, extensions=['tif', 'jp2']):
-        if protomap == None:
-            protomap = self.get_protomap(rawpath, extensions)
-        protomap.to_file(self.p_geodb, layer='Protomap')
 
     def copy_geodb(self):
         """quickly create a copy of the project geopackage named backup_geodb.gpkg"""
