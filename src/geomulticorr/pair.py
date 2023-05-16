@@ -296,7 +296,7 @@ status : {self.pa_status}
         # Get vector components - unit = pixels and referential = matrix (Y top is Y min)
         initial_dx = self.get_dispX_geoim()
         initial_dy = self.get_dispY_geoim()
-        initial_pixel_size = initial_dx.getPixelSize()[0]
+        initial_pixel_size_x, initial_pixel_size_y = initial_dx.getPixelSize()
 
         # Modify the original displacement rasters by resampling them with output resolution asked
         if output_pixel_size != None:
@@ -307,20 +307,22 @@ status : {self.pa_status}
         else:
             dx_in_pixels = initial_dx.copy()
             dy_in_pixels = initial_dy.copy()
-            output_pixel_size = initial_pixel_size
+            output_pixel_size = initial_pixel_size_x
 
         # Get metadata
         _, nRows, nCols = dx_in_pixels.getShape()
 
         # Convert displacements in meters
-        dx_in_meters = dx_in_pixels * initial_pixel_size
-        dy_in_meters = dy_in_pixels * initial_pixel_size
+        dx_in_meters = dx_in_pixels * initial_pixel_size_x
+        dy_in_meters = dy_in_pixels * initial_pixel_size_y
 
-        # Switch from matrixian to geographic spatial referential
-        dy_in_meters_switched = dy_in_meters * -1
+        # Switch the displacements if the pair is reversed
+        if self.pa_left.th_year > self.pa_right.th_year :
+            dx_in_meters *= -1
+            dy_in_meters *= -1
 
         # Compute vector norm (magnitude) in meters
-        d_in_meters = (dx_in_meters ** 2 + dy_in_meters_switched ** 2) **0.5
+        d_in_meters = (dx_in_meters ** 2 + dy_in_meters ** 2) **0.5
 
         # Convert into annual velocity
         """
@@ -332,7 +334,7 @@ status : {self.pa_status}
         d_in_meters_per_year  = d_in_meters  / time_gap
 
         # Compute displacement geographic direction (vector orientation)
-        array_complex_dx_dy = np.apply_along_axis(lambda args: [complex(*args)], 0, [dx_in_meters.array,dy_in_meters_switched.array]).reshape(nCols, nRows)
+        array_complex_dx_dy = np.apply_along_axis(lambda args: [complex(*args)], 0, [dx_in_meters.array,dy_in_meters.array]).reshape(nCols, nRows)
         array_direction = np.angle(array_complex_dx_dy, deg=True)
         direction = d_in_meters.copy()
         direction.array = array_direction
@@ -349,12 +351,20 @@ status : {self.pa_status}
             d_in_meters_per_year,
             direction
         ])
-        
-        vectors = rt.vectorize(to_vectorize).set_crs(epsg=2154)
 
-        """
-        changer le nom des colonnes attributaires
-        """
+        # Use the vectorize raster_tools function to make a vector point on each pixel
+        # with an attribute column with the pixel value for each band (here we got 9 band)
+        vectors = rt.vectorize(to_vectorize).set_crs(epsg=2154)
+        vectors.columns = [
+                'dx_in_pixels',
+                'dy_in_pixels',
+                'dx_in_meters',
+                'dy_in_meters',
+                'd_in_meters',
+                'dx_in_meters_per_year',
+                'dy_in_meters_per_year',
+                'd_in_meters_per_year',
+                'direction']
 
         # Write vector layer in geopackage
         if write == True:
@@ -362,7 +372,7 @@ status : {self.pa_status}
             vectors.to_file(self.pa_vect_path, layer=current_vector_layer_name)
 
             # Copy .qml file
-            template_style = 'resources/map_styles/vector-field_style_1.qml'
+            template_style = Path(__file__).with_name('resources/map_styles/vector-field_style_1.qml')
             target_style = str(self.pa_vect_path)[:-5]
             cp_command = f"cp {template_style} {target_style}.qml"
             os.system(cp_command)
