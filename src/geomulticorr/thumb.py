@@ -21,7 +21,7 @@ class Thumb:
         # Vérification de l'existence du fichier pointé par l'adresse 
         # et de la validité du nom au regard du pattern défini
         assert target_path.exists(), 'fichier inexistant'
-        assert THUMBNAME_PATTERN.match(target_path.name), 'filename don\'t match with gmc_thumbname pattern'
+        assert THUMBNAME_PATTERN.match(target_path.name), 'filename don\'t match with thumbname pattern'
 
         self.th_path = str(target_path)
         self.th_key = target_path.name.split('.')[0]

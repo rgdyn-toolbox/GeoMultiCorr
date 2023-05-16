@@ -11,21 +11,21 @@ class Pzone:
 
     def __init__(self, target_pz_name, session):
         
-        # Vérification de la validité du nom de pzone par rapport au projet
+        # Vérification de la validité du nom de pzone par rapport à la session
         assert target_pz_name in session.pz_names, f'{target_pz_name} not existing in the Pzones layer'
         assert Path(session.p_root, session.p_raster_data, target_pz_name).exists(), f'no raster data folder for {target_pz_name}'
 
         # Ecriture attributs
-        self.proj = session
+        self.session = session
         self.pz_name = target_pz_name
 
     def get_thumbs_overview(self, criterias=''):
         criterias = [criterias] + [self.pz_name]
-        return self.proj.get_thumbs_overview(criterias)
+        return self.session.get_thumbs_overview(criterias)
 
     def get_thumbs(self, criterias=''):
         criterias = [criterias] + [self.pz_name]
-        return self.proj.get_thumbs(criterias)
+        return self.session.get_thumbs(criterias)
 
     def get_pairs_overview(self, criterias=''):
         pairs = gpd.GeoDataFrame([pa.to_pdserie() for pa in self.get_pairs()])
@@ -51,7 +51,7 @@ class Pzone:
         """
         Renvoie les vignettes selectionnées par l'user dans qgis, en modifiant la valeur attributaire "th_valid" dans la table Thumbs
         """
-        ths = self.proj.get_thumbs_overview(self.pz_name)
+        ths = self.session.get_thumbs_overview(self.pz_name)
         ths_valid = ths[ths.th_valid=='1']
         gmc_ths_valid = [gmc_thumb.Thumb(th.th_path) for th in ths_valid.iloc]
         return gmc_ths_valid
@@ -65,6 +65,10 @@ class Pzone:
                 except AssertionError:
                     continue
         return ps
+    
+    def get_complete_pairs(self):
+        session = session.update_pairs()
+        return [p for p in self.get_pairs() if p.get_status() == 'complete']
 
     def pz_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, vector_res=20, method='average'):
         logs = {}
