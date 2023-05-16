@@ -28,14 +28,6 @@ except ModuleNotFoundError:
     import src.geomulticorr.xzone    as gmc_xzone
 
 file_location = Path(__file__)
-if file_location.parent.parent.name == 'site-packages':
-    print('''-------------
-geomulticorr : online version
--------------''')
-else:
-    print('''-------------
-geomulticorr : local version
--------------''')
 
 project_template_location = Path(file_location.parent, 'resources', 'project_template')
 
@@ -113,16 +105,15 @@ class Session:
 
             # Here we change the name of the initial data
             os.rename(
-                src = f"{os.path.join(target_root_path, 'raster-data_template-project')}",
-                dst = f"{os.path.join(target_root_path, 'raster-data_' + project_name)}")
-
-            os.rename(
                 src = f"{os.path.join(target_root_path, 'geodatabase_template-project.gpkg')}",
                 dst = f"{os.path.join(target_root_path, 'geodatabase_' + project_name + '.gpkg')}")
 
             os.rename(
                 src = f"{os.path.join(target_root_path, 'map_template-project.qgz')}",
                 dst = f"{os.path.join(target_root_path, 'map_' + project_name + '.qgz')}")
+
+            # And we create en empty folder raster-data_project-name
+            Path(target_root_path, 'raster-data_' + project_name).mkdir()
 
         # Load project data into the current session
         self.p_root = str(target_root_path)

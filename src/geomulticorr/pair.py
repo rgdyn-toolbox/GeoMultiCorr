@@ -11,7 +11,12 @@ try:
 except ModuleNotFoundError:
     import src.geomulticorr.thumb as gmc_thumb
 
+# ASP cannot write his outputs everywhere
+# In the temp (for temporary) directory, we know it will be ok
+# Then, we move the data (def save_corr_data)
 ROOT_OUTPUTS  = Path(__file__).with_name('temp')
+if not ROOT_OUTPUTS.exists():
+    ROOT_OUTPUTS.mkdir()
 
 class Pair:
 
@@ -25,7 +30,6 @@ class Pair:
         # Construction from a pair path
         if type(target_path) in (str, Path):
             target_path = Path(target_path)
-            print(target_path)
             assert Path(target_path).parent.exists() and Path(target_path).parent.name.lower() == 'displacements', 'this path is not leading to a well-formed pair'
 
             # Get metadata about the thumbs component of the pair
@@ -146,6 +150,9 @@ status : {self.pa_status}
             return self.pa_dispY_geoim
     
     def get_vx_geoim(self):
+        """
+        Ajouter les années en décimal pour convertir les vitesses, plus précis qu'en base 365 jours par 365 jours
+        """
         return self.get_dispX_geoim() / abs(self.pa_left.th_year - self.pa_right.th_year)
 
     def get_vy_geoim(self):
@@ -212,7 +219,14 @@ status : {self.pa_status}
 
         # Launch
         os.system(corr_command)
+        self.pa_status='complete'
         return True
+
+    def corr_eval(self):
+        """
+        Appel de la fonction d'ASP pour générer un raster SNR
+        """
+        pass
 
     def save_corrdata(self, verbose=False):
         """
@@ -230,11 +244,19 @@ status : {self.pa_status}
 
         # send the command to bring back the temporal data in the current session
         os.system(f"mv {departure} {destination} {verbose_mode[verbose]}")
+
+        # If the transfer have worked, we delete the data in the temp dir
         if self.pa_asp_path.exists():
             os.system(f"rm -rf {departure}")
             return True
 
         return False
+
+    def del_useless_data(self):
+        """
+        Suppression des données inutiles
+        """
+        pass
 
     def compute_magnitude(self):
 
@@ -301,6 +323,9 @@ status : {self.pa_status}
         d_in_meters = (dx_in_meters ** 2 + dy_in_meters_switched ** 2) **0.5
 
         # Convert into annual velocity
+        """
+        Ajouter les années en décimal pour convertir les vitesses, plus précis qu'en base 365 jours par 365 jours
+        """
         time_gap = abs(self.pa_left.th_year - self.pa_right.th_year)
         dx_in_meters_per_year = dx_in_meters / time_gap
         dy_in_meters_per_year = dy_in_meters / time_gap
@@ -326,14 +351,18 @@ status : {self.pa_status}
         ])
         
         vectors = rt.vectorize(to_vectorize).set_crs(epsg=2154)
-    
+
+        """
+        changer le nom des colonnes attributaires
+        """
+
         # Write vector layer in geopackage
         if write == True:
             current_vector_layer_name = f"{output_pixel_size}_{self.pa_key}"
             vectors.to_file(self.pa_vect_path, layer=current_vector_layer_name)
 
             # Copy .qml file
-            template_style = 'styles/vector-field_style_1.qml'
+            template_style = 'resources/map_styles/vector-field_style_1.qml'
             target_style = str(self.pa_vect_path)[:-5]
             cp_command = f"cp {template_style} {target_style}.qml"
             os.system(cp_command)
