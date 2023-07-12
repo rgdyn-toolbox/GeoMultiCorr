@@ -3,7 +3,9 @@ A python lib to study earth-surface displacements from optical images with Ames 
 
 # Requirements
 Unix OS
+
 Ames Stereo Pipeline
+
 python dependencies:
   - python>=3.9
   - ipython-sql
