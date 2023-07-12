@@ -364,7 +364,8 @@ status : {self.pa_status}
                 'dx_in_meters_per_year',
                 'dy_in_meters_per_year',
                 'd_in_meters_per_year',
-                'direction']
+                'direction',
+                'geometry']
 
         # Write vector layer in geopackage
         if write == True:
@@ -372,7 +373,7 @@ status : {self.pa_status}
             vectors.to_file(self.pa_vect_path, layer=current_vector_layer_name)
 
             # Copy .qml file
-            template_style = Path(__file__).with_name('resources/map_styles/vector-field_style_1.qml')
+            template_style = Path(Path(__file__).parent, 'resources', 'map_styles', 'vector-field_style_1.qml')
             target_style = str(self.pa_vect_path)[:-5]
             cp_command = f"cp {template_style} {target_style}.qml"
             os.system(cp_command)

@@ -67,7 +67,6 @@ class Pzone:
         return ps
     
     def get_complete_pairs(self):
-        session = session.update_pairs()
         return [p for p in self.get_pairs() if p.get_status() == 'complete']
 
     def pz_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, vector_res=20, method='average'):
