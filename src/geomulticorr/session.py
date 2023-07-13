@@ -70,8 +70,8 @@ def sensors(sensors_names=['spot6', 'spot7', 'aerial']):
     s = s[:-1]
     return s
 
-def Open(location):
-    return Session(location)
+def Open(location, epsg):
+    return Session(location, epsg)
 
 class Session:
 
@@ -79,8 +79,8 @@ class Session:
     Manipulate data specific to a sample of sites relative to an earth surface displacement study
     """
 
-    def __init__(self, target_root_path : str):
-        
+    def __init__(self, target_root_path : str, epsg):
+
         # pathlib.Path conversion of the string target_root_path
         target_root_path = Path(target_root_path)
 
@@ -97,7 +97,6 @@ class Session:
 
         # The adress is valid but don't exist : we create a new geomulticorr project
         else:
-            
             project_name = Path(target_root_path).name
 
             # Here we copy the template
@@ -120,16 +119,17 @@ class Session:
         self.project_name = Path(self.p_root).name
         self.p_raster_data = str(Path(self.p_root, f'raster-data_{self.project_name}'))
         self.p_geodb = os.path.join(target_root_path, f'geodatabase_{self.project_name}.gpkg')
+        self.epsg = epsg
 
         # There is underscore before the attribute name because 
         # user have to access to this data from the getters
         # to ensure that the data is up to date
-        self._pzones = gpd.read_file(self.p_geodb, layer='Pzones')
-        self._thumbs = gpd.read_file(self.p_geodb, layer='Thumbs')
-        self._geomorphs = gpd.read_file(self.p_geodb, layer='Geomorphs')
-        self._pairs  = gpd.read_file(self.p_geodb, layer='Pairs')
-        self._xzones = gpd.read_file(self.p_geodb, layer='Xzones')
-        self._spines = gpd.read_file(self.p_geodb, layer='Spines')
+        self._pzones = gpd.read_file(self.p_geodb, layer='Pzones').to_crs(epsg=epsg)
+        self._thumbs = gpd.read_file(self.p_geodb, layer='Thumbs').to_crs(epsg=epsg)
+        self._geomorphs = gpd.read_file(self.p_geodb, layer='Geomorphs').to_crs(epsg=epsg)
+        self._pairs  = gpd.read_file(self.p_geodb, layer='Pairs').to_crs(epsg=epsg)
+        self._xzones = gpd.read_file(self.p_geodb, layer='Xzones').to_crs(epsg=epsg)
+        self._spines = gpd.read_file(self.p_geodb, layer='Spines').to_crs(epsg=epsg)
 
         # List the processing zones names
         self.pz_names = list(self._pzones.pz_name.unique())
@@ -201,9 +201,14 @@ class Session:
         except ValueError:
             print('You have to create a protomap first with my_session.create_protomap()')
 
-    def create_new_protomap(self, rawpath, extensions=['tif', 'jp2'], save_in_geodatabase=True):
+    def create_new_protomap(self, rawpath, extensions=['tif', 'jp2'], save_in_geodatabase=True, epsg=0):
         """make a vector layer with the extents of all the rasters stored under the rawpath
-           and write metadata in hte layer attribute table"""
+           and write metadata in hte layer attribute table
+           PRE-REQUISITE : All the images must be georeferenced in a compatible CRS !!! """
+
+        # By default, write the output vector layer in the epsg of the session / project
+        if epsg == 0:
+            epsg=self.epsg
 
         # check the validity of the rawpath
         rawpath = Path(rawpath)
@@ -271,14 +276,14 @@ class Session:
             features.append(ft)
 
         # Transform the list of GeoSeries features into a GeoDataFrame, and set his CRS
-        layer = gpd.GeoDataFrame(features).set_crs(2154)
+        layer = gpd.GeoDataFrame(features).set_crs(epsg)
         if save_in_geodatabase == True:
             layer.to_file(self.p_geodb, layer='Protomap')
         return layer
 
     ########### SETTERS ###########
 
-    def update_vector_data(self):
+    def update_vector_data_session(self):
         """
         Update the instance session attributes from geodatabase layers
         Useful when user modify the data from Qgis
@@ -329,7 +334,7 @@ class Session:
             [updated.append(pa) for pa in pairs.iloc()]
     
         # Push it into the geodatabase        
-        updated = gpd.GeoDataFrame(updated).set_crs(epsg=2154)
+        updated = gpd.GeoDataFrame(updated).set_crs(epsg=self.epsg)
         updated.to_file(self.p_geodb, layer='Pairs')
 
         # Update instance
@@ -381,6 +386,8 @@ class Session:
 
             # Group by acquisition date and sensor
             selection_merged_by_date_and_sensor = selection.groupby(['acq_date', 'sensor'])['filepath'].apply(list)
+
+            # return selection, selection_merged_by_date_and_sensor
 
             # For each group
             for group_id, group in enumerate(selection_merged_by_date_and_sensor) :

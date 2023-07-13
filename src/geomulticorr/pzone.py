@@ -13,7 +13,7 @@ class Pzone:
         
         # Vérification de la validité du nom de pzone par rapport à la session
         assert target_pz_name in session.pz_names, f'{target_pz_name} not existing in the Pzones layer'
-        assert Path(session.p_root, session.p_raster_data, target_pz_name).exists(), f'no raster data folder for {target_pz_name}'
+        assert Path(session.p_raster_data, target_pz_name).absolute().exists(), f'no raster data folder for {target_pz_name}'
 
         # Ecriture attributs
         self.session = session

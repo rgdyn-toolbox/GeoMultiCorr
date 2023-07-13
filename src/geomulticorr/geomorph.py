@@ -59,8 +59,8 @@ class Geomorph:
         pairs = pairs[(pairs.chrono_min>=ymin)&(pairs.chrono_max>=ymax)]
         return pairs
     
-    def get_mean_disp_on_pair(self, magn_path):
-        target = gpd.GeoDataFrame([{'geometry':self.geometry}]).set_crs(epsg=2154)
+    def get_mean_disp_on_pair(self, magn_path, epsg):
+        target = gpd.GeoDataFrame([{'geometry':self.geometry}]).set_crs(epsg=epsg)
         data = rt.pre_process(magn_path, geoExtent=target, geoim=True)
         data.maskFromVector(target)
         return data.mean()

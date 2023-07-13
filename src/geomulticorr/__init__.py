@@ -1,13 +1,7 @@
-version = '0.2.2'
-
-# User
-try:
-    from geomulticorr.session import Open
-    
-# Developer
-except ModuleNotFoundError:
-   from src.geomulticorr.session import Open
+version = 'developer version'
 
 print(f'''-------------
 geomulticorr {version}
 -------------''')
+
+from geomulticorr.session import Open
