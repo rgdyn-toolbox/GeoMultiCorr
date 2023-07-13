@@ -285,7 +285,7 @@ status : {self.pa_status}
 
         return magn_in_meters
 
-    def vectorize(self, output_pixel_size=None, method='average', write=True):
+    def vectorize(self, epsg, output_pixel_size=None, method='average', write=True):
         """
         create a points vector layer, mappable as a vector field in Qgis
 
@@ -354,7 +354,7 @@ status : {self.pa_status}
 
         # Use the vectorize raster_tools function to make a vector point on each pixel
         # with an attribute column with the pixel value for each band (here we got 9 band)
-        vectors = rt.vectorize(to_vectorize).set_crs(epsg=2154)
+        vectors = rt.vectorize(to_vectorize).set_crs(epsg=epsg)
         vectors.columns = [
                 'dx_in_pixels',
                 'dy_in_pixels',
