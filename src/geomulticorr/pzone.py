@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import geopandas as gpd
+from tqdm import tqdm 
 
 try:
     import geomulticorr.thumb as gmc_thumb
@@ -69,7 +70,7 @@ class Pzone:
     def get_complete_pairs(self):
         return [p for p in self.get_pairs() if p.get_status() == 'complete']
 
-    def pz_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, vector_res=20, method='average'):
+    def pz_full(self, epsg, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, vector_res=20, method='average'):
         logs = {}
         logs['COMPLETE'] = []
         logs['ABORT'] = []
@@ -84,3 +85,26 @@ class Pzone:
                 logs['ABORT'].append(p.pa_key)
                 continue
         return logs
+
+    # Analyze the displacement fields on the pzone
+
+    def get_moving_areas(self, n_clusters=2, mode='m'):
+        """
+        Build a clustered map for each completed pair of the pzone
+        """
+        mas = []
+        for pa in tqdm(self.get_complete_pairs()):
+            mas.append(pa.get_moving_areas(n_clusters, mode))
+        return mas
+
+    def add_moving_areas(self, n_clusters=2, mode='m'):
+        """
+        Make a global addition of the moving areas on the pzone
+        """
+        mas = self.get_moving_areas(n_clusters, mode)
+        
+        first = mas[0]
+        for ma in mas[1:]:
+            first += ma
+
+        return first  

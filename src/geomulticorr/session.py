@@ -293,6 +293,25 @@ class Session:
         self._geomorphs = gpd.read_file(self.p_geodb, layer='Geomorphs')
         self._xzones = gpd.read_file(self.p_geodb, layer='Xzones')
 
+    def add_protomap(self, images_dir):
+        """
+        Update the project protomap
+        """
+        
+        # Create maps
+        old_map = self.get_protomap().to_crs(self.epsg)
+        new_map = self.create_new_protomap(images_dir, save_in_geodatabase=False).to_crs(self.epsg)
+        merged  = gpd.GeoDataFrame(pd.concat([new_map, old_map]))
+        
+        # Just a quick security trick
+        old_map.to_file(self.p_geodb, layer='Backup_protomap')
+        merged.to_file(self.p_geodb, layer='Protomap')
+
+        print(len(old_map))
+        print(len(self.get_protomap()))
+
+        return None
+
     def update_thumbs(self):
         """add or remove rows in Thumbs layer, according to the thumbs stored in the project"""
 
@@ -363,6 +382,8 @@ class Session:
         except ValueError:
             protomap = self.get_protomap(rawpath=rawpath)
 
+        print(f"map epsg : {protomap.crs}\npz  epsg : {self.get_pzones_overview().crs}")
+
         # For each processing zone
         for pz in self.get_pzones_overview().iloc:
             print(f"\n---\n{pz['pz_name']}")
@@ -387,8 +408,6 @@ class Session:
             # Group by acquisition date and sensor
             selection_merged_by_date_and_sensor = selection.groupby(['acq_date', 'sensor'])['filepath'].apply(list)
 
-            # return selection, selection_merged_by_date_and_sensor
-
             # For each group
             for group_id, group in enumerate(selection_merged_by_date_and_sensor) :
 
@@ -406,7 +425,8 @@ class Session:
                     # Here, each image receive a number considered as nodata value by gdal
                     # where the pixels are inside the p_zone but outside the image
                     fully = []
-                    for mosaic_path in group:
+                    print('découpage')
+                    for mosaic_path in tqdm.tqdm(group):
 
                         # If we don't have to make a resampling
                         if rt.getPixelSize(mosaic_path)[0] == res:
@@ -433,6 +453,7 @@ class Session:
                     ############### but it's not working if we don't extract a band with rt.pre_process()
                     """
                     if len(fully) > 1:
+                        print('assemblage')
                         thumb = rt.merge(fully)
                     else:
                         thumb = fully[0]

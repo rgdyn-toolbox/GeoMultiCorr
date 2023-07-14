@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from telenvi import raster_tools as rt
+from sklearn import cluster
 
 try:
     import geomulticorr.thumb as gmc_thumb
@@ -61,10 +62,10 @@ class Pair:
         self.pa_right = right
 
         # Base path
-        self.pa_path = Path(Path(left.th_path).parent.parent, 'displacements',f"{self.pa_key}")
+        self.pa_path = Path(Path(left.th_path).parent.parent, 'displacements',f"{self.pa_key}").absolute()
 
         # Path for the clip outputs and correlation inputs
-        self.pa_inputs_path = Path(self.pa_path, 'inputs')
+        self.pa_inputs_path = Path(self.pa_path, 'inputs').absolute()
 
         # Outputs 1
         self.pa_asp_path    = Path(self.pa_path, 'asp_outputs')
@@ -161,6 +162,9 @@ status : {self.pa_status}
     def get_vmagn_geoim(self):
         return self.get_magn_geoim() / abs(self.pa_left.th_year - self.pa_right.th_year)
 
+
+    ### Creation of the displacement fields
+
     def clip(self, numBand = 1):
         if self.pa_status in ['complete', 'clipped']:
             return True
@@ -204,7 +208,7 @@ status : {self.pa_status}
             temp.mkdir()
 
         # Write correlation command
-        corr_command = f"parallel_stereo {self.pa_left.th_path} {self.pa_right.th_path} {temp}/{self.pa_key}_run \
+        corr_command = f'parallel_stereo {self.pa_left.th_path} {self.pa_right.th_path} {temp}/{self.pa_key}_run \
             --correlator-mode \
             --threads-multiprocess 8 \
             --processes 1 \
@@ -215,11 +219,11 @@ status : {self.pa_status}
             --corr-memory-limit-mb 8000 \
             --save-left-right-disparity-difference\
             --ip-per-tile 200 \
-            --min-num-ip 5"
+            --min-num-ip 5'
 
         # Launch
         os.system(corr_command)
-        self.pa_status='complete'
+        # self.pa_status='complete'
         return True
 
     def corr_eval(self):
@@ -380,7 +384,7 @@ status : {self.pa_status}
 
         return vectors
 
-    def pa_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, vector_res=20, method='average'):
+    def pa_full(self, epsg, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, vector_res=20, method='average'):
 
         # Clip
         self.clip()
@@ -395,9 +399,55 @@ status : {self.pa_status}
         self.compute_magnitude()
 
         # Vectors
-        self.vectorize(output_pixel_size=vector_res, method=method)
+        self.vectorize(epsg, output_pixel_size=vector_res, method=method)
 
         return True
+
+    ### Analyze of the displacement fields
+
+    def get_moving_areas(self, n_clusters, mode='m', save=True):
+
+        """
+        Make a segmentation of a displacement 
+        raster with K-Means clustering 
+        """
+
+        outpath = Path(self.pa_path, f"KMe_N{n_clusters}_{self.pa_key}.tif")
+
+        # Check if the raster is already existing
+        if outpath.exists():
+            return rt.GeoIm.GeoIm(outpath)
+
+        # Get the interesting GeoIm
+        disp = self.get_interesting_geoim(mode)
+
+        # Extract his array
+        disp_ar = disp.array
+
+        # Reshape for the clustering
+        disp_arX = disp_ar.reshape(-1,1)
+
+        # Create the classifier
+        k_means_classifier = cluster.KMeans(n_clusters=n_clusters, n_init=10)
+
+        # Fit to the data
+        k_means_classifier.fit(disp_arX)
+
+        # Get the labels
+        clusters_labels = k_means_classifier.labels_
+
+        # re-switch the classified vector as image (2D array)
+        cluster_disp_ar = clusters_labels.reshape(disp_ar.shape)
+
+        # Assign this array to a new geoim
+        cluster_disp = disp.copy()
+        cluster_disp.array = cluster_disp_ar
+
+        # Save it
+        if save:
+            cluster_disp.save(str(outpath))
+
+        return cluster_disp
 
     def get_interesting_geoim(self, mode):
         match mode.lower():
