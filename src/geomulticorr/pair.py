@@ -6,6 +6,7 @@ import pandas as pd
 
 from telenvi import raster_tools as rt
 from sklearn import cluster
+from skimage import morphology
 
 try:
     import geomulticorr.thumb as gmc_thumb
@@ -448,6 +449,15 @@ status : {self.pa_status}
             cluster_disp.save(str(outpath))
 
         return cluster_disp
+
+    def erode_moving_areas(self, n_clusters=2, mode='m'):
+        """
+        Create new raster of moving areas, normally with less noise
+        """
+        new = morphology.binary_erosion(self.get_moving_areas(n_clusters, mode), morphology.disk(1))
+        newgeoim = self.copy()
+        newgeoim.array = new
+        return newgeoim
 
     def get_interesting_geoim(self, mode):
         match mode.lower():

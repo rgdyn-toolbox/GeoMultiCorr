@@ -101,10 +101,25 @@ class Pzone:
         """
         Make a global addition of the moving areas on the pzone
         """
-        mas = self.get_moving_areas(n_clusters, mode)
         
-        first = mas[0]
-        for ma in mas[1:]:
-            first += ma
+        # Get all the moving areas
+        mas = self.get_moving_areas(n_clusters, mode)
 
-        return first  
+        # Extract the first - it will be the base
+        basic = mas[0]
+
+        # For each other moving area geoim
+        for ma in mas[1:]:
+
+            # We check if the basic geoim and the current
+            # have exactly the same shape
+            if ma.getShape() != basic.getShape():
+
+                # We clip them together
+                basic = basic.cropFromRaster(ma)
+                ma = ma.cropFromRaster(basic)
+
+            # Now we can add them together
+            basic += ma
+
+        return basic
