@@ -406,7 +406,7 @@ status : {self.pa_status}
 
     ### Analyze of the displacement fields
 
-    def get_moving_areas(self, n_clusters, mode='m', save=True):
+    def get_moving_areas(self, n_clusters=2, mode='m', save=True):
 
         """
         Make a segmentation of a displacement 
@@ -450,14 +450,16 @@ status : {self.pa_status}
 
         return cluster_disp
 
-    def erode_moving_areas(self, n_clusters=2, mode='m'):
+    def erode_moving_areas(self, n_clusters=2, mode='m', s=2):
         """
         Create new raster of moving areas, normally with less noise
         """
-        new = morphology.binary_erosion(self.get_moving_areas(n_clusters, mode), morphology.disk(1))
-        newgeoim = self.copy()
-        newgeoim.array = new
-        return newgeoim
+        mas = self.get_moving_areas(n_clusters, mode)
+        mas_ar = mas.array
+        clustered_mas_ar = morphology.binary_erosion(mas_ar, morphology.disk(s))
+        clustered_mas = mas.copy()
+        clustered_mas.array = clustered_mas_ar
+        return clustered_mas
 
     def get_interesting_geoim(self, mode):
         match mode.lower():
