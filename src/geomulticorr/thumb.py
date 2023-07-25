@@ -6,10 +6,7 @@ import pandas as pd
 from osgeo import gdal
 from telenvi import raster_tools as rt
 
-try:
-    import geomulticorr.pair as gmc_pair
-except ModuleNotFoundError:
-    import src.geomulticorr.pair as gmc_pair
+import geomulticorr.pair as gmc_pair
 
 THUMBNAME_PATTERN = re.compile('^([a-z]|[A-Z]|-)+_[0-9]{4}(-[0-9]{2}){2}_.*.(tif|TIF)$')
 
@@ -56,7 +53,7 @@ sensor : {self.th_sensor}
         return gdal.Open(str(self.th_path))
 
     def get_geoim(self):
-        return rt.GeoIm.GeoIm(str(self.th_path))
+        return rt.geoim.Geoim(str(self.th_path))
 
     def show(self):
         self.get_geoim().show()

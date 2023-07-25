@@ -1,17 +1,14 @@
 import os
 from pathlib import Path
 
+import cv2 as cv
 import numpy as np
 import pandas as pd
+from sklearn import cluster
 
 from telenvi import raster_tools as rt
-from sklearn import cluster
-from skimage import morphology
 
-try:
-    import geomulticorr.thumb as gmc_thumb
-except ModuleNotFoundError:
-    import src.geomulticorr.thumb as gmc_thumb
+import geomulticorr.thumb as gmc_thumb
 
 # ASP cannot write his outputs everywhere
 # In the temp (for temporary) directory, we know it will be ok
@@ -123,32 +120,32 @@ status : {self.pa_status}
         try:
             return self.pa_magn_geoim
         except AttributeError:
-            self.pa_magn_geoim = rt.pre_process(str(self.pa_magn_path), geoim=True)
+            self.pa_magn_geoim = rt.Open(str(self.pa_magn_path), load_data=True)
             return self.pa_magn_geoim
 
     def get_snr_geoim(self):
         try:
             return self.pa_snr_geoim
         except AttributeError:
-            self.pa_snr_geoim = rt.pre_process(str(self.pa_snr_path), geoim=True)
+            self.pa_snr_geoim = rt.Open(str(self.pa_snr_path), load_data=True)
             return self.pa_snr_geoim
 
     def get_disp_corr_geoim(self):
-            self.pa_dispf_geoim = rt.pre_process(str(self.pa_dispf_path), geoim=True, nBands=3)
+            self.pa_dispf_geoim = rt.Open(str(self.pa_dispf_path), load_data=True, nBands=3)
             return self.pa_dispf_geoim
         
     def get_dispX_geoim(self):
         try:
             return self.pa_dispX_geoim
         except AttributeError:
-            self.pa_dispX_geoim = rt.pre_process(str(self.pa_dispf_path), geoim=True, nBands=1)
+            self.pa_dispX_geoim = rt.Open(str(self.pa_dispf_path), load_data=True, nBands=1)
             return self.pa_dispX_geoim
 
     def get_dispY_geoim(self):
         try:
             return self.pa_dispY_geoim
         except AttributeError:
-            self.pa_dispY_geoim = rt.pre_process(str(self.pa_dispf_path), geoim=True, nBands=2)
+            self.pa_dispY_geoim = rt.Open(str(self.pa_dispf_path), load_data=True, nBands=2)
             return self.pa_dispY_geoim
     
     def get_vx_geoim(self):
@@ -169,12 +166,12 @@ status : {self.pa_status}
     def clip(self, numBand = 1):
         if self.pa_status in ['complete', 'clipped']:
             return True
-        cleft = rt.pre_process(
+        cleft = rt.Open(
             target = self.pa_left.get_ds(),
             clip   = self.pa_right.get_ds(),
             nBands = numBand)
 
-        cright = rt.pre_process(
+        cright = rt.Open(
             target = self.pa_right.get_ds(),
             clip   = self.pa_left.get_ds(),
             nBands = numBand)
@@ -272,7 +269,7 @@ status : {self.pa_status}
             return self.get_magn_geoim()
 
         # Open the stack with horizontal and vertical displacements
-        xDisp, yDisp = rt.pre_process(str(self.pa_dispf_path), nBands=[1,2], geoim=True).splitBands()
+        xDisp, yDisp = rt.Open(str(self.pa_dispf_path), nBands=[1,2], load_data=True).splitBands()
 
         # We switch values using negative values because ASP gives displacements 
         # in pixel coordinates using as reference upper-left corner
@@ -417,7 +414,7 @@ status : {self.pa_status}
 
         # Check if the raster is already existing
         if outpath.exists():
-            return rt.GeoIm.GeoIm(outpath)
+            return rt.geoim.Geoim(outpath)
 
         # Get the interesting GeoIm
         disp = self.get_interesting_geoim(mode)
@@ -450,16 +447,41 @@ status : {self.pa_status}
 
         return cluster_disp
 
-    def erode_moving_areas(self, n_clusters=2, mode='m', s=2):
+    def denoise_moving_areas(self, operator_size=30, n_clusters=2, mode='m', save=True):
         """
         Create new raster of moving areas, normally with less noise
         """
+
+        # Build output filepath
+        outpath = Path(self.pa_path, f"KMe_N{n_clusters}_Un-{operator_size}_{self.pa_key}.tif")
+
+        # Build a morphological operator
+        operator = np.ones((operator_size, operator_size))
+
+        # Get the moving areas from displacement field by k-means clustering
         mas = self.get_moving_areas(n_clusters, mode)
-        mas_ar = mas.array
-        clustered_mas_ar = morphology.binary_erosion(mas_ar, morphology.disk(s))
-        clustered_mas = mas.copy()
-        clustered_mas.array = clustered_mas_ar
-        return clustered_mas
+
+        # Extract the array and convert it compatible with the operator
+        mas_ar = mas.array.astype('uint8')
+
+        # Denoise
+        mas_denoised_ar = cv.morphologyEx(mas_ar, cv.MORPH_OPEN, operator)
+
+        # Build a new geoim and change his array
+        mas_denoised = self.get_moving_areas().copy()
+        mas_denoised.array = mas_denoised_ar
+
+        # Save
+        if save:
+            mas_denoised.save(str(outpath))
+
+        return mas_denoised
+
+    def vectorize_moving_areas(self, operator_size, n_clusters=2, mode='m'):
+        """
+        Create a geopackage layer with the moving areas outlines
+        """
+        pass
 
     def get_interesting_geoim(self, mode):
         match mode.lower():
