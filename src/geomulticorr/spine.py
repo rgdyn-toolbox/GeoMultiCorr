@@ -1,8 +1,8 @@
-from pathlib import Path
 import shutil
-
 import warnings
 from tqdm import tqdm
+from pathlib import Path
+
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -79,7 +79,7 @@ class Spine:
 
         # Ouvre l'image d'arriere-plan
         backmappath = self.session.get_thumbs([self.sp_pz.pz_name, backmapyear, backmapsensor])[0].th_path
-        backmap = rt.pre_process(backmappath, geoim=True).cropFromVector(self.sp_ge.geometry)
+        backmap = rt.Open(backmappath, load_data=True).cropFromVector(self.sp_ge.geometry)
 
         # Pour chaque Rib
         for rib in tqdm(ribs.iloc, total=len(ribs)):

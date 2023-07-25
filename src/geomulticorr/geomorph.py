@@ -5,13 +5,10 @@ from matplotlib import pyplot as plt
 import geopandas as gpd
 from telenvi import raster_tools as rt
 
-try:
-    import geomulticorr.spine as gmc_spine
-except ModuleNotFoundError:
-    import src.geomulticorr.spine as gmc_spine
+import geomulticorr.spine as gmc_spine
 
 class Geomorph:
-        
+
     def __init__(self, session, ge_id):
         
         # Check existence and unique
@@ -61,7 +58,7 @@ class Geomorph:
     
     def get_mean_disp_on_pair(self, magn_path, epsg):
         target = gpd.GeoDataFrame([{'geometry':self.geometry}]).set_crs(epsg=epsg)
-        data = rt.pre_process(magn_path, geoExtent=target, geoim=True)
+        data = rt.Open(magn_path, geoExtent=target, load_data=True)
         data.maskFromVector(target)
         return data.mean()
 

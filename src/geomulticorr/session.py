@@ -1,31 +1,20 @@
 import os
 import re
+import tqdm
 from pathlib import Path
 
-import tqdm
 import pandas as pd
 
 from osgeo import gdal
 import geopandas as gpd
 from telenvi import raster_tools as rt
 
-## User
-try:
-    import geomulticorr.geomorph as gmc_geomorph
-    import geomulticorr.pzone    as gmc_pzone
-    import geomulticorr.pair     as gmc_pair
-    import geomulticorr.spine    as gmc_spine
-    import geomulticorr.thumb    as gmc_thumb
-    import geomulticorr.xzone    as gmc_xzone
-
-# Developer
-except ModuleNotFoundError:
-    import src.geomulticorr.geomorph as gmc_geomorph
-    import src.geomulticorr.pzone    as gmc_pzone
-    import src.geomulticorr.pair     as gmc_pair
-    import src.geomulticorr.spine    as gmc_spine
-    import src.geomulticorr.thumb    as gmc_thumb
-    import src.geomulticorr.xzone    as gmc_xzone
+import geomulticorr.geomorph as gmc_geomorph
+import geomulticorr.pzone    as gmc_pzone
+import geomulticorr.pair     as gmc_pair
+import geomulticorr.spine    as gmc_spine
+import geomulticorr.thumb    as gmc_thumb
+import geomulticorr.xzone    as gmc_xzone
 
 file_location = Path(__file__)
 
@@ -430,13 +419,13 @@ class Session:
 
                         # If we don't have to make a resampling
                         if rt.getPixelSize(mosaic_path)[0] == res:
-                            mosaic = rt.pre_process(
+                            mosaic = rt.Open(
                                 target     = mosaic_path,
                                 geoExtent  = pz.geometry.bounds,
                                 nBands     = 1)
 
                         else :
-                            mosaic = rt.pre_process(
+                            mosaic = rt.Open(
                                 target     = mosaic_path,
                                 geoExtent  = pz.geometry.bounds,
                                 nBands     = 1,
@@ -450,7 +439,7 @@ class Session:
                     # because gdal considered as nodata the places outside each part, the merged work easily 
                     """
                     TELENVI ISSUE 1
-                    ############### but it's not working if we don't extract a band with rt.pre_process()
+                    ############### but it's not working if we don't extract a band with rt.Open()
                     """
                     if len(fully) > 1:
                         print('assemblage')

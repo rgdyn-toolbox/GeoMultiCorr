@@ -1,12 +1,16 @@
 from pathlib import Path
-
-import geopandas as gpd
 from tqdm import tqdm 
 
-try:
-    import geomulticorr.thumb as gmc_thumb
-except ModuleNotFoundError:
-    import src.geomulticorr.thumb as gmc_thumb
+import rasterio
+import geopandas as gpd
+from rasterio.features import shapes
+
+import cv2 as cv
+import numpy as np
+from sklearn import cluster
+from shapely.geometry import shape
+
+import geomulticorr.thumb as gmc_thumb
 
 class Pzone:
 
@@ -123,3 +127,76 @@ class Pzone:
             basic += ma
 
         return basic
+
+    def cluster_addition(self):
+        def cluster_geoim(target, n_clusters=2):
+
+            # Extract his array
+            target_ar = target.array
+
+            # Reshape for the clustering
+            target_arX = target_ar.reshape(-1,1)
+
+            # Create the classifier
+            k_means_classifier = cluster.KMeans(n_clusters=n_clusters, n_init=10)
+
+            # Fit to the data
+            k_means_classifier.fit(target_arX)
+
+            # Get the labels
+            clusters_labels = k_means_classifier.labels_
+
+            # re-switch the classified vector as image (2D array)
+            cluster_target_ar = clusters_labels.reshape(target_ar.shape)
+
+            # Assign this array to a new geoim
+            cluster_target = target.copy()
+            cluster_target.array = cluster_target_ar
+
+            return cluster_target
+        x = cluster_geoim(self.add_moving_areas())
+        return x
+
+    def denoise_moving_areas(self, operator_size=30, n_clusters=2, mode='m', save=True):
+        """
+        Create new raster of the cumul of the moving areas, normally with less noise
+        """
+
+        # Build output filepath
+        outpath = Path(self.session.p_raster_data, self.pz_name, 'displacements', f"{self.pz_name}_moving-areas_{n_clusters}_{mode}.tif")
+
+        # Build a morphological operator
+        operator = np.ones((operator_size, operator_size))
+
+        # Get the moving areas from displacement field by k-means clustering
+        mas = self.cluster_addition()
+
+        # Extract the array and convert it compatible with the operator
+        mas_ar = mas.array.astype('uint8')
+
+        # Denoise
+        mas_denoised_ar = cv.morphologyEx(mas_ar, cv.MORPH_CLOSE, operator)
+
+        # Build a new geoim and change his array
+        mas_denoised = self.get_thumbs()[0].get_geoim().copy()
+        mas_denoised.array = mas_denoised_ar
+
+        # Save
+        if save:
+            mas_denoised.save(str(outpath))
+
+        return mas_denoised
+
+    def vectorize_multitemporal_moving_areas(self, operator_size=30, n_clusters=2, mode='m'):
+        mask = None
+        with rasterio.Env():
+            with rasterio.open(str(Path(self.session.p_raster_data, self.pz_name, 'displacements', f"{self.pz_name}_moving-areas_{n_clusters}_{mode}.tif"))) as src:
+                image = src.read(1) # first band
+                results = (
+                {'properties': {'raster_val': v}, 'geometry': s}
+                for i, (s, v) 
+                in enumerate(
+                    shapes(image, mask=mask, transform=src.transform)))
+        geoms = list(results)
+        gpd_polygonized_raster = gpd.GeoDataFrame.from_features(geoms).set_crs(epsg=2154)
+        gpd_polygonized_raster.to_file(str(Path(self.session.p_raster_data, self.pz_name, 'displacements', f"{self.pz_name}_moving-areas.gpkg")), layer=f"{self.pz_name}_moving-areas_{n_clusters}_{mode}")
