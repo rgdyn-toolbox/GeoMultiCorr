@@ -8,7 +8,6 @@ from rasterio.features import shapes
 import cv2 as cv
 import numpy as np
 from sklearn import cluster
-from shapely.geometry import shape
 
 import geomulticorr.thumb as gmc_thumb
 
@@ -80,7 +79,7 @@ class Pzone:
         logs['ABORT'] = []
         for p in self.get_valid_pairs():
             try:
-                p.pa_full(corr_algorithm, corr_kernel_size, corr_xthreshold, vector_res, method)
+                p.pa_full(epsg, corr_algorithm, corr_kernel_size, corr_xthreshold, vector_res, method)
                 logs['COMPLETE'].append(p.pa_key)
             except ValueError:
                 logs['ABORT'].append(p.pa_key)
@@ -113,7 +112,7 @@ class Pzone:
         basic = mas[0]
 
         # For each other moving area geoim
-        for ma in mas[1:]:
+        for ma in mas[3:]:
 
             # We check if the basic geoim and the current
             # have exactly the same shape
@@ -123,7 +122,8 @@ class Pzone:
                 basic = basic.cropFromRaster(ma)
                 ma = ma.cropFromRaster(basic)
 
-            # Now we can add them together
+            # Check the numeric type
+            ma.array = ma.array.astype('uint8')
             basic += ma
 
         return basic
@@ -163,7 +163,7 @@ class Pzone:
         """
 
         # Build output filepath
-        outpath = Path(self.session.p_raster_data, self.pz_name, 'displacements', f"{self.pz_name}_moving-areas_{n_clusters}_{mode}.tif")
+        outpath = Path(self.session.p_raster_data, self.pz_name, f"{self.pz_name}_moving-areas_denoised-{operator_size}_round-0.tif")
 
         # Build a morphological operator
         operator = np.ones((operator_size, operator_size))
@@ -187,10 +187,10 @@ class Pzone:
 
         return mas_denoised
 
-    def vectorize_multitemporal_moving_areas(self, operator_size=30, n_clusters=2, mode='m'):
+    def vectorize_multitemporal_moving_areas(self, epsg, min_surf = '', operator_size=30, n_clusters=2, mode='m'):
         mask = None
         with rasterio.Env():
-            with rasterio.open(str(Path(self.session.p_raster_data, self.pz_name, 'displacements', f"{self.pz_name}_moving-areas_{n_clusters}_{mode}.tif"))) as src:
+            with rasterio.open(str(Path(self.session.p_raster_data, self.pz_name, f"{self.pz_name}_moving-areas_round-0.tif"))) as src:
                 image = src.read(1) # first band
                 results = (
                 {'properties': {'raster_val': v}, 'geometry': s}
@@ -198,5 +198,10 @@ class Pzone:
                 in enumerate(
                     shapes(image, mask=mask, transform=src.transform)))
         geoms = list(results)
-        gpd_polygonized_raster = gpd.GeoDataFrame.from_features(geoms).set_crs(epsg=2154)
-        gpd_polygonized_raster.to_file(str(Path(self.session.p_raster_data, self.pz_name, 'displacements', f"{self.pz_name}_moving-areas.gpkg")), layer=f"{self.pz_name}_moving-areas_{n_clusters}_{mode}")
+        gpd_polygonized_raster = gpd.GeoDataFrame.from_features(geoms).set_crs(epsg=epsg)
+        gpd_polygonized_raster = gpd_polygonized_raster[gpd_polygonized_raster.raster_val == 1]
+        if min_surf != '':
+            gpd_polygonized_raster = gpd_polygonized_raster[gpd_polygonized_raster.area / 1000 > min_surf]
+            gpd_polygonized_raster.to_file(str(Path(self.session.p_raster_data, self.pz_name, f"{self.pz_name}_moving-areas_round-0.gpkg")), layer=f"{self.pz_name}_moving-areas_round-0_features-sup-{min_surf}")
+        else:
+            gpd_polygonized_raster.to_file(str(Path(self.session.p_raster_data, self.pz_name, f"{self.pz_name}_moving-areas_round-0.gpkg")), layer=f"{self.pz_name}_moving-areas_round-0")
