@@ -454,7 +454,7 @@ class Session:
         """Launch all the possible correlations accross all the valid images among the project pzones"""
         logs = []
         for pzone in self.get_pzones():
-            logs.append(pzone.pz_full(corr_algorithm, corr_kernel_size, corr_xthreshold))
+            logs.append(pzone.pz_full(self.epsg, corr_algorithm, corr_kernel_size, corr_xthreshold))
         return pd.DataFrame(logs)
 
     def _search_engine(self, layername, criterias=''):

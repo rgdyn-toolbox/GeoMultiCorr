@@ -68,7 +68,7 @@ class Pair:
         # Outputs 1
         self.pa_asp_path    = Path(self.pa_path, 'asp_outputs')
         self.pa_dispf_path  = Path(self.pa_asp_path, f"{self.pa_key}_run-F.tif")
-        self.pa_snr_path    = Path(self.pa_asp_path, f"{self.pa_key}_SNR-run-F.tif")
+        self.pa_snr_path    = Path(self.pa_asp_path, f"{self.pa_key}_corr-eval-ncc.tif")
 
         # Outputs 2
         self.pa_magn_path   = Path(self.pa_path, f"{self.pa_key}_magn.tif")
@@ -224,11 +224,34 @@ status : {self.pa_status}
         # self.pa_status='complete'
         return True
 
-    def corr_eval(self):
+    def corr_eval(self, corr_kernel_size=7, metric='ncc'):
         """
         Appel de la fonction d'ASP pour générer un raster SNR
         """
-        pass
+
+        # Check if the snr is already existing for this pair
+        if self.pa_snr_path.exists():
+            return self.get_snr_geoim()
+
+        # Get Left and Right normalized thumbs
+        left_p  = Path(self.pa_asp_path, f"{self.pa_key}_run-L.tif")
+        right_p = Path(self.pa_asp_path, f"{self.pa_key}_run-R.tif")
+
+        # Get Run-F path
+        disp_p = self.pa_dispf_path
+
+        # Build output suffix
+        suffix = str(Path(self.pa_asp_path, f"{self.pa_key}_corr-eval"))
+
+        # Build command
+        corr_eval_command = f"corr_eval {left_p} {right_p} {disp_p} {suffix}\
+        --kernel-size {corr_kernel_size} {corr_kernel_size}\
+        --metric {metric}\
+        --prefilter-mode 2" # Used by Amaury in his command but... I don't know why
+
+        # Launch
+        os.system(corr_eval_command)
+        return True
 
     def save_corrdata(self, verbose=False):
         """
@@ -382,7 +405,7 @@ status : {self.pa_status}
 
         return vectors
 
-    def pa_full(self, epsg, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, vector_res=20, method='average'):
+    def pa_full(self, epsg, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, vector_res=20, method='average', metric_eval='ncc'):
 
         # Clip
         self.clip()
@@ -392,6 +415,9 @@ status : {self.pa_status}
 
         # Save
         self.save_corrdata()
+
+        # Eval
+        self.corr_eval(corr_kernel_size=corr_kernel_size, metric=metric_eval)
 
         # Magn
         self.compute_magnitude()
