@@ -3,6 +3,7 @@ from tqdm import tqdm
 
 import rasterio
 import geopandas as gpd
+from telenvi import raster_tools as rt
 from rasterio.features import shapes
 
 import cv2 as cv
@@ -22,6 +23,7 @@ class Pzone:
         # Ecriture attributs
         self.session = session
         self.pz_name = target_pz_name
+        self.pz_dem_path = Path(self.session.p_raster_data, self.pz_name, f"{self.pz_name}_dem.tif")
 
     def get_thumbs_overview(self, criterias=''):
         criterias = [criterias] + [self.pz_name]
@@ -69,7 +71,14 @@ class Pzone:
                 except AssertionError:
                     continue
         return ps
-    
+
+    def get_dem(self):
+        if self.pz_dem_path.exists():
+            return rt.Open(str(self.pz_dem_path), load_data=True)
+        else:
+            print(f'No dem for pzone {self.pz_name}')
+            return False
+
     def get_complete_pairs(self):
         return [p for p in self.get_pairs() if p.get_status() == 'complete']
 

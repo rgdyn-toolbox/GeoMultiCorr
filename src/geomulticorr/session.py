@@ -184,30 +184,32 @@ class Session:
         """Send a spine.Spine object"""
         return gmc_spine.Spine(self, sp_id)
 
-    def get_protomap(self):
-        try:
-            return gpd.read_file(self.p_geodb, layer='Protomap')
-        except ValueError:
-            print('You have to create a protomap first with my_session.create_protomap()')
+    def get_dems(self, criterias):
+        return [pz.get_dem() for pz in self.get_pzones(criterias) if pz.get_dem() != False]
 
-    def create_new_protomap(self, rawpath, extensions=['tif', 'jp2'], save_in_geodatabase=True, epsg=0):
-        """make a vector layer with the extents of all the rasters stored under the rawpath
-           and write metadata in hte layer attribute table
-           PRE-REQUISITE : All the images must be georeferenced in a compatible CRS !!! """
+    def get_georasters_map(self, data_type='opt', suffix=''):
+        layername = f"extents-map_{data_type}_{suffix}"
+        try:
+            return gpd.read_file(self.p_geodb, layer=layername)
+        except ValueError:
+            print(f'No georasters map named {layername} in the session geodatabase')
+            return None
+
+    def map_georasters_bank(self, georasters_bank_path, extensions=['tif','jp2'], data_type='opt', epsg='', suffix=''):
 
         # By default, write the output vector layer in the epsg of the session / project
-        if epsg == 0:
+        if epsg == '':
             epsg=self.epsg
 
-        # check the validity of the rawpath
-        rawpath = Path(rawpath)
-        assert rawpath.exists(), f"{rawpath} is not an existing path"
+        # check the validity of the georasters_bank_path
+        georasters_bank_path = Path(georasters_bank_path)
+        assert georasters_bank_path.exists(), f"{georasters_bank_path} is not an existing path"
 
-        # Get a list of all the .tif or .jp2 under rawpath
+        # Get a list of all the .tif or .jp2 under georasters_bank_path
         targets = []
         for x in extensions:
-            targets += rawpath.glob(f'**/*.{x.lower()}')
-            targets += rawpath.glob(f'**/*.{x.upper()}')
+            targets += georasters_bank_path.glob(f'**/*.{x.lower()}')
+            targets += georasters_bank_path.glob(f'**/*.{x.upper()}')
 
         # Build a vector layer, with metadata and extent of each image
         features = []
@@ -219,11 +221,26 @@ class Session:
 
             # Write all kind of metadata
             ft["filename"] = ta.name
-            ft["sensor"] = re_searcher(str(ta), sensors())
+            if data_type == 'opt':
+                ft["sensor"] = re_searcher(str(ta), sensors())
+            elif 'dem' in data_type.lower():
+                ft["sensor"] = 'dem'
             ft["xRes"],  ft["yRes"] = rt.getPixelSize(str(ta))
             ft["bands"], ft["rows"], ft["cols"] = rt.getShape(str(ta))
 
-            # Get acquisition date : SPOT way
+            ###### ###### ###### ###### 
+            ###### Modulable code - you have to adapt this block according to the way of naming of your rasters in the rasters_bank
+            ###### ###### ###### ###### 
+
+            # Get acquisition date : Diego PhD thesis harddisk naming way
+            if 'aerial' in ft['sensor'].lower():
+
+                # We split the filename to get the date -- according to UNILgis naming way
+                acq_date = ft["filename"].split('-')[1]
+                acq_date = f'{acq_date[:4]}-{acq_date[4:6]}-{acq_date[6:]}'
+                ft['acq_date'] = acq_date
+
+            # Get acquisition date : SPOT naming way
             if 'spot' in ft['sensor'].lower():
 
                 # Here we get the path to the metadata.xml file associated to the image
@@ -243,19 +260,13 @@ class Session:
                     # ft['acq_date'] = '0000-00-00'
                     continue
 
-            # Get acquisition date : aerial way
-            elif 'aerial' in ft['sensor'].lower():
-                """
-                GMC ISSUE 2
-                ############### /!\ 
-                IMPLIQUE QUE LES NOMS DES IMAGES AERIENNES SOIENT FORMATEES DE LA MEME MANIERE QUE LES NOTRES 
-                ############### /!\ 
-                """
+            # Get acquisition date : swiss alti 3D DEM
+            if ft['sensor'] == 'dem':
+                ft['acq_date'] = ft["filename"].split('_')[1]
 
-                # We split the filename to get the date
-                acq_date = ft["filename"].split('-')[1]
-                acq_date = f'{acq_date[:4]}-{acq_date[4:6]}-{acq_date[6:]}'
-                ft['acq_date'] = acq_date
+            ###### ###### ###### #######
+            ###### End of modulable code ------------------------------
+            ###### ###### ###### #######
 
             # Get the image geographic extent
             ft["geometry"] = rt.drawGeomExtent(str(ta), geomType='shly')
@@ -266,8 +277,10 @@ class Session:
 
         # Transform the list of GeoSeries features into a GeoDataFrame, and set his CRS
         layer = gpd.GeoDataFrame(features).set_crs(epsg)
-        if save_in_geodatabase == True:
-            layer.to_file(self.p_geodb, layer='Protomap')
+
+        # Save the map in the geodatabase with dynamic name
+        self.copy_geodb()
+        layer.to_file(self.p_geodb, layer=f"extents-map_{data_type}_{suffix}")
         return layer
 
     ########### SETTERS ###########
@@ -281,25 +294,6 @@ class Session:
         self._pzones = gpd.read_file(self.p_geodb, layer='Pzones')
         self._geomorphs = gpd.read_file(self.p_geodb, layer='Geomorphs')
         self._xzones = gpd.read_file(self.p_geodb, layer='Xzones')
-
-    def add_protomap(self, images_dir):
-        """
-        Update the project protomap
-        """
-        
-        # Create maps
-        old_map = self.get_protomap().to_crs(self.epsg)
-        new_map = self.create_new_protomap(images_dir, save_in_geodatabase=False).to_crs(self.epsg)
-        merged  = gpd.GeoDataFrame(pd.concat([new_map, old_map]))
-        
-        # Just a quick security trick
-        old_map.to_file(self.p_geodb, layer='Backup_protomap')
-        merged.to_file(self.p_geodb, layer='Protomap')
-
-        print(len(old_map))
-        print(len(self.get_protomap()))
-
-        return None
 
     def update_thumbs(self):
         """add or remove rows in Thumbs layer, according to the thumbs stored in the project"""
@@ -357,21 +351,17 @@ class Session:
 
     ###############################
 
-    def sieve(self, rawpath='', res=1, alg='nearest', band=1):
-        """intersect a protomap layer and the project pzones layer to create thumbs"""
+    def sieve(self, data_type='opt', suffix='', res=1, alg='nearest', band=1):
+        """intersect a georasters map layer and the project pzones layer to create thumbs"""
 
         # Check if user have drawn some pzones
         assert len(self.get_pzones_overview()) > 0, 'no pzone registered for this project'
 
-        # Check if a protomap is registered in the project geodatabase
-        try:
-            protomap = gpd.read_file(self.p_geodb, layer='Protomap')
+        # Open the corresponding georasters map
+        georasters_map = self.get_georasters_map(data_type, suffix)
 
-        # If not, we build it
-        except ValueError:
-            protomap = self.get_protomap(rawpath=rawpath)
-
-        print(f"map epsg : {protomap.crs}\npz  epsg : {self.get_pzones_overview().crs}")
+        # Inform user about CRS differences between georasters map and pzones layer
+        print(f"map epsg : {georasters_map.crs}\npz  epsg : {self.get_pzones_overview().crs}")
 
         # For each processing zone
         for pz in self.get_pzones_overview().iloc:
@@ -379,14 +369,17 @@ class Session:
 
             # Create a directory to store the raster_data of the pzone
             pz_rasterdata = Path(self.p_root, f'raster-data_{self.project_name}', pz['pz_name'])
-            pz_opticals = Path(pz_rasterdata, 'opticals')
-            pz_disps = Path(pz_rasterdata, 'displacements')
-            for p in [pz_rasterdata, pz_opticals, pz_disps]:
-                if not p.exists():
-                    p.mkdir()
+
+            # Create subdirectories for the thumbs and the displacements measurements associated
+            if data_type == 'opt':
+                pz_opticals = Path(pz_rasterdata, 'opticals')
+                pz_disps = Path(pz_rasterdata, 'displacements')
+                for p in [pz_rasterdata, pz_opticals, pz_disps]:
+                    if not p.exists():
+                        p.mkdir()
 
             # Get the images intersecting the zone
-            selection = protomap[protomap['geometry'].intersects(pz['geometry'])]
+            selection = georasters_map[georasters_map['geometry'].intersects(pz['geometry'])]
 
             """
             Here we have to regroup the lines of 'selection' where the acquisition date and the sensor are identicals
@@ -404,51 +397,76 @@ class Session:
                 sensor = selection_merged_by_date_and_sensor.index[group_id][1]
 
                 # Define output filename and full path (ex: raster-data_vanoise/sachette/opticals/sachette_2021-03-08_AERIAL.tif)
-                thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}.tif"
-                thumb_path = str(Path(pz_opticals, thumb_name))
+                if data_type == 'opt':
+                    thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}.tif"
+                    thumb_path = str(Path(pz_opticals, thumb_name))
+
+                elif data_type == 'dem':
+                    thumb_name = f"{pz['pz_name']}_dem.tif"
+                    thumb_path = str(Path(pz_rasterdata, thumb_name))
+
+                if Path(thumb_path).exists():
+                    continue
 
                 # We check if the file is already existing
-                if not os.path.exists(thumb_path):
+                # if not os.path.exists(thumb_path):
 
-                    # We crop each image of the group on the p_zone 
-                    # Here, each image receive a number considered as nodata value by gdal
-                    # where the pixels are inside the p_zone but outside the image
-                    fully = []
-                    print('découpage')
-                    for mosaic_path in tqdm.tqdm(group):
+                # We crop each image of the group on the p_zone 
+                # Here, each image receive a number considered as nodata value by gdal
+                # where the pixels are inside the p_zone but outside the image
+                fully = []
+                print('découpage')
+                for mosaic_path in tqdm.tqdm(group):
 
+                    # Difference between opt and dem because of bugs with merge, when the input raster have 1 or many bands.
+                    # But if you work with an optical raster containing only one band, bugs can happened... ?
+                    if data_type == 'opt':
                         # If we don't have to make a resampling
                         if rt.getPixelSize(mosaic_path)[0] == res:
                             mosaic = rt.Open(
                                 target     = mosaic_path,
                                 geoExtent  = pz.geometry.bounds,
-                                nBands     = 1)
+                                nBands=1)
 
                         else :
                             mosaic = rt.Open(
                                 target     = mosaic_path,
                                 geoExtent  = pz.geometry.bounds,
-                                nBands     = 1,
+                                nRes       = res,
+                                resMethod  = alg,
+                                nBands=1)
+
+                    elif data_type == 'dem':
+                        if rt.getPixelSize(mosaic_path)[0] == res:
+                            mosaic = rt.Open(
+                                target     = mosaic_path,
+                                geoExtent  = pz.geometry.bounds)
+
+                        else :
+                            mosaic = rt.Open(
+                                target     = mosaic_path,
+                                geoExtent  = pz.geometry.bounds,
                                 nRes       = res,
                                 resMethod  = alg)
 
-                        fully.append(mosaic)
+                    fully.append(mosaic)
 
-                    # If there is more than one image acquired at the same date and from the same sensor
-                    # we accept that it is the initial same image and we merged them together
-                    # because gdal considered as nodata the places outside each part, the merged work easily 
-                    """
-                    TELENVI ISSUE 1
-                    ############### but it's not working if we don't extract a band with rt.Open()
-                    """
-                    if len(fully) > 1:
-                        print('assemblage')
-                        thumb = rt.merge(fully)
-                    else:
-                        thumb = fully[0]
+                # If there is more than one image acquired at the same date and from the same sensor
+                # we accept that it is the initial same image and we merged them together
+                # because gdal considered as nodata the places outside each part, the merged work easily 
+                """
+                TELENVI ISSUE 1
+                ############### but it's not working if we don't extract a band with rt.Open()
+                """
 
-                    # Write the thumb
-                    rt.write(thumb, thumb_path)
+                if len(fully) > 1:
+                    print('assemblage')
+                    thumb = rt.merge(fully)
+                else:
+                    thumb = fully[0]
+
+                # Write the thumb
+                rt.write(thumb, thumb_path)
 
     def pr_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10):
         """Launch all the possible correlations accross all the valid images among the project pzones"""

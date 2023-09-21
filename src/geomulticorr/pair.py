@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
-
+from rasterio.features import shapes
+import geopandas as gpd
+import rasterio
 import cv2 as cv
 import numpy as np
 import pandas as pd
@@ -251,6 +253,13 @@ status : {self.pa_status}
 
         # Launch
         os.system(corr_eval_command)
+
+        # Copy .qml file for set a default style in Qgis
+        template_style = Path(Path(__file__).parent, 'resources', 'map_styles', 'corr-eval_style.qml')
+        target_style = str(self.pa_snr_path)[:-4]
+        cp_command = f"cp {template_style} {target_style}.qml"
+        os.system(cp_command)
+
         return True
 
     def save_corrdata(self, verbose=False):
@@ -310,7 +319,7 @@ status : {self.pa_status}
 
         return magn_in_meters
 
-    def vectorize(self, epsg, output_pixel_size=None, method='average', write=True):
+    def vectorize(self, epsg, output_pixel_size=None, method='average', write=True, crop='', cropFeatureNum=0):
         """
         create a points vector layer, mappable as a vector field in Qgis
 
@@ -319,8 +328,13 @@ status : {self.pa_status}
         """
 
         # Get vector components - unit = pixels and referential = matrix (Y top is Y min)
-        initial_dx = self.get_dispX_geoim()
-        initial_dy = self.get_dispY_geoim()
+        if crop == '':
+            initial_dx = self.get_dispX_geoim()
+            initial_dy = self.get_dispY_geoim()
+        else:
+            disp = rt.Open(self.pa_dispf_path, geoExtent=crop, featureNum=cropFeatureNum, load_data=True, nBands=[1,2])
+            initial_dx, initial_dy = disp.splitBands()
+
         initial_pixel_size_x, initial_pixel_size_y = initial_dx.getPixelSize()
 
         # Modify the original displacement rasters by resampling them with output resolution asked
@@ -395,7 +409,7 @@ status : {self.pa_status}
         # Write vector layer in geopackage
         if write == True:
             current_vector_layer_name = f"{output_pixel_size}_{self.pa_key}"
-            vectors.to_file(self.pa_vect_path, layer=current_vector_layer_name)
+            vectors.to_file(self.pa_vect_path, layer=current_vector_layer_name+'shift')
 
             # Copy .qml file
             template_style = Path(Path(__file__).parent, 'resources', 'map_styles', 'vector-field_style_1.qml')
@@ -503,11 +517,28 @@ status : {self.pa_status}
 
         return mas_denoised
 
-    def vectorize_moving_areas(self, operator_size, n_clusters=2, mode='m'):
+    def vectorize_moving_areas(self, epsg=21781, min_surf = '', n_clusters=4, mode='m'):
         """
         Create a geopackage layer with the moving areas outlines
         """
-        pass
+        mask = None
+        with rasterio.Env():
+            target_path = str(Path(self.pa_path, f"KMe_N{n_clusters}_{self.pa_key}.tif"))
+            with rasterio.open(target_path) as src:
+                image = src.read(1) # first band
+                results = (
+                {'properties': {'raster_val': v}, 'geometry': s}
+                for i, (s, v) 
+                in enumerate(
+                    shapes(image, mask=mask, transform=src.transform)))
+        geoms = list(results)
+        gpd_polygonized_raster = gpd.GeoDataFrame.from_features(geoms).set_crs(epsg=epsg)
+        if min_surf != '':
+            gpd_polygonized_raster = gpd_polygonized_raster[gpd_polygonized_raster.area / 1000 > min_surf]
+            output_path = str(Path(self.pa_path, f"{self.pa_key}_classif-{n_clusters}_min-surf-{min_surf}.gpkg"))
+        else:
+            output_path = str(Path(self.pa_path, f"{self.pa_key}_classif-{n_clusters}.gpkg"))
+        gpd_polygonized_raster.to_file(output_path)
 
     def get_interesting_geoim(self, mode):
         match mode.lower():
