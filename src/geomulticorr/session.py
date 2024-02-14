@@ -1,3 +1,4 @@
+print('hello')
 import os
 import re
 import tqdm
@@ -164,7 +165,7 @@ class Session:
 
     def get_xzone(self, xz_id):
         """Send a xzones.Xzones object"""
-        return gmc_xzone.Xzones(self, xz_id)
+        return gmc_xzone.Xzone(self, xz_id)
 
     def get_pairs_overview_on_period(self, ymin, ymax, criterias=''):
         """Retourne un tableau des paires completement incluses dans la période [yMin;yMax]"""
@@ -263,6 +264,12 @@ class Session:
             # Get acquisition date : swiss alti 3D DEM
             if ft['sensor'] == 'dem':
                 ft['acq_date'] = ft["filename"].split('_')[1]
+
+            # Get acquisition date : swissimage format
+            if 'swissimage' in ta.name:
+                ft["acq_date"] = f"{ft['filename'].split('_')[1]}-01-01"
+                ft["sensor"] = 'aerial'
+
 
             ###### ###### ###### #######
             ###### End of modulable code ------------------------------

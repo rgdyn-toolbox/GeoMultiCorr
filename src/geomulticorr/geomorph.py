@@ -14,7 +14,7 @@ class Geomorph:
         # Check existence and unique
         assert ge_id in session._geomorphs.ge_frogi_id.values, 'key not found in Geomorphs layer'
         assert session._geomorphs.value_counts('ge_frogi_id')[ge_id] == 1, f'more than 1 geomorph have the key {ge_id}'
-
+        
         # Attributes
         self.session = session
         self.data = session._geomorphs[session._geomorphs.ge_frogi_id == ge_id].iloc[0]
@@ -40,13 +40,13 @@ class Geomorph:
     def get_pairs_complete(self):
         return [pair for pair in self.get_pairs() if pair.pa_status == 'complete']
     
-    def show(self, criterias=''):
+    def show(self, criterias='', epsg=2154):
         try:
             thumb = self.get_thumbs(criterias)[0].get_geoim()
         except IndexError:
             print(f'0 thumbs for year {criterias[0]} on this geomorph')
         thumb = thumb.cropFromVector(self.geometry)
-        thumb.maskFromVector(self.session.get_geomorphs_overview(criterias))
+        thumb.maskFromVector(self.session.get_geomorphs_overview(criterias), epsg=epsg)
         thumb.show()
     
     def get_pairs_on_period_overview(self, ymin, ymax):
@@ -56,20 +56,20 @@ class Geomorph:
         pairs = pairs[(pairs.chrono_min>=ymin)&(pairs.chrono_max>=ymax)]
         return pairs
     
-    def get_mean_disp_on_pair(self, magn_path, epsg):
+    def get_mean_disp_on_pair(self, magn_path, epsg=2154):
         target = gpd.GeoDataFrame([{'geometry':self.geometry}]).set_crs(epsg=epsg)
         data = rt.Open(magn_path, geoExtent=target, load_data=True)
-        data.maskFromVector(target)
+        data.maskFromVector(target, epsg=epsg)
         return data.mean()
 
-    def get_disp_overview(self):
+    def get_disp_overview(self, epsg=2154):
         disps = []
         pairs = self.get_pairs_complete()
         for p in pairs :
             row = pd.Series(dtype='object')
             row['L'] = p.pa_left.th_year
             row['R'] = p.pa_right.th_year
-            row['D'] = self.get_mean_disp_on_pair(p.pa_magn_path)
+            row['D'] = self.get_mean_disp_on_pair(p.pa_magn_path, epsg=epsg)
             row['V'] = row.D/abs(row.L-row.R)        
             disps.append(row)
         return pd.DataFrame(disps)
