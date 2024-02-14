@@ -122,32 +122,32 @@ status : {self.pa_status}
         try:
             return self.pa_magn_geoim
         except AttributeError:
-            self.pa_magn_geoim = rt.Open(str(self.pa_magn_path), load_data=True)
+            self.pa_magn_geoim = rt.Open(str(self.pa_magn_path), load_pixels=True)
             return self.pa_magn_geoim
 
     def get_snr_geoim(self):
         try:
             return self.pa_snr_geoim
         except AttributeError:
-            self.pa_snr_geoim = rt.Open(str(self.pa_snr_path), load_data=True)
+            self.pa_snr_geoim = rt.Open(str(self.pa_snr_path), load_pixels=True)
             return self.pa_snr_geoim
 
     def get_disp_corr_geoim(self):
-            self.pa_dispf_geoim = rt.Open(str(self.pa_dispf_path), load_data=True, nBands=3)
+            self.pa_dispf_geoim = rt.Open(str(self.pa_dispf_path), load_pixels=True, nBands=3)
             return self.pa_dispf_geoim
         
     def get_dispX_geoim(self):
         try:
             return self.pa_dispX_geoim
         except AttributeError:
-            self.pa_dispX_geoim = rt.Open(str(self.pa_dispf_path), load_data=True, nBands=1)
+            self.pa_dispX_geoim = rt.Open(str(self.pa_dispf_path), load_pixels=True, nBands=1)
             return self.pa_dispX_geoim
 
     def get_dispY_geoim(self):
         try:
             return self.pa_dispY_geoim
         except AttributeError:
-            self.pa_dispY_geoim = rt.Open(str(self.pa_dispf_path), load_data=True, nBands=2)
+            self.pa_dispY_geoim = rt.Open(str(self.pa_dispf_path), load_pixels=True, nBands=2)
             return self.pa_dispY_geoim
     
     def get_vx_geoim(self):
@@ -161,7 +161,6 @@ status : {self.pa_status}
 
     def get_vmagn_geoim(self):
         return self.get_magn_geoim() / abs(self.pa_left.th_year - self.pa_right.th_year)
-
 
     ### Creation of the displacement fields
 
@@ -193,7 +192,7 @@ status : {self.pa_status}
         self.pa_status='clipped'
         return True
 
-    def corr(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10):
+    def corr(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10, corr_tile_size=2048):
         
         # Check clip
         self.clip()
@@ -215,7 +214,7 @@ status : {self.pa_status}
             --stereo-algorithm {corr_algorithm} \
             --corr-kernel {corr_kernel_size} {corr_kernel_size} \
             --xcorr-threshold {corr_xthreshold} \
-            --corr-tile-size 2048 \
+            --corr-tile-size {corr_tile_size} \
             --corr-memory-limit-mb 8000 \
             --save-left-right-disparity-difference\
             --ip-per-tile 200 \
@@ -301,7 +300,7 @@ status : {self.pa_status}
             return self.get_magn_geoim()
 
         # Open the stack with horizontal and vertical displacements
-        xDisp, yDisp = rt.Open(str(self.pa_dispf_path), nBands=[1,2], load_data=True).splitBands()
+        xDisp, yDisp = rt.Open(str(self.pa_dispf_path), nBands=[1,2], load_pixels=True).splitBands()
 
         # We switch values using negative values because ASP gives displacements 
         # in pixel coordinates using as reference upper-left corner
@@ -332,7 +331,7 @@ status : {self.pa_status}
             initial_dx = self.get_dispX_geoim()
             initial_dy = self.get_dispY_geoim()
         else:
-            disp = rt.Open(self.pa_dispf_path, geoExtent=crop, featureNum=cropFeatureNum, load_data=True, nBands=[1,2])
+            disp = rt.Open(self.pa_dispf_path, geoExtent=crop, featureNum=cropFeatureNum, load_pixels=True, nBands=[1,2])
             initial_dx, initial_dy = disp.splitBands()
 
         initial_pixel_size_x, initial_pixel_size_y = initial_dx.getPixelSize()

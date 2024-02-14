@@ -8,7 +8,7 @@ from telenvi import raster_tools as rt
 
 import geomulticorr.pair as gmc_pair
 
-THUMBNAME_PATTERN = re.compile('^([a-z]|[A-Z]|-)+_[0-9]{4}(-[0-9]{2}){2}_.*.(tif|TIF)$')
+THUMBNAME_PATTERN = re.compile('^([a-z]|[A-Z]|-|[0-9])+_[0-9]{4}(-[0-9]{2}){2}_.*.(tif|TIF)$')
 
 class Thumb:
 

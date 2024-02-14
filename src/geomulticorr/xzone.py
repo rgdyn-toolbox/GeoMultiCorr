@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
-
+from tqdm import tqdm
 import geopandas as gpd
 from telenvi import raster_tools as rt
 
@@ -38,57 +38,64 @@ class Xzone:
     def get_pairs_complete(self):
         return [pair for pair in self.get_pairs() if pair.pa_status == 'complete']
     
-    def show(self, criterias=''):
+    def show(self, criterias='', epsg=2154):
         thumb = self.get_thumbs(criterias)[0].get_geoim()
         thumb = thumb.cropFromVector(self.geometry)
-        thumb.maskFromVector(self.geometry)
+        thumb.maskFromVector(self.geometry, epsg=epsg)
         thumb.show()
     
     def get_pairs_on_period_overview(self, ymin, ymax):
+        print("""
+        ne fonctionne pas ! a recoder en utilisant np.intersects() !
+        """)
         pairs = self.get_pairs_overview()
         pairs['chrono_min'] = pairs.apply(lambda row: min(int(row.pa_left_date.split('-')[0]), int(row.pa_right_date.split('-')[0])), axis=1)
         pairs['chrono_max'] = pairs.apply(lambda row: max(int(row.pa_left_date.split('-')[0]), int(row.pa_right_date.split('-')[0])), axis=1)
-        pairs = pairs[(pairs.chrono_min>=ymin)&(pairs.chrono_max>=ymax)]
+        pairs = pairs[(pairs.chrono_min>=ymin)&(pairs.chrono_max<=ymax)]
         return pairs
-    
-    def get_mean_disp_on_pair(self, magn_path, epsg):
+        
+    def get_mean_disp_on_pair(self, magn_path, epsg=2154):
         target = gpd.GeoDataFrame([{'geometry':self.geometry}]).set_crs(epsg=epsg)
         data = rt.Open(magn_path, geoExtent=target, load_data=True)
-        data.maskFromVector(target)
+        data.maskFromVector(target, epsg=epsg)
         return data.mean()
 
     def get_disp_overview(self):
         disps = []
         pairs = self.get_pairs_complete()
-        for p in pairs :
+        for p in tqdm(pairs) :
             row = pd.Series(dtype='object')
-            row['L'] = p.pa_left.th_year
-            row['R'] = p.pa_right.th_year
-            row['D'] = self.get_mean_disp_on_pair(p.pa_magn_path)
-            row['V'] = row.D/abs(row.L-row.R)        
+            row['l'] = int(p.pa_left.th_year)
+            row['r'] = int(p.pa_right.th_year)
+            row['d'] = self.get_mean_disp_on_pair(p.pa_magn_path)
+            row['s'] = row.d / (row.r-row.l)        
+            row['abs_s'] = abs(row.d)
             disps.append(row)
         return pd.DataFrame(disps)
     
-    def show_mean_velocities(self, savepath=None, bounds=None):
-        fig, ax = plt.subplots(figsize=(10,6.5))
-        disps = self.get_disp_overview()
+    def show_mean_velocities(self, disps=None, savepath=None, bounds=None, col_regular='blue', col_reverse='orange'):
+        fig, ax = plt.subplots(figsize=(15,6.5))
+        if type(disps) != pd.DataFrame:
+            disps = self.get_disp_overview()
         
         for pair in disps.iloc:
-            ya = pair.L
-            yb = pair.R
+            ya = pair.l
+            yb = pair.r
             if ya > yb:
-                color = 'black'
+                color = col_regular
             else:
-                color = 'red'
-            meters = pair.V
+                color = col_reverse
+            meters = pair.s
             ax.plot([int(ya), int(yb)],[meters, meters], linewidth=1, color=color, alpha=0.7)
             ax.plot([int(ya), int(yb)],[meters, meters], 'bo', color=color, alpha=0.7)
 
         if bounds != None:
             ax.set_ybound(lower=bounds[0], upper=bounds[1])
 
-        ax.set_xticks(np.arange(2001,2023,2))
-        ax.set_title(f"Vitesses annuelles moyennes consolidées sur {self.xz_key}")
+        # ax.set_xticks(np.arange(2001,2023,2))
+        ax.set_title(f"Vitesses annuelles moyennes redondantes sur {self.xz_key}")
+        ax.grid(True, axis='x')
+        ax.set_xticks(np.unique([year for year in disps.l]))
         if savepath != None:
             fig.savefig(savepath)
 
