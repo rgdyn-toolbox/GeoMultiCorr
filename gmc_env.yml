@@ -1,0 +1,25 @@
+name: gmc_env
+channels:
+  - nasa-ames-stereo-pipeline
+  - usgs-astrogeology
+  - conda-forge
+dependencies:
+  - python>=3.11
+  - stereo-pipeline=3.5.*
+  - geopandas
+  - geoutils=0.1.*
+  - xdem
+  - matplotlib
+  - pyproj
+  - rasterio>=1.3
+  - numpy
+  - scipy
+  - tqdm
+  - xarray
+  - rioxarray
+  - gdal
+  - geocube
+  - scikit-image
+  - scikit-gstat
+  - pytransform3d
+  - pillow
