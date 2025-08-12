@@ -26,3 +26,8 @@ dependencies:
   - pandas
   - pyogrio
   - shapely
+  - geemap
+  - earthengine-api
+  - pip:
+      - geemap
+      - earthengine-api
