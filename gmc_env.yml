@@ -28,6 +28,8 @@ dependencies:
   - shapely
   - geemap
   - earthengine-api
+  - geodatasets
+  - contextily
   - pip:
       - geemap
       - earthengine-api
