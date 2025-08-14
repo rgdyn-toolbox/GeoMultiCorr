@@ -1,47 +1,20 @@
-"""gee_image_search_download
-=================================
+#!/usr/bin/env python
+# coding=utf-8
+# ----------------------------------------------------------------------------- #
+# GeoMultiCorr (GMC) project
+# Copyright (C) GeoMultiCorr developer team, 2024.
+# gee_image_search_download.py
+# creation date: 2025-08-14.
+#
+# Author(s) metadata
+# -> author: Diego CUSICANQUI
+#   -> affiliation: CNES | ISTerre | Univ. Grenoble Alpes
+#   -> email(s): diego.cusicanqui@univ-grenoble-alpes.fr | diego.cusicanqui.vg@gmail.com
+# -> author: Juan Cruz GHILARDI
+#   -> affiliation: IANIGLA-Mendoza | Univ. Nacional de Cuyo
+#   -> email(s): jcghilardi@mendoza-conicet.gob.ar
+# ----------------------------------------------------------------------------- #
 
-High‑level, explicit helpers for:
-
-1. Authenticating with / initializing the Google Earth Engine (GEE) Python API.
-2. Searching multiple optical image collections (Surface Reflectance & TOA & Sentinel‑2) for
-    images intersecting a user supplied Area of Interest (AOI) with filters on year, month,
-    and cloud cover.
-3. Computing a compact, analysis‑ready :class:`geopandas.GeoDataFrame` containing per‑image
-    metadata plus footprint geometries suitable for plotting.
-4. Bulk downloading the selected images with optional band & scale overrides, throttling,
-    retries and progress indication.
-
-Key derived metrics stored client‑side
--------------------------------------
-* ``footprint_area_m2`` / ``footprint_area_km2`` – image footprint area.
-* ``overlap_ratio`` – intersection_area / footprint_area (0–1) – how much of the footprint is over the AOI.
-* ``aoi_coverage_percent`` – (intersection_area / AOI_area) * 100 – how much of the AOI is covered by the image.
-
-Design principles
------------------
-* No hidden globals – everything flows through small objects.
-* AOI accepted in several common forms (``GeoDataFrame`` / Shapely geometry / GeoJSON‑like mapping / ``ee.Geometry``).
-* All spatial area computations happen server‑side in GEE for robustness / consistency.
-* Returned GeoDataFrame geometry is always the **image footprint** (not the intersection) to keep plotting intuitive.
-* Safe, explicit downloads with retry + backoff + optional progress bar (``tqdm``).
-
-Quick example
--------------
->>> from gee_image_search_download import GEEClient, ImageCollectionCatalog, ImageFinder
->>> client = GEEClient(project=None).connect()
->>> catalog = ImageCollectionCatalog.default()
->>> finder = ImageFinder(client, catalog, aoi=my_aoi_gdf, year_range=(2019, 2021), month_range=(6, 9), cloud_max=20)
->>> images = finder.search_metadata()
->>> images.head()
->>> finder.bulk_download(images, output_dir="./downloads", region_mode="aoi", max_images=3)
-
-References
-----------
-[1] Gorelick et al. (2017) Google Earth Engine. *PNAS*. https://doi.org/10.1073/pnas.1703516114
-[2] Jordahl et al. (2020) GeoPandas. *JOSS*. https://doi.org/10.21105/joss.02026
-[3] Wu (2020) geemap. *JOSS*. https://doi.org/10.21105/joss.02192
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
