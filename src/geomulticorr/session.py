@@ -77,7 +77,7 @@ SENSOR_CATALOG = [
     # DEM
     {"patterns": [r"dem", r"hillshade"], "sensor": "DEM", "family": "DEM", "vendor": "Various"},
 ]
-
+# * Works properly
 def print_infoBM(text: str,
                 bold: bool = False) -> None:
     """Prints a formatted message to the console.
@@ -248,26 +248,38 @@ def sensors(sensors_names: Optional[Iterable[str]] = None) -> str:
 
     # (?i) turns on case-insensitive matching, so no need to duplicate upper/lower
     return "(?i)(?:" + "|".join(tokens) + ")"
-
+# * Works properly
 def open_gmc_session(target_directory_path: str | Path,
-                     epsg: str | int | None = None) -> "Session":
-    """Create a new GMC session.
+                     epsg_code: str | int | None = None,
+                     empty_geodatabase: str | Path = None) -> "Session":
+    """
+    Open or create a GeoMultiCorr (GMC) session at the specified directory.
+
+    If the directory does not exist, it will be created and initialized with the GMC project structure.
+    If the directory exists and is empty, it will be initialized as a new GMC project.
+    If the directory exists and matches the GMC project structure, it will be opened as a session.
+    If the directory exists but does not match the GMC structure, an error is raised.
 
     Args:
-        location (str | Path): Path to the directory where the project data will be stored.
-        epsg (str | int): EPSG code of the project. If the EPSG code is not provided, it defaults to 4326.
+        target_directory_path (str | Path): Path to the GMC project directory.
+        epsg_code (str | int | None, optional): EPSG code for the project CRS. Defaults to 4326 if not provided.
+        empty_geodatabase (str | Path, optional): Path to an empty geodatabase template to use. If None, the default template is used.
 
     Returns:
-        Session: Returns a Session object.
+        Session: An initialized Session object for the GMC project.
+
+    Raises:
+        FileNotFoundError: If the parent directory does not exist.
+        ValueError: If the directory exists but does not conform to the GMC project structure.
     """
-    if epsg is None:
-        epsg = 4326
+    if epsg_code is None:
+        epsg_code = 4326
     #END if
 
     if not isinstance(target_directory_path, Path):
         target_directory_path = Path(target_directory_path)
     #END if
-    return Session(target_directory_path, epsg)
+    return Session(target_directory_path, epsg_code, empty_geodatabase)
 
 def _gdal_info_json(path: Path) -> dict:
     """Open with GDAL and return the JSON info dict; {} on failure."""
@@ -417,13 +429,13 @@ class Session:
     # * It works properly
     def __init__(self,
                  target_root_path: str | Path,
-                 empty_geodatabase: str | Path = None,
-                 epsg: str | int | None = None):
+                 epsg_code: str | int | None = None,
+                 empty_geodatabase: str | Path = None):
         """Initialize a new Session.
 
         Args:
             target_root_path (str | Path): The root path for the target data.
-            epsg (str | int | None, optional): The EPSG code for the target data. Defaults to None.
+            epsg_code (str | int | None, optional): The EPSG code for the target data. Defaults to None.
 
         Raises:
             FileNotFoundError: If the target root path does not exist.
@@ -434,8 +446,8 @@ class Session:
         target_root_path = Path(target_root_path).resolve()
 
         # If EPSG code is not provided, EPSG:4326 is set by default.
-        if epsg is None:
-            epsg = 4326
+        if epsg_code is None:
+            epsg_code = 4326
 
         # Check the address validity
         if not target_root_path.parent.exists():
@@ -525,15 +537,15 @@ class Session:
         self.path_geodb = target_root_path / f"GMC_geodatabase_{self.project_name}.gpkg"
         # os.path.join(target_root_path, f"geodatabase_{self.project_name}.gpkg")
         self.path_qgis_project = target_root_path / f"GMC_mapset_{self.project_name}.qgz"
-        self.epsg = epsg
+        self.epsg = epsg_code
 
         # There is underscore before the attribute name because user have to access to this data from the getters to ensure that the data is up to date
-        self._pzones = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Pzones").to_crs(epsg=epsg)
-        self._thumbs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Thumbs").to_crs(epsg=epsg)
-        self._geomorphs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Geomorphs").to_crs(epsg=epsg)
-        self._pairs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Pairs").to_crs(epsg=epsg)
-        self._xzones = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Xzones").to_crs(epsg=epsg)
-        self._spines = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Spines").to_crs(epsg=epsg)
+        self._pzones = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Pzones").to_crs(epsg=epsg_code)
+        self._thumbs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Thumbs").to_crs(epsg=epsg_code)
+        self._geomorphs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Geomorphs").to_crs(epsg=epsg_code)
+        self._pairs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Pairs").to_crs(epsg=epsg_code)
+        self._xzones = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Xzones").to_crs(epsg=epsg_code)
+        self._spines = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Spines").to_crs(epsg=epsg_code)
 
         # List the processing zones names
         self.pz_names = list(self._pzones.pz_name.unique())
@@ -614,7 +626,7 @@ class Session:
         # * Works properly
         # TODO: Implement unittests.
         """
-        return self._search_engine_b("Thumbs", criterias)
+        return self._search_engine("Thumbs", criterias)
     
     #! ask Thibaut for homogenesation.
     def get_thumbs(self, criterias: str | list[str] = "") -> list[gmc_thumb.Thumb]: 
@@ -643,7 +655,7 @@ class Session:
         # * Works properly
         # TODO: Implement unittests.
         """
-        return self._search_engine_b("Pairs", criterias)
+        return self._search_engine("Pairs", criterias)
     # * Works properly
     def get_pairs(self, criterias: str | list[str] = "") -> list[gmc_pair.Pair]:
         """Get pairs informations
@@ -675,7 +687,7 @@ class Session:
         # * Works properly
         # TODO: Implement unittests.
         """
-        return self._search_engine_b("Pzones", pz_name)
+        return self._search_engine("Pzones", pz_name)
 
     def get_pzones(self, pz_name: str = "") -> list[gmc_pzone.Pzone]:
         """Get pzones informations
@@ -1217,11 +1229,11 @@ class Session:
                             pzone_vector: gu.Vector | gpd.GeoDataFrame | gpd.GeoSeries | gu.Raster | None,
                             mosaic_path: Path | str | None,
                             raster_resolution: int | float | str,
-                            resampling_method: str | list[str],
-                            selected_band: int | list[int],
-                            crop_mode: str | list[str] | None,
-                            n_threads: int,
-                            memory_limit: int
+                            resampling_method: str | list[str] = 'nearest',
+                            selected_band: int | list[int] = [1],
+                            crop_mode: str | list[str] | None = 'match_pixel',
+                            n_threads: int = 4,
+                            memory_limit: int = 1024
                         ) -> gu.Raster:
         """Process a single mosaic using geoutils
 
@@ -1245,14 +1257,18 @@ class Session:
         mosaic = gu.Raster(mosaic_path, bands=selected_band)
         mosaic.set_nodata(0)
         if (mosaic.crs.to_epsg() == self.epsg) and (mosaic.res[0] == raster_resolution):
+            print("Direct crop without reprojection or resampling")
             m_crop = mosaic.crop(pzone_vector, mode=crop_mode)
         elif (mosaic.crs.to_epsg() != self.epsg) and (mosaic.res[0] == raster_resolution):
+            print("Reprojecting mosaic to match session CRS")
             m_proj = mosaic.reproject(crs=f"EPSG:{self.epsg}", resampling=resampling_method, n_threads=n_threads, memory_limit=memory_limit)
             m_crop = m_proj.crop(pzone_vector, mode=crop_mode)
         elif (mosaic.crs.to_epsg() == self.epsg) and (mosaic.res[0] != raster_resolution):
+            print("Resampling mosaic to match desired resolution")
             m_proj = mosaic.reproject(res=raster_resolution, resampling=resampling_method, n_threads=n_threads, memory_limit=memory_limit)
             m_crop = m_proj.crop(pzone_vector, mode=crop_mode)
         else:
+            print("Reprojecting and resampling mosaic to match session CRS and desired resolution")
             m_proj = mosaic.reproject(res=raster_resolution, crs=f"EPSG:{self.epsg}", resampling=resampling_method, n_threads=n_threads, memory_limit=memory_limit)
             m_crop = m_proj.crop(pzone_vector, mode=crop_mode)
         del mosaic
@@ -1311,6 +1327,7 @@ class Session:
 
         # For each processing zone
         for pz in self.get_pzones_overview().iloc:
+        # for pz in georasters_map.iloc:
             print_infoBM(f"Creating data for Pzone: {pz['pz_name']}", bold=True)
             print_infoBM(f"Geometry extent: {pz['geometry']}")
             print_infoBM(f"Raster resolution: {raster_resolution}")
@@ -1346,11 +1363,11 @@ class Session:
 
                 # Define output filename and full path (ex: raster-data_vanoise/sachette/opticals/sachette_2021-03-08_AERIAL.tif)
                 if image_type == "opt":
-                    thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}_{raster_resolution}m.tif"
+                    thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}.tif"
                     thumb_path = str(Path(pz_opticals, thumb_name))
 
                 elif image_type == "dem":
-                    thumb_name = f"{pz['pz_name']}_{raster_resolution}m_dem.tif"
+                    thumb_name = f"{pz['pz_name']}_dem.tif"
                     thumb_path = str(Path(pz_rasterdata, thumb_name))
 
                 if Path(thumb_path).exists():
