@@ -30,6 +30,7 @@ dependencies:
   - earthengine-api
   - geodatasets
   - contextily
+  - alive-progress
   - pip:
       - geemap
       - earthengine-api
