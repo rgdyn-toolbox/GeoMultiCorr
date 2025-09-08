@@ -1,10 +1,12 @@
 # GeoMultiCorr
 A framework for study earth-surface displacements from optical images.
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079420.svg)](https://doi.org/10.5281/zenodo.17079420)
+
 # Contents
 1. [GeoMultiCorr philosophy](#geomulticorr-philosophy)
-2. [Developers team](#developers-team)
-3. [Requirements][#requirements]
+2. [Developers team](#geomulticorr-developer-team)
+3. [Requirements](#requirements)
 4. [How to use](#how-to-use)
 5. [Installation](#installation)
 6. [Contact and citation](#contact-and-citation)
@@ -149,4 +151,11 @@ Use `source ~/.bashrc` to reload changes.
 
 Documentation is under development. Please be patient . . .
 
-# Contact and citation
+# Contact and citation ![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079420.svg)
+For any question/bug/issue regarding this tool, please report it on issues section or contact the developer team:
+- [diego.cusicanqui@univ-grenoble-alpes.fr](mailto:diego.cusicanqui@univ-grenoble-alpes.fr).
+- [thibaut.duvanel@unil.ch](mailto:thibaut.duvanel@unil.ch)
+
+> [!IMPORTANT]   
+> If you use this tool, please cite using the following [DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079420.svg). This will allow some recognition of the time invested and open access to this tool.
+![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079420.svg)
