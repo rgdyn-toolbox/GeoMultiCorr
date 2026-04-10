@@ -3,9 +3,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "geomulticorr"
-version = "0.2.3"
+name = "GeoMultiCorr"
+version = "0.0.0"
 authors = [
+  { name="Diego Cusicanqui", email="diego.cusicanqui@univ-grenoble-alpes.fr"},
   { name="Thibaut Duvanel", email="thibaut.duvanel@unil.ch" },
 ]
 description = "A python lib to study earth-surface displacements from optical images with Ames Stereo Pipeline"
@@ -14,5 +15,6 @@ requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
 ]
