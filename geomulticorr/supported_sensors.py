@@ -322,7 +322,7 @@ def sensor_normalize(text: Optional[str]) -> dict:
     m = re.search(r"\b(?:landsat\s*(4|5|7|8|9)|l(4|5|7|8|9)|lc0?(4|5|7|8|9)|le0?(4|5|7|8|9)|lt0?(4|5|7|8|9))\b", t)
     if m:
         num = next(g for g in m.groups() if g)
-        return out(f"landsat-{num}", platform=f"landsat-{num}", family="landsat")
+        return out(f"landsat{num}", platform=f"landsat{num}", family="landsat")
 
     # --- SPOT (4/5/6/7)
     # m = re.search(r"\bspot\s*(4|5|6|7)\b", t)
@@ -330,7 +330,7 @@ def sensor_normalize(text: Optional[str]) -> dict:
     if m:
         # num = m.group(1)
         num = next(g for g in m.groups() if g)
-        return out(f"spot-{num}", platform=f"spot-{num}", family="spot")
+        return out(f"spot{num}", platform=f"spot{num}", family="spot")
 
     # --- Pléiades 1A/1B
     m = re.search(r"\b(pl[eé]iades)\s*(1a|1b)\b|\bple\b|\bpl1[ab]\b|\bphr[1-2]a\b|\bphr[1-2]b\b", t)
@@ -342,8 +342,8 @@ def sensor_normalize(text: Optional[str]) -> dict:
     m = re.search(r"\b(pl[eé]iades[-\s]?neo|pneo)\s*(\d+)?\b", t)
     if m:
         var = m.group(2)
-        plat = f"pleiades-neo-{var}" if var else None
-        return out("pleiades-neo", platform=plat, family="pleiades")
+        plat = f"pleiadesneo{var}" if var else None
+        return out("pleiadesneo", platform=plat, family="pleiades")
 
     # --- PlanetScope (PS2, PS2.SD / SuperDove, PSScene)
     m = re.search(r"\b(superdove|ps2\.?sd|psscene|planetscope|ps2|psb|planet)\b", t)
@@ -363,17 +363,17 @@ def sensor_normalize(text: Optional[str]) -> dict:
     m = re.search(r"\b(?:worldview[-\s]?(1|2|3|4)|wv(1|2|3|4))\b", t)
     if m:
         num = next(g for g in m.groups() if g)
-        return out(f"worldview-{num}", platform=f"worldview-{num}", family="worldview")
+        return out(f"worldview{num}", platform=f"worldview{num}", family="worldview")
 
     # --- GeoEye-1
     m = re.search(r"\bgeoeye[-\s]?1\b|\bge1\b", t)
     if m:
-        return out("geoeye-1", platform="geoeye-1", family="geoeye")
+        return out("geoeye1", platform="geoeye1", family="geoeye")
 
     # --- QuickBird
     m = re.search(r"\bquickbird\b|\bqb[12]?\b", t)
     if m:
-        return out("quickbird", platform="quickbird-2", family="quickbird")
+        return out("quickbird", platform="quickbird", family="quickbird")
 
     # --- IKONOS
     m = re.search(r"\bikonos\b", t)
