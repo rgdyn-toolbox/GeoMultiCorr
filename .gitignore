@@ -10,6 +10,9 @@ temp/
 # Temporary data
 data/
 
+# Temporary LOG files
+devs_logs/
+
 # VS code setting
 .vscode/
 !.vscode/settings.json
