@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "GeoMultiCorr"
-version = "0.0.0"
+version = ["version"] 
 authors = [
   { name="Diego Cusicanqui", email="diego.cusicanqui@univ-grenoble-alpes.fr"},
   { name="Thibaut Duvanel", email="thibaut.duvanel@unil.ch" },
