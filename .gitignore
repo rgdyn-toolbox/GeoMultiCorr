@@ -1,5 +1,20 @@
-.pytest_cache/
-.vscode/
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary folders
 dist/
-src/geomulticorr/temp/
-src/geomulticorr/__pycache__/
+temp/
+
+# Temporary data
+data/
+
+# VS code setting
+.vscode/
+!.vscode/settings.json
+!.vscode/launch.json
+
+# Claude files
+.claude/
+CLAUDE.md
