@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-version = "0.1.0"
+__version__ = "0.1.0"
 
 print(f"geomulticorr {__version__}")
 
