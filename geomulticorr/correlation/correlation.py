@@ -231,7 +231,7 @@ class ASP:
         p = Path(out_prefix)
         left  = str(p.parent / f"{p.name}-L.tif")
         right = str(p.parent / f"{p.name}-R.tif")
-        disp  = str(p.parent / f"{p.name}-RD.tif")
+        disp  = str(p.parent / f"{p.name}-F.tif")
 
         return [
             str(correval_bin),
@@ -371,9 +371,9 @@ class ASP:
             print(f"Pair '{pair.pa_key}' is already complete. Skipping.")
             return 0
 
-        left = pair.pa_inputs_path / f"{pair.pa_left.th_key}_clipped.tif"
-        right = pair.pa_inputs_path / f"{pair.pa_right.th_key}_clipped.tif"
-        out_prefix = pair.pa_asp_path / pair.pa_key
+        left = pair.pa_left_link_path
+        right = pair.pa_right_link_path
+        out_prefix = pair.pa_path / pair.pa_key
         params_file = pair.pa_path / "corr_params.txt"
 
         self.build_correlation_params(
@@ -422,6 +422,10 @@ class ASP:
         threads_singleprocess: int = 8,
         corr_memory_limit_mb: int = 8000,
         corr_tile_size: int = 2048,
+        correval: bool = True,
+        corr_algorithm: str = "asp_bm",
+        corr_kernel: tuple[int, int] = (21, 21),
+        metric: str = "ncc",
     ) -> Path:
         """Write a bash script to run ``parallel_stereo`` for *pair*.
 
@@ -451,9 +455,9 @@ class ASP:
                 f"cluster must be one of {_CLUSTER_CHOICES}, got {cluster!r}"
             )
 
-        left = pair.pa_inputs_path / f"{pair.pa_left.th_key}_clipped.tif"
-        right = pair.pa_inputs_path / f"{pair.pa_right.th_key}_clipped.tif"
-        out_prefix = pair.pa_asp_path / pair.pa_key
+        left = pair.pa_left_link_path
+        right = pair.pa_right_link_path
+        out_prefix = pair.pa_path / pair.pa_key
 
         if corr_params_file is None:
             corr_params_file = pair.pa_path / f"{pair.pa_key}_CorrParameters.txt"
@@ -508,6 +512,21 @@ class ASP:
 
         lines.append(f"{cmd_str}\n")
 
+        if correval:
+            if cluster in (None, "local"):
+                correval_bin = self.find_asp_executable("corr_eval")
+            else:
+                correval_bin = "corr_eval"
+            ce_parts = self._build_correval_cmd(
+                out_prefix=out_prefix,
+                corr_algorithm=corr_algorithm,
+                corr_kernel=corr_kernel,
+                metric=metric,
+                correval_bin=correval_bin,
+            )
+            ce_str = " \\\n    ".join(ce_parts)
+            lines.append(f"\n{ce_str}\n")
+
         bash_path = pair.pa_path / f"{pair.pa_key}_CorrelationJob.sh"
         bash_path.parent.mkdir(parents=True, exist_ok=True)
         bash_path.write_text("".join(lines))
@@ -541,14 +560,14 @@ class ASP:
         Returns:
             List of deleted (or would-be-deleted) paths.
         """
-        asp_dir = pair.pa_asp_path
+        asp_dir = pair.pa_path
         if not asp_dir.exists():
-            print(f"ASP output directory does not exist: {asp_dir}")
+            print(f"Pair directory does not exist: {asp_dir}")
             return []
 
         removed: list[Path] = []
         for f in sorted(asp_dir.iterdir()):
-            if not f.is_file():
+            if not f.is_file() or f.is_symlink():
                 continue
             if any(f.name.endswith(suffix) for suffix in self._KEEP_SUFFIXES):
                 continue
