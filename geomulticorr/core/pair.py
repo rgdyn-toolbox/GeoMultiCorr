@@ -1,3 +1,32 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# ---------------------------------------------------------------------------- #
+# Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
+# 
+# This file is part of the GeoMultiCorr (GMC) project.
+# https://github.com/rgdyn-toolbox/GeoMultiCorr
+# 
+# pair.py
+# creation date: 2026-05-12.
+# 
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# You may obtain a copy of the License at
+# 
+# https://www.gnu.org/licenses/agpl-3.0.txt
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+# 
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+# ---------------------------------------------------------------------------- #
+
 import os
 import shutil
 from pathlib import Path
@@ -10,10 +39,13 @@ import pandas as pd
 import geopandas as gpd
 from sklearn import cluster
 
+import geoutils as gu
+import matplotlib.pyplot as plt
 from telenvi import raster_tools as rt
 
 import geomulticorr.core.thumb as gmc_thumb
 from geomulticorr.correlation.correlation import ASP
+from geomulticorr._logging import logger
 
 # ASP cannot write his outputs everywhere
 # In the temp (for temporary) directory, we know it will be ok
@@ -91,26 +123,25 @@ class Pair:
         # Base path
         self.pa_path = Path(Path(left.th_path).parent.parent, 'image_correlation',f"{self.pa_key}").absolute()
 
-        # Path for the clip outputs and correlation inputs
-        self.pa_inputs_path = Path(self.pa_path, 'inputs').absolute()
+        # Symlink paths — point to the sieved thumb images (no clipping, no copy)
+        self.pa_left_link_path  = Path(self.pa_path, f"{self.pa_left.th_key}.tif")
+        self.pa_right_link_path = Path(self.pa_path, f"{self.pa_right.th_key}.tif")
 
-        # Correlation ASP outputs 
-        # self.pa_snr_path    = Path(self.pa_asp_path, f"{self.pa_key}_corr-eval-ncc.tif")
-        self.pa_asp_path    = Path(self.pa_path, 'asp_outputs')
-        self.pa_disparity_rd_path = Path(self.pa_asp_path, f"{self.pa_key}-RD.tif")
-        self.pa_disparity_f_path  = Path(self.pa_asp_path, f"{self.pa_key}-F.tif")
-        self.pa_snr_path    = Path(self.pa_asp_path, f"{self.pa_key}-ncc.tif")
+        # ASP correlation outputs (written directly into pa_path)
+        self.pa_raw_left_path     = Path(self.pa_path, f"{self.pa_key}-L.tif")
+        self.pa_raw_right_path    = Path(self.pa_path, f"{self.pa_key}-R.tif")
+        self.pa_disparity_rd_path = Path(self.pa_path, f"{self.pa_key}-RD.tif")
+        self.pa_disparity_f_path  = Path(self.pa_path, f"{self.pa_key}-F.tif")
+        self.pa_cc_raw_path       = Path(self.pa_path, f"{self.pa_key}-ncc.tif")
 
-        # Correlation Derivatives outputs
-        self.pa_ew_path    = Path(self.pa_path, f"{self.pa_key}_EW.tif")
-        self.pa_ns_path    = Path(self.pa_path, f"{self.pa_key}_NS.tif")
-        self.pa_cc_path    = Path(self.pa_path, f"{self.pa_key}_CC.tif")
-        self.pa_magn_path   = Path(self.pa_asp_path,  f"{self.pa_key}_magn.tif")
-        self.pa_vect_path   = Path(self.pa_asp_path,  f"{self.pa_key}_vect.gpkg")
-        self.pa_stats_path  = Path(self.pa_path,      f"{self.pa_key}.json")
-
-        # self.pa_magn_path   = Path(self.pa_path, f"{self.pa_key}_magn.tif")
-        # self.pa_vect_path   = Path(self.pa_path, f"{self.pa_key}_vect.gpkg")
+        # Derived outputs
+        self.pa_ew_path       = Path(self.pa_path, f"{self.pa_key}-F_EW.tif")
+        self.pa_ns_path       = Path(self.pa_path, f"{self.pa_key}-F_NS.tif")
+        self.pa_cc_path       = Path(self.pa_path, f"{self.pa_key}-F_CC.tif")
+        self.pa_plot_raw_path = Path(self.pa_path, f"{self.pa_key}_raw_disp.jpg")
+        self.pa_magn_path     = Path(self.pa_path, f"{self.pa_key}_magn.tif")
+        self.pa_vect_path     = Path(self.pa_path, f"{self.pa_key}_vect.gpkg")
+        self.pa_stats_path    = Path(self.pa_path, f"{self.pa_key}.json")
 
         # Current state of the pair
         self.pa_status = self.get_status()
@@ -134,13 +165,24 @@ status    : {self.pa_status}
         if self.pa_path.exists():
             if self.pa_disparity_f_path.exists():
                 pa_status = 'complete'
-            elif self.pa_inputs_path.exists():
+            elif self.pa_left_link_path.exists() and self.pa_right_link_path.exists():
                 pa_status = 'clipped'
             else:
                 pa_status = 'corrupt'
-        else :
+        else:
             pa_status = 'empty'
         return pa_status
+
+    def check_corr_outputs(self) -> dict[str, bool]:
+        """Check which ASP output files exist for this pair.
+
+        Returns:
+            Dict mapping each expected suffix to True (exists) or False (missing).
+        """
+        return {
+            suffix: (self.pa_path / f"{self.pa_key}{suffix}").exists()
+            for suffix in ASP._KEEP_SUFFIXES
+        }
 
     def to_pdserie(self):
         return pd.Series({
@@ -160,7 +202,7 @@ status    : {self.pa_status}
             'pa_status':              self.pa_status,
             'pa_ew_path':             str(self.pa_ew_path),
             'pa_ns_path':             str(self.pa_ns_path),
-            'pa_cc_path':             str(self.pa_snr_path),
+            'pa_cc_path':             str(self.pa_cc_raw_path),
             'geometry':               self.geometry})
 
     def get_magn_geoim(self):
@@ -174,7 +216,7 @@ status    : {self.pa_status}
         try:
             return self.pa_snr_geoim
         except AttributeError:
-            self.pa_snr_geoim = rt.Open(str(self.pa_snr_path), load_pixels=True)
+            self.pa_snr_geoim = rt.Open(str(self.pa_cc_raw_path), load_pixels=True)
             return self.pa_snr_geoim
 
     def get_disp_corr_geoim(self):
@@ -206,32 +248,18 @@ status    : {self.pa_status}
 
     ### Creation of the displacement fields
 
-    def clip(self, numBand = 1):
+    def clip(self, numBand=1):
         if self.pa_status in ['complete', 'clipped']:
             return True
-        cleft = rt.Open(
-            target = self.pa_left.get_ds(),
-            clip   = self.pa_right.get_ds(),
-            nBands = numBand)
 
-        cright = rt.Open(
-            target = self.pa_right.get_ds(),
-            clip   = self.pa_left.get_ds(),
-            nBands = numBand)
+        self.pa_path.mkdir(parents=True, exist_ok=True)
 
-        if not self.pa_path.exists():
-            try:
-                self.pa_path.mkdir()
-            except FileNotFoundError:
-                self.pa_path.parent.mkdir()
-                self.pa_path.mkdir()
+        if not self.pa_left_link_path.exists():
+            self.pa_left_link_path.symlink_to(Path(self.pa_left.th_path).resolve())
+        if not self.pa_right_link_path.exists():
+            self.pa_right_link_path.symlink_to(Path(self.pa_right.th_path).resolve())
 
-        if not self.pa_inputs_path.exists():
-            self.pa_inputs_path.mkdir()
-
-        rt.write(cleft,  os.path.join(self.pa_inputs_path, self.pa_left.th_key  + '_clipped.tif'))
-        rt.write(cright, os.path.join(self.pa_inputs_path, self.pa_right.th_key + '_clipped.tif'))
-        self.pa_status='clipped'
+        self.pa_status = 'clipped'
         return True
     
     # def define_parameters(self):
@@ -303,18 +331,18 @@ status    : {self.pa_status}
         """
 
         # Check if the snr is already existing for this pair
-        if self.pa_snr_path.exists():
+        if self.pa_cc_raw_path.exists():
             return self.get_snr_geoim()
 
         # Get Left and Right normalized thumbs
-        left_p  = Path(self.pa_asp_path, f"{self.pa_key}-L.tif")
-        right_p = Path(self.pa_asp_path, f"{self.pa_key}-R.tif")
+        left_p  = self.pa_raw_left_path
+        right_p = self.pa_raw_right_path
 
         # Get Run-F path
         disp_p = self.pa_disparity_f_path
 
         # Build output suffix. Add by default "-ncc"
-        suffix = str(Path(self.pa_asp_path, f"{self.pa_key}"))
+        suffix = str(self.pa_path / self.pa_key)
 
         # Build command
         corr_eval_command = f"corr_eval {left_p} {right_p} {disp_p} {suffix}\
@@ -326,11 +354,11 @@ status    : {self.pa_status}
         os.system(corr_eval_command)
 
         # Rename corr_eval to fit with GMC structure
-        self.pa_cc_path =  self.pa_snr_path.rename(Path(self.pa_asp_path, f"{self.pa_key}_CC.tif"))
+        self.pa_cc_path = self.pa_cc_raw_path.rename(self.pa_path / f"{self.pa_key}_CC.tif")
 
         # Copy .qml file for set a default style in Qgis
         template_style = Path(Path(__file__).parent, 'resources', 'map_styles', 'corr-eval_style.qml')
-        target_style = str(self.pa_snr_path)[:-4]
+        target_style = str(self.pa_cc_raw_path)[:-4]
         cp_command = f"cp {template_style} {target_style}.qml"
         os.system(cp_command)
 
@@ -349,13 +377,13 @@ status    : {self.pa_status}
         departure = Path(ROOT_OUTPUTS, self.pa_key)
 
         # get the displacements folder path in the current session
-        destination = self.pa_asp_path
+        destination = self.pa_path
 
         # send the command to bring back the temporal data in the current session
         os.system(f"mv {departure} {destination} {verbose_mode[verbose]}")
 
         # If the transfer have worked, we delete the data in the temp dir
-        if self.pa_asp_path.exists():
+        if self.pa_path.exists():
             os.system(f"rm -rf {departure}")
             return True
 
@@ -393,6 +421,64 @@ status    : {self.pa_status}
         magn_in_meters.save(str(self.pa_magn_path))
 
         return magn_in_meters
+
+    def extract_raw_displacements(self, save_plot: bool = True) -> dict:
+        """Extract EW/NS displacements in metres from the raw ASP disparity raster.
+
+        Opens ``pa_disparity_f_path`` (3-band: xDisp, yDisp, GoodPixMap in pixels),
+        converts pixel values to metres, saves individual rasters, renames the NCC
+        raster to ``-CC.tif``, computes stats, and optionally saves a 9-panel
+        control figure.
+
+        Returns:
+            The full updated pair stats dict.
+        """
+        assert self.pa_disparity_f_path.exists(), \
+            f"Disparity raster not found: {self.pa_disparity_f_path}"
+
+        # 1. Split bands from -F.tif
+        r = gu.Raster(str(self.pa_disparity_f_path), nodata=0.0)
+        xDisp_px, yDisp_px, goodPixMap = r.split_bands(copy=True)
+
+        # 2. Convert pixels → metres; NS sign convention (ASP uses UL-corner reference)
+        res_x, res_y = r.res
+        xDisp_m = xDisp_px * res_x
+        yDisp_m = yDisp_px * res_y * -1.0
+
+        # 3. Save EW and NS rasters
+        xDisp_m.save(str(self.pa_ew_path))
+        yDisp_m.save(str(self.pa_ns_path))
+        logger.file(f"Saved EW displacement: {self.pa_ew_path.name}")
+        logger.file(f"Saved NS displacement: {self.pa_ns_path.name}")
+
+        # 4. Rename -ncc.tif → -CC.tif
+        if self.pa_cc_raw_path.exists() and not self.pa_cc_raw_path.exists():
+            self.pa_cc_raw_path.rename(self.pa_cc_raw_path)
+            logger.file(f"Renamed {self.pa_cc_raw_path.name} → {self.pa_cc_raw_path.name}")
+
+        # 5. Compute stats and persist to JSON under "raw_corr_stats"
+        import geomulticorr.stats.stats as gmc_stats
+        stats_dict = gmc_stats.save_raw_corr_stats(self)
+
+        # 6. Control plot
+        if save_plot:
+            from geomulticorr.utils.gmc_functions import plot_show_raw_results
+            left  = (gu.Raster(str(self.pa_raw_left_path))  if self.pa_raw_left_path.exists()
+                     else gu.Raster(str(self.pa_left.th_path)))
+            right = (gu.Raster(str(self.pa_raw_right_path)) if self.pa_raw_right_path.exists()
+                     else gu.Raster(str(self.pa_right.th_path)))
+            ncc   = gu.Raster(str(self.pa_cc_raw_path)) if self.pa_cc_raw_path.exists() else None
+            fig = plot_show_raw_results(
+                left=left, right=right,
+                xDisp=xDisp_m, yDisp=yDisp_m,
+                GoodPixMap=goodPixMap, ncc=ncc,
+                fig_name=self.pa_key,
+            )
+            fig.savefig(str(self.pa_plot_raw_path), dpi=150, format='JPEG', bbox_inches="tight")
+            plt.close(fig)
+            logger.save(f"Control plot saved: {self.pa_plot_raw_path.name}")
+
+        return stats_dict
 
     def vectorize(self, epsg, output_pixel_size=None, method='average', write=True, crop='', cropFeatureNum=0):
         """
