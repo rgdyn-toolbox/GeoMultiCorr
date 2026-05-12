@@ -173,7 +173,6 @@ def _as_nan_ndarray(arr) -> np.ndarray:
         return arr.filled(np.nan).astype(float).ravel()
     return np.asarray(arr, dtype=float).ravel()
 
-
 def compute_stats(arr: np.ndarray) -> dict:
     """Compute NMAD, median, mean, std on finite values of a 1-D float array."""
     finite = arr[np.isfinite(arr)]
@@ -186,7 +185,6 @@ def compute_stats(arr: np.ndarray) -> dict:
         'mean':   float(np.mean(finite)),
         'std':    float(np.std(finite)),
     }
-
 
 def _draw_histogram_on_ax(
     ax,
