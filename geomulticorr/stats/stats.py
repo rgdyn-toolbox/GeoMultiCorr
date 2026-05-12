@@ -217,7 +217,7 @@ def compute_pair_raw_stats(pair) -> dict:
     single_band_targets = {
         "ew":   pair.pa_ew_path,
         "ns":   pair.pa_ns_path,
-        "cc":   pair.pa_cc_path,
+        "cc":   pair.pa_cc_raw_path,
         "magn": pair.pa_magn_path,
     }
     raw_stats: dict = {}
