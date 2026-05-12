@@ -84,8 +84,38 @@ from geomulticorr._typing import (
     )
 
 file_location = pathlib.Path(__file__)
+package_root = file_location.parent.parent  # geomulticorr/core/ -> geomulticorr/
+resources_location = package_root / "resources"
 
-project_template_location = pathlib.Path(file_location.parent, "resources", "project_template")
+project_template_location = resources_location / "project_template"
+
+_DT_UNIT_TO_DAYS: dict[str, int] = {"D": 1, "W": 7, "M": 30, "Y": 365}
+
+def _parse_dt_days(value: int | str | None) -> int | None:
+    """Convert a duration string to integer days.
+
+    Accepts an integer (passed through unchanged), ``None``, or a string of the
+    form ``'<n><unit>'`` where unit is one of ``D`` (days), ``W`` (weeks),
+    ``M`` (months ≈ 30 d), ``Y`` (years ≈ 365 d).  Case-insensitive.
+
+    Examples::
+
+        _parse_dt_days(30)     -> 30
+        _parse_dt_days("30D")  -> 30
+        _parse_dt_days("6M")   -> 180
+        _parse_dt_days("1Y")   -> 365
+        _parse_dt_days("2W")   -> 14
+    """
+    if value is None or isinstance(value, int):
+        return value
+    match = re.fullmatch(r"(\d+)([DdWwMmYy])", str(value).strip())
+    if not match:
+        raise ValueError(
+            f"Cannot parse duration '{value}'. "
+            "Use an integer (days) or a string like '30D', '6M', '1Y', '2W'."
+        )
+    n, unit = int(match.group(1)), match.group(2).upper()
+    return n * _DT_UNIT_TO_DAYS[unit]
 
 def is_conform_to_gmc_template(target_root_path: str | pathlib.Path) -> bool:
     #! I dont know if this functions is useful. Check with Thibaut
@@ -206,7 +236,7 @@ class Session:
             if not any(target_root_path.iterdir()):
                 # Folder exists and is empty: create GMC structure
                 project_name = target_root_path.name
-                logger.info(f"New GMC project: '{project_name}'")
+                logger.launch(f"New GMC project: '{project_name}'")
                 logger.success(f"Creating new GMC structure in: {target_root_path}")
 
                 if empty_geodatabase:
@@ -289,7 +319,7 @@ class Session:
 
         # List the processing zones names
         self.pz_names = list(self._pzones.pz_name.unique())
-        logger.success(f"Session '{self.project_name}' initialized.")
+        logger.launch(f"Session '{self.project_name}' initialized.")
     #END def
     # * Works properly
     def find_qgis_binary(self,
@@ -412,7 +442,34 @@ class Session:
         selected_pairs = self.get_pairs_overview(criterias)
         # return [gmc_pair.Pair(self, target_path=x.pa_path) for x in selected_pairs]
         return [gmc_pair.Pair(self, target_path=row['pa_path']) for _, row in selected_pairs.iterrows()]
-    
+
+    def get_failed_pairs(self, criterias: str | list[str] = "") -> list[gmc_pair.Pair]:
+        """Return pairs where one or more ASP output files are missing.
+
+        Checks all files listed in ``ASP._KEEP_SUFFIXES`` inside each pair's
+        ``pa_path``. Logs the missing files for each failed pair.
+
+        Args:
+            criterias: Same filter syntax as :meth:`get_pairs`.
+
+        Returns:
+            List of ``Pair`` objects with at least one missing output file.
+        """
+        pairs = self.get_pairs(criterias)
+        failed = []
+        for pair in pairs:
+            outputs = pair.check_corr_outputs()
+            missing = [s for s, exists in outputs.items() if not exists]
+            if missing:
+                logger.warning(
+                    f"Pair '{pair.pa_key}' failed — missing: {', '.join(missing)}"
+                )
+                failed.append(pair)
+        logger.statistics(
+            f"{len(failed)} / {len(pairs)} pair(s) have incomplete correlation outputs"
+        )
+        return failed
+
     # * Works properly
     def get_pzones_overview(self, pz_name: str | list[str] = "") -> pd.DataFrame:
         """Get pzones overview informations
@@ -743,12 +800,27 @@ class Session:
         updated.to_file(self.path_geodb, layer="Pairs")
         self._pairs = updated
         return updated
-    
+
+    def _sync_pairs_status(self, pairs: list) -> None:
+        """Sync pa_status in the geodatabase for the given pairs from filesystem state.
+
+        Called internally after local correlation runs complete.
+        For cluster (oarsub) workflows, call this manually after jobs finish.
+        """
+        if not pairs:
+            return
+        for pair in pairs:
+            fresh_status = pair.get_status()
+            mask = self._pairs["pa_path"] == str(pair.pa_path)
+            self._pairs.loc[mask, "pa_status"] = fresh_status
+        self._pairs.to_file(self.path_geodb, layer="Pairs")
+        logger.save(f"Geodatabase updated: pa_status synced for {len(pairs)} pair(s).")
+
     def update_pairs_with_strategy(
         self,
         strategy: str = "consecutive",
         max_step: int | None = None,
-        max_dt_days: int | None = None,
+        max_dt_days: int | str | None = None,
     ) -> gpd.GeoDataFrame:
         """Build pairs for all pzones using the specified strategy and persist to geodatabase.
 
@@ -756,11 +828,15 @@ class Session:
             strategy: ``"consecutive"``, ``"step"``, or ``"redundancy"``.
             max_step: Maximum index offset between paired thumbs (required for
                 ``"step"`` and ``"redundancy"``).
-            max_dt_days: Optional upper bound on date gap in days.
+            max_dt_days: Optional upper bound on the date gap. Accepts an integer
+                number of days or a duration string: ``'30D'``, ``'6M'``, ``'1Y'``,
+                ``'2W'``. Months and years use fixed approximations (30 d/month,
+                365 d/year), which is appropriate given the 1-day image resolution.
 
         Returns:
             GeoDataFrame of all pairs written to the ``Pairs`` layer.
         """
+        max_dt_days = _parse_dt_days(max_dt_days)
         updated_frames = []
         for pz in self.get_pzones():
             logger.info(f"Updating pairs for PZone: '{pz.pz_name}'")
@@ -1662,7 +1738,7 @@ class Session:
         cores: int = 8,
         walltime: str = "12:00:00",
         besteffort: bool = False,
-        conda_env: str = "gmc_env",
+        conda_env: str = "gmc_env", # TO delete (deprecated, use cluster-specific envs instead)
         processes: int = 1,
         threads_multiprocess: int = 8,
         threads_singleprocess: int = 8,
@@ -1677,6 +1753,9 @@ class Session:
         prefilter_mode: int = 2,
         cost_mode: int = 2,
         save_disparity_difference: bool = True,
+        correval: bool = True,
+        metric: str = "ncc",
+        overwrite_scripts: bool = False,
     ) -> list[pathlib.Path]:
         """Prepare the output directory and bash script for each pair.
 
@@ -1718,8 +1797,8 @@ class Session:
         for pair in pairs:
             status = pair.get_status()
 
-            if status == "complete" and not overwrite:
-                logger.info(f"  Skipping '{pair.pa_key}' (already complete)")
+            if all(pair.check_corr_outputs().values()) and not overwrite:
+                logger.info(f"Skipping '{pair.pa_key}' (already complete)")
                 continue
 
             # 1. Create output directory
@@ -1727,10 +1806,17 @@ class Session:
 
             # 2. Clip inputs if not already done
             if status not in ("clipped", "complete"):
-                logger.info(f"  Clipping '{pair.pa_key}'")
+                logger.info(f"Clipping '{pair.pa_key}'")
                 pair.clip()
 
-            # 3. Write correlation parameters settings file
+            # 3. Reuse existing script if allowed
+            bash_path = pair.pa_path / f"{pair.pa_key}_CorrelationJob.sh"
+            if bash_path.exists() and not overwrite_scripts:
+                logger.info(f"Reusing existing script: {bash_path.name}")
+                bash_scripts.append(bash_path)
+                continue
+
+            # 4. Write correlation parameters settings file
             params_file = pair.pa_path / f"{pair.pa_key}_CorrParameters.txt"
             asp.build_correlation_params(
                 corr_algorithm=corr_algorithm,
@@ -1745,7 +1831,7 @@ class Session:
                 params_file_path=params_file,
             )
 
-            # 4. Write bash script referencing that params file
+            # 5. Write bash script referencing that params file
             bash_path = asp.write_bash_script(
                 pair,
                 corr_params_file=params_file,
@@ -1760,9 +1846,13 @@ class Session:
                 threads_singleprocess=threads_singleprocess,
                 corr_memory_limit_mb=corr_memory_limit_mb,
                 corr_tile_size=corr_tile_size,
+                correval=correval,
+                corr_algorithm=corr_algorithm,
+                corr_kernel=corr_kernel,
+                metric=metric,
             )
             bash_scripts.append(bash_path)
-            logger.info(f"  Ready: '{pair.pa_key}' → {bash_path.name}")
+            logger.info(f"Ready: '{pair.pa_key}' → {bash_path.name}")
 
         logger.success(
             f"Prepared {len(bash_scripts)} bash script(s) in their respective pair directories."
@@ -1780,40 +1870,42 @@ class Session:
         cores: int = 8,
         walltime: str = "12:00:00",
         besteffort: bool = False,
-        conda_env: str = "gmc",
+        conda_env: str = "gmc_env",
         processes: int = 1,
         threads_multiprocess: int = 8,
         threads_singleprocess: int = 8,
         corr_memory_limit_mb: int = 8000,
         corr_tile_size: int = 2048,
-        corr_algorithm: str = "asp_bm",
-        corr_kernel: tuple[int, int] = (21, 21),
-        corr_xthreshold: int = 10,
-        corr_seed_mode: int = 1,
-        subpixel_mode: int = 2,
-        subpixel_kernel: tuple[int, int] = (21, 21),
-        prefilter_mode: int = 2,
-        cost_mode: int = 2,
-        save_disparity_difference: bool = True,
-        clean: bool = False,
-        correval: bool = False,
-        metric: str = "ncc",
+        clean: bool = True,
+        correval: bool = True,
+        overwrite_scripts: bool = False,
     ) -> list[int]:
-        """Prepare and launch correlation for all pairs matching *criterias*.
+        """Prepare (if needed) and launch correlation for all pairs matching *criterias*.
 
-        Calls :meth:`prepare_pairs_correlation` to build each bash script, then
-        submits or executes it:
+        Calls :meth:`prepare_pairs_correlation` to generate bash scripts (skipping pairs
+        whose script already exists unless *overwrite_scripts=True*), then submits or
+        executes each script:
 
-        - **local** (``cluster=None`` or ``"local"``): ``bash correlation_job.sh``
-        - **cluster** (``"gricad"`` or ``"isterre"``): ``oarsub -S ./correlation_job.sh``
+        - **local** (``cluster=None`` or ``"local"``): ``bash <pa_key>_CorrelationJob.sh``
+        - **cluster** (``"gricad"`` or ``"isterre"``): ``oarsub -S ./<pa_key>_CorrelationJob.sh``
+
+        ``corr_eval`` is embedded in the bash script itself (written by
+        :meth:`prepare_pairs_correlation`) — it is not run as a separate step here.
+        Correlation tuning parameters (kernel, algorithm, etc.) are set via
+        :meth:`prepare_pairs_correlation` directly.
 
         Args:
             criterias: Passed to :meth:`get_pairs` to filter pairs.
             cluster: ``None`` / ``"local"`` / ``"gricad"`` / ``"isterre"``.
             dry_run: Print the launch command for each pair without executing.
-            overwrite: Redo pairs that are already complete.
+            overwrite: Redo pairs whose ASP outputs are already complete.
+            overwrite_scripts: Rewrite the bash script and params file even if they exist.
             asp_bin_dir: Optional path to the ASP bin directory.
-            All other parameters are forwarded to :meth:`prepare_pairs_correlation`.
+            nodes / cores / walltime / besteffort / conda_env: OAR cluster options.
+            processes / threads_* / corr_memory_limit_mb / corr_tile_size:
+                Forwarded to ``parallel_stereo`` inside the script.
+            clean: Delete intermediate ASP files after a successful run.
+            correval: Embed a ``corr_eval`` call in the generated bash script.
 
         Returns:
             List of return codes (one per pair; 0 = success / submitted).
@@ -1822,6 +1914,7 @@ class Session:
             criterias=criterias,
             cluster=cluster,
             overwrite=overwrite,
+            overwrite_scripts=overwrite_scripts,
             asp_bin_dir=asp_bin_dir,
             nodes=nodes,
             cores=cores,
@@ -1833,27 +1926,17 @@ class Session:
             threads_singleprocess=threads_singleprocess,
             corr_memory_limit_mb=corr_memory_limit_mb,
             corr_tile_size=corr_tile_size,
-            corr_algorithm=corr_algorithm,
-            corr_kernel=corr_kernel,
-            corr_xthreshold=corr_xthreshold,
-            corr_seed_mode=corr_seed_mode,
-            subpixel_mode=subpixel_mode,
-            subpixel_kernel=subpixel_kernel,
-            prefilter_mode=prefilter_mode,
-            cost_mode=cost_mode,
-            save_disparity_difference=save_disparity_difference,
+            correval=correval,
         )
 
         if not bash_scripts:
             return []
 
-        # Build the list of active pairs in the same order as bash_scripts
-        # (prepare_pairs_correlation skips complete pairs unless overwrite=True).
-        if clean or correval:
+        if clean:
             from geomulticorr.correlation import ASP
             asp = ASP(session=self, asp_bin_dir=asp_bin_dir)
-            all_pairs = self.get_pairs(criterias)
-            active_pairs = [p for p in all_pairs if p.get_status() != "complete" or overwrite]
+            pair_map = {p.pa_key: p for p in self.get_pairs(criterias)}
+            active_pairs = [pair_map.get(s.parent.name) for s in bash_scripts]
         else:
             asp = None
             active_pairs = [None] * len(bash_scripts)
@@ -1872,7 +1955,7 @@ class Session:
                 return_codes.append(0)
                 continue
 
-            logger.info(f"Launching: {' '.join(cmd)}")
+            logger.info(f"Launching: {script.name}")
             result = subprocess.run(
                 cmd,
                 cwd=script.parent,
@@ -1885,23 +1968,6 @@ class Session:
                     f"Failed [{script.parent.name}]: {result.stderr.strip()}"
                 )
             else:
-                if correval and pair is not None:
-                    ce_bin = asp.find_asp_executable("corr_eval")
-                    ce_call = asp._build_correval_cmd(
-                        out_prefix=pair.pa_asp_path / pair.pa_key,
-                        corr_algorithm=corr_algorithm,
-                        corr_kernel=corr_kernel,
-                        metric=metric,
-                        correval_bin=ce_bin,
-                    )
-                    logger.info(f"Running corr_eval for '{pair.pa_key}'")
-                    subprocess.run(
-                        ce_call,
-                        cwd=pair.pa_asp_path,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                    )
                 if clean and pair is not None:
                     asp.clean_pair_directory(pair)
             return_codes.append(result.returncode)
@@ -1910,7 +1976,68 @@ class Session:
         logger.success(
             f"Launched {n_ok}/{len(return_codes)} pair(s) successfully."
         )
+
+        # Sync pa_status back to the geodatabase for local runs.
+        # For cluster (oarsub) jobs the processes are async — call
+        # _sync_pairs_status(get_pairs(criterias)) manually after they finish.
+        if not use_cluster and not dry_run:
+            run_pairs = [p for p in active_pairs if p is not None]
+            self._sync_pairs_status(run_pairs)
+
         return return_codes
+
+    def extract_pairs_raw_displacements(
+        self,
+        criterias: str | list[str] = "",
+        save_plot: bool = True,
+        overwrite: bool = False,
+    ) -> dict:
+        """Extract EW/NS displacements and compute raw stats for all complete pairs.
+
+        Iterates over all pairs matching *criterias*, calls
+        :meth:`~geomulticorr.core.pair.Pair.extract_raw_displacements` on each
+        complete pair, and returns a summary dict keyed by ``pa_key``.
+
+        Args:
+            criterias: Same filter syntax as :meth:`get_pairs`.
+            save_plot: Save the 9-panel control figure for each pair.
+            overwrite: Re-process pairs that already have EW/NS files on disk.
+
+        Returns:
+            Dict mapping ``pa_key`` → full stats dict (or ``None`` if skipped).
+        """
+        pairs = self.get_pairs(criterias)
+        results: dict = {}
+        n_done = 0
+        n_skip = 0
+
+        for pair in pairs:
+            if not pair.pa_disparity_f_path.exists():
+                logger.warning(f"Skipping '{pair.pa_key}' — disparity raster not found")
+                results[pair.pa_key] = None
+                n_skip += 1
+                continue
+
+            if not overwrite and pair.pa_ew_path.exists() and pair.pa_ns_path.exists():
+                logger.info(f"Already processed '{pair.pa_key}', skipping (use overwrite=True to redo)")
+                results[pair.pa_key] = None
+                n_skip += 1
+                continue
+
+            logger.launch(f"Extracting raw displacements for '{pair.pa_key}'")
+            try:
+                stats = pair.extract_raw_displacements(save_plot=save_plot)
+                results[pair.pa_key] = stats
+                n_done += 1
+            except Exception as exc:
+                logger.error(f"Failed for '{pair.pa_key}': {exc}")
+                results[pair.pa_key] = None
+
+        logger.success(
+            f"Extracted raw displacements for {n_done}/{len(pairs)} pair(s) "
+            f"({n_skip} skipped)."
+        )
+        return results
 
     # TODO: to be completed with the other parameters
     def pr_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10):
