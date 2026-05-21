@@ -208,7 +208,7 @@ class GMCFormatter(logging.Formatter):
     }
     BOLD = "\033[1m"
     RESET = "\033[0m"
-    PREFIX = "GeoMultiCorr"
+    PREFIX = "GMC"
 
     def __init__(self, use_color: bool = True, use_icons: bool = True):
         super().__init__()
@@ -216,7 +216,7 @@ class GMCFormatter(logging.Formatter):
         self.use_icons = use_icons
 
     def format(self, record: logging.LogRecord) -> str:
-        """Format a log record with colors, icons, and GeoMultiCorr prefix."""
+        """Format a log record with colors, icons, and GMC prefix."""
         msg = record.getMessage()
         icon = self.ICONS.get(record.levelno, "") if self.use_icons else ""
         if self.use_color:
