@@ -31,9 +31,11 @@ tests/conftest.py
 
 Shared test fixtures - automatically available to all tests.
 """
-
 import pytest
 import logging
+import tempfile
+
+from pathlib import Path
 
 # GeoMultiCorr imports
 from geomulticorr._logging import (
@@ -41,48 +43,118 @@ from geomulticorr._logging import (
     SEARCH, FILE, STATISTICS, TIMER, SAVE, LIST, LAUNCH
     )
 # -------------------------------------------------------------- #
+# ------------------------------------------------------------------
 # FIXTURE 1: Formatter without visual elements (easiest to test)
-# -------------------------------------------------------------- #
+# ------------------------------------------------------------------
 @pytest.fixture
 def formatter_plain():
-    """A GMCFormatter instance with colors and icons disabled."""
+    """GMCFormatter instance with colors and icons disabled.
+
+    Useful for testing formatter output without ANSI codes or emoji icons,
+    making assertions on text content clearer.
+
+    :return: Configured GMCFormatter instance.
+    :rtype: geomulticorr._logging.GMCFormatter
+    """
     return GMCFormatter(
         use_color=False,
         use_icons=False
-        )
+    )
 # END def
 
-# ------------------------------------------------------------------- #
-# FIXTURE 2: Formatter with visual elements (colors and icons enabled)
-# ------------------------------------------------------------------- #
+
+@pytest.fixture
+def temp_dir():
+    """Temporary directory for file system operations in tests.
+
+    Creates a temporary directory that is automatically cleaned up after
+    the test completes. Useful for testing file creation, deletion, and
+    content verification without polluting the filesystem.
+
+    :return: Path to the temporary directory.
+    :rtype: pathlib.Path
+
+    Example:
+        def test_writes_file(temp_dir):
+            output_file = temp_dir / "output.txt"
+            output_file.write_text("test data")
+            assert output_file.exists()
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield Path(tmpdir)
+# END def
+
+
+# ------------------------------------------------------------------
+# FIXTURE 2: Formatter with icons enabled
+# ------------------------------------------------------------------
 @pytest.fixture
 def formatter_with_icons():
-    """A GMCFormatter instance with icons enabled, but no colors."""
+    """GMCFormatter instance with emoji icons enabled.
+
+    Icons are disabled for colors, enabling verification that emoji icons
+    are properly inserted into log messages at the correct positions.
+
+    :return: Configured GMCFormatter instance.
+    :rtype: geomulticorr._logging.GMCFormatter
+    """
     return GMCFormatter(
         use_color=False,
         use_icons=True
-        )
+    )
 # END def
 
-# ------------------------------------------------------------------- #
-# FIXTURE 3: Formatter with colors
-# ------------------------------------------------------------------- #
+
+# ------------------------------------------------------------------
+# FIXTURE 3: Formatter with colors enabled
+# ------------------------------------------------------------------
 @pytest.fixture
 def formatter_with_colors():
-    """A GMCFormatter instance with colors enabled, but no icons."""
+    """GMCFormatter instance with ANSI colors enabled.
+
+    Icons are disabled for colors, enabling verification that ANSI escape
+    codes are properly inserted for terminal coloring.
+
+    :return: Configured GMCFormatter instance.
+    :rtype: geomulticorr._logging.GMCFormatter
+    """
     return GMCFormatter(
         use_color=True,
         use_icons=False
-        )
+    )
 # END def
 
-# ------------------------------------------------------------------- #
-# FIXTURE 4: Formatter with colors and icons enabled (full visual style)
-# ------------------------------------------------------------------- #
+
+# ------------------------------------------------------------------
+# FIXTURE 4: Log record factory
+# ------------------------------------------------------------------
 @pytest.fixture
 def make_log_record():
-    """A factory fixture that creates log records on demand."""
+    """Factory fixture to create logging.LogRecord instances on demand.
+
+    Returns a callable that creates log records with customizable message
+    and log level. Useful for testing formatter output with different
+    message content and severity levels.
+
+    :return: Callable that creates LogRecord instances.
+    :rtype: callable
+
+    Example:
+        def test_format_warning(formatter_plain, make_log_record):
+            record = make_log_record(msg="Warning!", level=logging.WARNING)
+            result = formatter_plain.format(record)
+            assert "Warning!" in result
+    """
     def _create(msg="Test message", level=logging.INFO):
+        """Create a LogRecord with given message and level.
+
+        :param msg: Message content for the log record.
+        :type msg: str
+        :param level: Log level (logging.DEBUG, logging.INFO, etc.).
+        :type level: int
+        :return: Configured LogRecord instance.
+        :rtype: logging.LogRecord
+        """
         return logging.LogRecord(
             name="GMC",
             level=level,
@@ -93,7 +165,32 @@ def make_log_record():
             exc_info=None
         )
     return _create
-    # END def
-#END def
+# END def
+
+@pytest.fixture
+def caplog_gmc(caplog):
+    """Caplog fixture that works with GMC logger's propagate=False.
+    
+    The GMC logger disables propagation to prevent duplicate messages.
+    This fixture temporarily enables propagation so pytest's caplog
+    can capture logs during testing.
+    
+    Usage:
+        def test_something(caplog_gmc):
+            some_function()
+            assert "expected message" in caplog_gmc.text
+    
+    :param caplog: Pytest's built-in caplog fixture.
+    :type caplog: pytest.LogCaptureFixture
+    :return: The caplog fixture with GMC logger propagation enabled.
+    :rtype: pytest.LogCaptureFixture
+    """
+    gmc_logger = logging.getLogger("GMC")
+    original_propagate = gmc_logger.propagate
+    gmc_logger.propagate = True
+    try:
+        yield caplog
+    finally:
+        gmc_logger.propagate = original_propagate
 
 
