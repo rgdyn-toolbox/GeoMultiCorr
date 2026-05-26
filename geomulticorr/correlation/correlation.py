@@ -2,27 +2,27 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # correlation.py
 # creation date: 2026-05-08.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -32,8 +32,13 @@ import subprocess
 import shutil
 from pathlib import Path
 
-# Supported OAR cluster profiles.
-_CLUSTER_CHOICES = (None, "local", "gricad", "isterre")
+from geomulticorr._logging import logger
+from geomulticorr.utils.hpc_tools import (
+    CLUSTER_CHOICES,
+    validate_cluster,
+    oar_header,
+    cluster_base_env,
+)
 
 
 class ASP:
@@ -42,11 +47,16 @@ class ASP:
     def __init__(
         self,
         session=None,
-        asp_bin_dir: str | Path = None,
-    ):
+        asp_bin_dir: str | Path | None = None,
+    ) -> None:
+        """Initialize ASP helper with optional binary directory.
+
+        :param session: GMC session object (optional).
+        :param asp_bin_dir: Directory containing ASP binaries. If None, search system PATH.
+        :raises FileNotFoundError: If ``parallel_stereo`` binary is not found.
+        """
         self.session = session
         self.asp_bin_dir = Path(asp_bin_dir) if asp_bin_dir else None
-        # Validate that parallel_stereo is reachable on construction.
         self.find_asp_executable("parallel_stereo")
 
     def find_asp_executable(self, bin_name: str) -> str:
@@ -54,8 +64,9 @@ class ASP:
 
         Searches *asp_bin_dir* first (if set), then the system PATH.
 
-        Raises:
-            FileNotFoundError: If the executable is not found.
+        :param bin_name: Name of the ASP binary to find.
+        :return: Full path to the executable.
+        :raises FileNotFoundError: If the executable is not found.
         """
         search_path = str(self.asp_bin_dir) if self.asp_bin_dir else None
         exe = shutil.which(bin_name, path=search_path)
@@ -91,14 +102,33 @@ class ASP:
         min_ip_points: int | None = 2,
         ip_per_tile: int | None = 200,
         nodata_value: float | None = None,
-        params_file_path: str | Path = None,
+        params_file_path: str | Path | None = None,
     ) -> list[str]:
         """Build ASP correlation parameters and write them to a settings file.
 
         The file uses ASP's bare ``key value`` format (no ``--`` prefix).
+        Note: SGM/MGM algorithms override ``corr_kernel`` to (9, 9) and ``cost_mode`` to 4.
 
-        Returns:
-            list[str]: Lines written to the file.
+        :param pre_alignment: Pre-alignment method (e.g., ``"homography"``).
+        :param pre_normalization: Force use of entire dynamic range.
+        :param individual_normalization: Normalize each image independently.
+        :param prefilter_mode: Prefilter mode (0, 1, or 2). None disables.
+        :param prefilter_kernel_width: Prefilter kernel width (used if mode >= 2).
+        :param corr_seed_mode: Seed correlation mode.
+        :param cost_mode: Cost mode for matching (1-4).
+        :param corr_algorithm: Correlation algorithm (``asp_bm``, ``asp_sgm``, ``asp_mgm``, etc.).
+        :param corr_kernel: Correlation kernel size as (height, width).
+        :param n_levels: Number of coarse-to-fine levels. None disables.
+        :param corr_search: Search range as (x_min, x_max, y_min, y_max). None uses default.
+        :param corr_xthreshold: Cross-correlation threshold.
+        :param subpixel_refinement_mode: Subpixel refinement mode.
+        :param subpixel_kernel: Subpixel kernel size as (height, width).
+        :param save_disparity_difference: Save left-right disparity difference.
+        :param min_ip_points: Minimum interest points. None disables.
+        :param ip_per_tile: Interest points per tile. None disables.
+        :param nodata_value: Nodata value for input images.
+        :param params_file_path: Output path for the parameters file. If None, uses ``corr_params.txt``.
+        :return: List of parameter lines written to the file.
         """
         params: list[str] = []
         params.append("# -*- mode: sh -*-\n")
@@ -124,9 +154,7 @@ class ASP:
 
         # SGM/MGM algorithms require a small kernel and cost-mode 4.
         if corr_algorithm in ("asp_sgm", "asp_mgm", "asp_final_mgm"):
-            print(
-                f"'{corr_algorithm}' requires corr-kernel ≤ 9×9. Overriding to 9 9."
-            )
+            logger.warning(f"'{corr_algorithm}' requires corr-kernel ≤ 9×9. Overriding to 9 9.")
             corr_kernel = (9, 9)
             subpixel_kernel = (9, 9)
             cost_mode = 4
@@ -165,9 +193,13 @@ class ASP:
     def write_correlation_parameters_file(
         self,
         params: list[str],
-        param_file_path: str | Path = None,
+        param_file_path: str | Path | None = None,
     ) -> None:
-        """Write *params* lines to *param_file_path* (default: ``corr_params.txt``)."""
+        """Write *params* lines to *param_file_path* (default: ``corr_params.txt``).
+
+        :param params: List of parameter lines to write.
+        :param param_file_path: Output file path. If None, uses ``corr_params.txt``.
+        """
         if param_file_path is None:
             param_file_path = Path("corr_params.txt")
         param_file_path = Path(param_file_path)
@@ -184,7 +216,7 @@ class ASP:
         left: str | Path,
         right: str | Path,
         out_prefix: str | Path,
-        corr_params_file: str | Path = None,
+        corr_params_file: str | Path | None = None,
         processes: int = 1,
         threads_multiprocess: int = 8,
         threads_singleprocess: int = 8,
@@ -192,22 +224,36 @@ class ASP:
         corr_tile_size: int = 2048,
         stereo_bin: str = "parallel_stereo",
     ) -> list[str]:
-        """Return the full ``parallel_stereo`` command as a list of strings."""
-        cmd = [
-            str(stereo_bin),
-            str(left),
-            str(right),
-            str(out_prefix),
-            "--correlator-mode",
-            "--processes", str(processes),
-            "--threads-multiprocess", str(threads_multiprocess),
-            "--threads-singleprocess", str(threads_singleprocess),
-            "--corr-memory-limit-mb", str(corr_memory_limit_mb),
-            "--corr-tile-size", str(corr_tile_size),
-        ]
+        """Return the full ``parallel_stereo`` command as a list of strings.
+
+        :param left: Path to the left (reference) image.
+        :param right: Path to the right (secondary) image.
+        :param out_prefix: Output path prefix (directory + base name, no extension).
+        :param corr_params_file: Path to ASP settings file. If None, uses ASP defaults.
+        :param processes: Number of parallel processes.
+        :param threads_multiprocess: Threads per process in multiprocess mode.
+        :param threads_singleprocess: Threads in single-process mode.
+        :param corr_memory_limit_mb: Memory limit per process in MB.
+        :param corr_tile_size: Tile size in pixels for correlation.
+        :param stereo_bin: Path or name of the ``parallel_stereo`` binary.
+        :return: Command as a list of strings (ready for subprocess).
+        """
+        cmd_stereo: list[str] = []
+        cmd_stereo.append(str(stereo_bin))
+        cmd_stereo.append("--correlator-mode")
         if corr_params_file is not None:
-            cmd.extend(["-s", str(corr_params_file)])
-        return cmd
+            cmd_stereo.append(f"-s {str(corr_params_file)}")
+        # END if
+        cmd_stereo.append(f"--processes {str(processes)}")
+        cmd_stereo.append(f"--threads-multiprocess {str(threads_multiprocess)}")
+        cmd_stereo.append(f"--threads-singleprocess {str(threads_singleprocess)}")
+        cmd_stereo.append(f"--corr-memory-limit-mb {str(corr_memory_limit_mb)}")
+        cmd_stereo.append(f"--corr-tile-size {str(corr_tile_size)}")
+        cmd_stereo.append(str(left))
+        cmd_stereo.append(str(right))
+        cmd_stereo.append(str(out_prefix))
+
+        return cmd_stereo
 
     def _build_correval_cmd(
         self,
@@ -220,8 +266,16 @@ class ASP:
         """Return the ``corr_eval`` command as a list of strings.
 
         The prefilter mode is derived from *corr_algorithm*:
+
         - ``asp_bm`` → ``--prefilter-mode 2``
         - ``asp_sgm`` / ``asp_mgm`` / ``asp_final_mgm`` → ``--prefilter-mode 0``
+
+        :param out_prefix: Output prefix path for the correlation output.
+        :param corr_algorithm: Correlation algorithm name (controls prefilter mode).
+        :param corr_kernel: Correlation kernel size as (height, width) tuple.
+        :param metric: Similarity metric to compute (e.g., ``"ncc"``).
+        :param correval_bin: Path or name of the ``corr_eval`` binary.
+        :return: Command as a list of strings (ready for subprocess).
         """
         if corr_algorithm in ("asp_sgm", "asp_mgm", "asp_final_mgm"):
             prefilter_mode = 0
@@ -229,17 +283,24 @@ class ASP:
             prefilter_mode = 2
 
         p = Path(out_prefix)
-        left  = str(p.parent / f"{p.name}-L.tif")
+        left = str(p.parent / f"{p.name}-L.tif")
         right = str(p.parent / f"{p.name}-R.tif")
-        disp  = str(p.parent / f"{p.name}-F.tif")
+        disp = str(p.parent / f"{p.name}-F.tif")
+        output = str(p.parent / f"{p.name}-F-{metric}")
 
-        return [
-            str(correval_bin),
-            "--prefilter-mode", str(prefilter_mode),
-            "--kernel-size", str(corr_kernel[0]), str(corr_kernel[1]),
-            "--metric", metric,
-            left, right, disp, str(p),
-        ]
+        cmd_correval: list[str] = []
+        cmd_correval.append(str(correval_bin))
+        cmd_correval.append(f"--prefilter-mode {str(prefilter_mode)}")
+        cmd_correval.append(
+            f"--kernel-size {str(corr_kernel[0])} {str(corr_kernel[1])}"
+        )
+        cmd_correval.append(f"--metric {metric}")
+        cmd_correval.append(left)
+        cmd_correval.append(right)
+        cmd_correval.append(disp)
+        cmd_correval.append(output)
+
+        return cmd_correval
 
     # ------------------------------------------------------------------
     # Correlation execution
@@ -250,7 +311,7 @@ class ASP:
         left: str | Path,
         right: str | Path,
         out_prefix: str | Path,
-        corr_params_file: str | Path = None,
+        corr_params_file: str | Path | None = None,
         corr_tile_size: int = 2048,
         processes: int = 1,
         threads_multiprocess: int = 8,
@@ -258,48 +319,58 @@ class ASP:
         corr_memory_limit_mb: int = 8000,
         dry_run: bool = False,
         clean: bool = False,
-        correval: bool = False,
+        correval: bool = True,
         corr_algorithm: str = "asp_bm",
         corr_kernel: tuple[int, int] = (21, 21),
         metric: str = "ncc",
     ) -> int:
         """Run ``parallel_stereo`` on a pair of images, then optionally run ``corr_eval``.
 
-        Args:
-            left: Path to the left (reference) image.
-            right: Path to the right (secondary) image.
-            out_prefix: Output path prefix (directory + base name, no extension).
-            corr_params_file: Path to an ASP settings file.  If *None*, ASP
-                uses its built-in defaults.
-            dry_run: Print commands without executing them.
-            clean: Delete intermediate files after a successful correlation.
-            correval: Run ``corr_eval`` to compute NCC metrics after correlation.
-            corr_algorithm: Algorithm used (controls ``corr_eval`` prefilter mode).
-            corr_kernel: Kernel size used (forwarded to ``corr_eval --kernel-size``).
-            metric: Metric passed to ``corr_eval --metric`` (default: ``ncc``).
-
-        Returns:
-            int: ``parallel_stereo`` return code (0 = success).
+        :param left: Path to the left (reference) image.
+        :param right: Path to the right (secondary) image.
+        :param out_prefix: Output path prefix (directory + base name, no extension).
+        :param corr_params_file: Path to ASP settings file. If None, uses ASP defaults.
+        :param corr_tile_size: Tile size in pixels for correlation.
+        :param processes: Number of parallel processes.
+        :param threads_multiprocess: Threads per process in multiprocess mode.
+        :param threads_singleprocess: Threads in single-process mode.
+        :param corr_memory_limit_mb: Memory limit per process in MB.
+        :param dry_run: Print commands without executing them.
+        :param clean: Delete intermediate files after successful correlation.
+        :param correval: Run ``corr_eval`` to compute metrics after correlation.
+        :param corr_algorithm: Algorithm used (controls ``corr_eval`` prefilter mode).
+        :param corr_kernel: Kernel size used (forwarded to ``corr_eval --kernel-size``).
+        :param metric: Metric passed to ``corr_eval --metric`` (default: ``ncc``).
+        :return: ``parallel_stereo`` return code (0 = success).
         """
         stereo_bin = self.find_asp_executable("parallel_stereo")
         Path(out_prefix).parent.mkdir(parents=True, exist_ok=True)
 
         call = self._build_stereo_cmd(
-            left, right, out_prefix, corr_params_file,
-            processes, threads_multiprocess, threads_singleprocess,
-            corr_memory_limit_mb, corr_tile_size,
+            left,
+            right,
+            out_prefix,
+            corr_params_file,
+            processes,
+            threads_multiprocess,
+            threads_singleprocess,
+            corr_memory_limit_mb,
+            corr_tile_size,
             stereo_bin=stereo_bin,
         )
 
         if dry_run:
-            print("DRY RUN (parallel_stereo):", " ".join(call))
+            logger.info("DRY RUN (parallel_stereo): " + " ".join(call))
             if correval:
                 correval_bin = self.find_asp_executable("corr_eval")
                 ce_call = self._build_correval_cmd(
-                    out_prefix, corr_algorithm, corr_kernel, metric,
+                    out_prefix,
+                    corr_algorithm,
+                    corr_kernel,
+                    metric,
                     correval_bin=correval_bin,
                 )
-                print("DRY RUN (corr_eval):      ", " ".join(ce_call))
+                logger.info("DRY RUN (corr_eval): " + " ".join(ce_call))
             return 0
 
         result = subprocess.run(
@@ -309,13 +380,17 @@ class ASP:
             text=True,
         )
         if result.returncode != 0:
-            print("ASP parallel_stereo error:\n", result.stderr)
+            print(f"DEBUG: returncode is {result.returncode}")
+            logger.error(f"ASP parallel_stereo error:\n{result.stderr}")
             return result.returncode
 
         if correval:
             correval_bin = self.find_asp_executable("corr_eval")
             ce_call = self._build_correval_cmd(
-                out_prefix, corr_algorithm, corr_kernel, metric,
+                out_prefix,
+                corr_algorithm,
+                corr_kernel,
+                metric,
                 correval_bin=correval_bin,
             )
             ce_result = subprocess.run(
@@ -325,12 +400,14 @@ class ASP:
                 text=True,
             )
             if ce_result.returncode != 0:
-                print("ASP corr_eval error:\n", ce_result.stderr)
+                logger.error(f"ASP corr_eval error:\n{ce_result.stderr}")
 
         if clean:
             out_dir = Path(out_prefix).parent
             for f in sorted(out_dir.iterdir()):
-                if f.is_file() and not any(f.name.endswith(s) for s in self._KEEP_SUFFIXES):
+                if f.is_file() and not any(
+                    f.name.endswith(s) for s in self._KEEP_SUFFIXES
+                ):
                     f.unlink()
 
         return result.returncode
@@ -345,7 +422,7 @@ class ASP:
         corr_memory_limit_mb: int = 8000,
         dry_run: bool = False,
         clean: bool = False,
-        correval: bool = False,
+        correval: bool = True,
         metric: str = "ncc",
         **corr_params_kwargs,
     ) -> int:
@@ -355,20 +432,21 @@ class ASP:
         Writes a settings file inside the pair directory, then calls
         ``parallel_stereo`` and optionally ``corr_eval``.
 
-        Args:
-            pair: A ``geomulticorr.pair.Pair`` instance with ``pa_status``
-                ``'clipped'`` or ``'complete'``.
-            dry_run: Print commands without executing them.
-            clean: Delete intermediate files after a successful correlation.
-            correval: Run ``corr_eval`` after a successful correlation.
-            metric: Metric for ``corr_eval`` (default: ``ncc``).
-            **corr_params_kwargs: Forwarded to :meth:`build_correlation_params`.
-
-        Returns:
-            int: ``parallel_stereo`` return code.
+        :param pair: A ``geomulticorr.pair.Pair`` instance with ``pa_status`` ``'clipped'`` or ``'complete'``.
+        :param corr_tile_size: Tile size in pixels for correlation.
+        :param processes: Number of parallel processes.
+        :param threads_multiprocess: Threads per process in multiprocess mode.
+        :param threads_singleprocess: Threads in single-process mode.
+        :param corr_memory_limit_mb: Memory limit per process in MB.
+        :param dry_run: Print commands without executing them.
+        :param clean: Delete intermediate files after successful correlation.
+        :param correval: Run ``corr_eval`` after successful correlation.
+        :param metric: Metric for ``corr_eval`` (default: ``ncc``).
+        :param corr_params_kwargs: Additional arguments forwarded to :meth:`build_correlation_params`.
+        :return: ``parallel_stereo`` return code.
         """
         if pair.get_status() == "complete":
-            print(f"Pair '{pair.pa_key}' is already complete. Skipping.")
+            logger.info(f"Pair '{pair.pa_key}' is already complete. Skipping.")
             return 0
 
         left = pair.pa_left_link_path
@@ -383,7 +461,7 @@ class ASP:
 
         # Extract the algorithm/kernel used so corr_eval gets the right settings.
         corr_algorithm = corr_params_kwargs.get("corr_algorithm", "asp_bm")
-        corr_kernel    = corr_params_kwargs.get("corr_kernel", (21, 21))
+        corr_kernel = corr_params_kwargs.get("corr_kernel", (21, 21))
 
         return self.run_correlation(
             left=left,
@@ -410,7 +488,7 @@ class ASP:
     def write_bash_script(
         self,
         pair,
-        corr_params_file: str | Path = None,
+        corr_params_file: str | Path | None = None,
         cluster: str | None = None,
         nodes: int = 1,
         cores: int = 8,
@@ -429,31 +507,30 @@ class ASP:
     ) -> Path:
         """Write a bash script to run ``parallel_stereo`` for *pair*.
 
-        The script is written to ``pair.pa_path / "correlation_job.sh"`` and
-        made executable.  When *cluster* is set, OAR scheduler headers are
+        The script is written to ``pair.pa_path / "{pair.pa_key}_CorrelationJob.sh"`` and
+        made executable. When *cluster* is set, OAR scheduler headers are
         prepended and the appropriate environment setup is included.
 
-        Args:
-            pair: A ``geomulticorr.pair.Pair`` instance.
-            corr_params_file: Path to the ASP settings file (written by
-                :meth:`build_correlation_params`).  If *None*, the default
-                ``pair.pa_path / "corr_params.txt"`` is used.
-            cluster: One of ``None`` / ``"local"`` / ``"gricad"`` / ``"isterre"``.
-            nodes: Number of OAR nodes (cluster only).
-            cores: Number of cores per node (cluster only).
-            walltime: OAR walltime in ``HH:MM:SS`` (cluster only).
-            besteffort: Enable OAR besteffort mode (cluster only).
-            conda_env: Conda environment name to activate.
-            processes / threads_* / corr_memory_limit_mb / corr_tile_size:
-                Forwarded to the ``parallel_stereo`` command.
-
-        Returns:
-            Path to the written bash script.
+        :param pair: A ``geomulticorr.pair.Pair`` instance.
+        :param corr_params_file: Path to ASP settings file (from :meth:`build_correlation_params`). If None, uses default.
+        :param cluster: Cluster target: ``None``, ``"local"``, ``"gricad"``, or ``"isterre"``.
+        :param nodes: Number of OAR nodes (cluster mode only).
+        :param cores: Number of cores per node (cluster mode only).
+        :param walltime: OAR walltime in ``HH:MM:SS`` format (cluster mode only).
+        :param besteffort: Enable OAR besteffort mode (cluster mode only).
+        :param conda_env: Conda environment name to activate in the script.
+        :param processes: Number of parallel processes.
+        :param threads_multiprocess: Threads per process in multiprocess mode.
+        :param threads_singleprocess: Threads in single-process mode.
+        :param corr_memory_limit_mb: Memory limit per process in MB.
+        :param corr_tile_size: Tile size in pixels for correlation.
+        :param correval: Include ``corr_eval`` command in the script.
+        :param corr_algorithm: Correlation algorithm (controls ``corr_eval`` prefilter mode).
+        :param corr_kernel: Correlation kernel size as (height, width) tuple.
+        :param metric: Metric for ``corr_eval`` (default: ``ncc``).
+        :return: Path to the written bash script.
         """
-        if cluster not in _CLUSTER_CHOICES:
-            raise ValueError(
-                f"cluster must be one of {_CLUSTER_CHOICES}, got {cluster!r}"
-            )
+        validate_cluster(cluster)
 
         left = pair.pa_left_link_path
         right = pair.pa_right_link_path
@@ -470,9 +547,15 @@ class ASP:
             stereo_bin = "parallel_stereo"
 
         cmd_parts = self._build_stereo_cmd(
-            left, right, out_prefix, corr_params_file,
-            processes, threads_multiprocess, threads_singleprocess,
-            corr_memory_limit_mb, corr_tile_size,
+            left,
+            right,
+            out_prefix,
+            corr_params_file,
+            processes,
+            threads_multiprocess,
+            threads_singleprocess,
+            corr_memory_limit_mb,
+            corr_tile_size,
             stereo_bin=stereo_bin,
         )
         # Format as a readable multiline bash command
@@ -481,28 +564,15 @@ class ASP:
         job_name = f"ImgCorr_{pair.pa_key}"
         lines: list[str] = ["#!/bin/bash\n"]
 
+        lines += oar_header(
+            job_name, nodes, cores, walltime, cluster, besteffort=besteffort
+        )
         if cluster in ("gricad", "isterre"):
-            lines += [
-                f"#OAR -n {job_name}\n",
-                f"#OAR -l /nodes={nodes}/core={cores},walltime={walltime}\n",
-                f"#OAR -O ./{job_name}_%jobid%.out\n",
-                f"#OAR -E ./{job_name}_%jobid%.err\n",
-            ]
-            if besteffort:
-                lines.append("#OAR -t besteffort\n")
-
+            lines += ["\n"] + cluster_base_env(cluster)
             if cluster == "gricad":
-                lines += [
-                    "#OAR --project rgdyn\n",
-                    "\n",
-                    "source $HOME/.bashrc\n",
-                    f"conda activate {conda_env}\n",
-                ]
+                lines += [f"conda activate {conda_env}\n"]
             else:  # isterre
                 lines += [
-                    "#OAR --project iste-equ-risques\n",
-                    "\n",
-                    "source /soft/env.bash\n",
                     "module load stereopipeline/3.6.0\n",
                     "\n",
                     "source /usr/contrib/all/anaconda3/anaconda3.rc\n",
@@ -543,26 +613,22 @@ class ASP:
         "-L.tif",
         "-R.tif",
         "-RD.tif",
-        "-ncc.tif",
+        "-F-ncc.tif",
     )
 
     def clean_pair_directory(self, pair, dry_run: bool = False) -> list[Path]:
         """Delete intermediate ASP files from *pair*'s output directory.
 
         Keeps only files whose names end with one of:
-        ``-F.tif``, ``-L-R-disp-diff.tif``, ``-L.tif``, ``-R.tif``,
-        ``-RD.tif``, ``-ncc.tif``.
+        ``-F.tif``, ``-L-R-disp-diff.tif``, ``-L.tif``, ``-R.tif``, ``-RD.tif``, ``-F-ncc.tif``.
 
-        Args:
-            pair: A ``geomulticorr.pair.Pair`` instance.
-            dry_run: List files that would be deleted without removing them.
-
-        Returns:
-            List of deleted (or would-be-deleted) paths.
+        :param pair: A ``geomulticorr.pair.Pair`` instance.
+        :param dry_run: List files that would be deleted without removing them.
+        :return: List of deleted (or would-be-deleted) paths.
         """
         asp_dir = pair.pa_path
         if not asp_dir.exists():
-            print(f"Pair directory does not exist: {asp_dir}")
+            logger.warning(f"Pair directory does not exist: {asp_dir}")
             return []
 
         removed: list[Path] = []
@@ -572,11 +638,11 @@ class ASP:
             if any(f.name.endswith(suffix) for suffix in self._KEEP_SUFFIXES):
                 continue
             if dry_run:
-                print(f"DRY RUN — would delete: {f.name}")
+                logger.info(f"DRY RUN — would delete: {f.name}")
             else:
                 f.unlink()
             removed.append(f)
 
         action = "Would delete" if dry_run else "Deleted"
-        print(f"{action} {len(removed)} file(s) from '{asp_dir}'.")
+        logger.info(f"{action} {len(removed)} file(s) from '{asp_dir}'.")
         return removed
