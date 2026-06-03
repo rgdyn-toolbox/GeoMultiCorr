@@ -1,0 +1,443 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Tests for geomulticorr.corrections.masks — boolean mask generators."""
+
+from unittest.mock import MagicMock
+
+import numpy as np
+import numpy.ma as ma
+import pytest
+
+from geomulticorr.corrections.masks import (
+    BaseMask,
+    FilterPipeline,
+    OutlierFilter,
+    CCFilter,
+    SlopeMask,
+    ShadowMask,
+    SnowMask,
+    CloudMask,
+    StableAreaMask,
+)
+from geomulticorr.corrections.corrections import RampCorrection
+
+
+class TestOutlierFilter:
+    """Tests for OutlierFilter — mask by value bounds."""
+
+    def test_inside_bounds_kept(self, flat_raster):
+        """Values inside (-10, 10) → True."""
+        flat_raster.data[:] = [[1.0, 5.0, -3.0]]
+        result = OutlierFilter((-10, 10)).generate_mask(flat_raster)
+        assert result[0, 0] == True
+        assert result[0, 1] == True
+        assert result[0, 2] == True
+
+    def test_outside_bounds_masked(self, flat_raster):
+        """Values outside (-10, 10) → False."""
+        flat_raster.data[:] = [[15.0, -15.0]]
+        result = OutlierFilter((-10, 10)).generate_mask(flat_raster)
+        assert result[0, 0] == False
+        assert result[0, 1] == False
+
+    def test_boundary_exclusive(self, flat_raster):
+        """Boundary values (-10, 10): strict inequalities."""
+        flat_raster.data[:] = [[-10.0, 10.0]]
+        result = OutlierFilter((-10, 10)).generate_mask(flat_raster)
+        assert result[0, 0] == False
+        assert result[0, 1] == False
+
+    def test_nan_masked(self, flat_raster):
+        """NaN values → False (not finite)."""
+        flat_raster.data[:] = [[1.0, np.nan, 5.0]]
+        result = OutlierFilter((-10, 10)).generate_mask(flat_raster)
+        assert result[0, 0] == True
+        assert result[0, 1] == False
+        assert result[0, 2] == True
+
+    def test_masked_input_filled_nan(self):
+        """Masked pixel filled with NaN → not finite → False."""
+        from .conftest import MockRaster
+        data = ma.array([[1.0, 5.0, 3.0]], mask=[[False, True, False]])
+        raster = MockRaster(data=data)
+        result = OutlierFilter((-10, 10)).generate_mask(raster)
+        assert result[0, 0] == True
+        assert result[0, 1] == False
+        assert result[0, 2] == True
+
+    @pytest.mark.parametrize("lo,hi", [(-5, 5), (0, 100), (-1e3, 1e3)])
+    def test_parametrized_thresholds(self, flat_raster, lo, hi):
+        """Test various thresholds."""
+        flat_raster.data[:] = [[lo - 1, (lo + hi) / 2, hi + 1]]
+        result = OutlierFilter((lo, hi)).generate_mask(flat_raster)
+        assert result[0, 0] == False  # below lo
+        assert result[0, 1] == True   # inside
+        assert result[0, 2] == False  # above hi
+
+    def test_default_threshold(self):
+        """Default threshold is (-10.0, 10.0)."""
+        corr = OutlierFilter()
+        assert corr.threshold == (-10.0, 10.0)
+
+
+class TestCCFilter:
+    """Tests for CCFilter — correlation coefficient threshold."""
+
+    def test_above_threshold_kept(self, cc_raster):
+        """CC ≥ threshold → True."""
+        cc_raster.data[:] = [[0.3, 0.5, 0.8]]
+        result = CCFilter(0.5).generate_mask(cc_raster)
+        assert result[0, 0] == False
+        assert result[0, 1] == True
+        assert result[0, 2] == True
+
+    def test_below_threshold_masked(self, cc_raster):
+        """CC < threshold → False."""
+        cc_raster.data[:] = [[0.3]]
+        result = CCFilter(0.5).generate_mask(cc_raster)
+        assert result[0, 0] == False
+
+    def test_boundary_inclusive(self, cc_raster):
+        """CC exactly at threshold (uses >=) → True."""
+        cc_raster.data[:] = [[0.5]]
+        result = CCFilter(0.5).generate_mask(cc_raster)
+        assert result[0, 0] == True
+
+    def test_masked_cc_filled_zero(self):
+        """Masked CC filled with 0.0 → below threshold → False."""
+        from .conftest import MockRaster
+        data = ma.array([[0.8]], mask=[[True]])
+        raster = MockRaster(data=data)
+        result = CCFilter(0.5).generate_mask(raster)
+        assert result[0, 0] == False
+
+    def test_return_bool_dtype(self, cc_raster):
+        """Result dtype is bool."""
+        result = CCFilter(0.5).generate_mask(cc_raster)
+        assert result.dtype == bool
+
+
+class TestSlopeMask:
+    """Tests for SlopeMask — slope angle bounds."""
+
+    def test_interior_in_range_kept(self, ramp_raster, slope_dem_raster):
+        """Interior slope ≈ 45°, bounds (0, 80): interior → True."""
+        result = SlopeMask(min_slope=0, max_slope=80).generate_mask(
+            ramp_raster, dem=slope_dem_raster
+        )
+        assert result[5, 5] == True
+
+    def test_above_max_masked(self, ramp_raster, slope_dem_raster):
+        """Interior slope ≈ 45°, max_slope=30: interior → False."""
+        result = SlopeMask(min_slope=0, max_slope=30).generate_mask(
+            ramp_raster, dem=slope_dem_raster
+        )
+        assert result[5, 5] == False
+
+    def test_below_min_masked(self, ramp_raster):
+        """Flat DEM (slope=0°), min_slope=5: all → False."""
+        from .conftest import MockRaster
+        flat_dem = MockRaster(data=ma.array(np.ones((10, 10)) * 300.0))
+        result = SlopeMask(min_slope=5, max_slope=80).generate_mask(
+            ramp_raster, dem=flat_dem
+        )
+        assert result.all() == False
+
+    def test_dem_shape_mismatch_raises(self, ramp_raster, dem_raster):
+        """Mismatched DEM shape → AssertionError."""
+        from .conftest import MockRaster
+        dem_bad = MockRaster(data=ma.array(np.zeros((15, 15))))
+        with pytest.raises(AssertionError, match="must match displacement"):
+            SlopeMask().generate_mask(ramp_raster, dem=dem_bad)
+
+    def test_result_bool_shape(self, ramp_raster, slope_dem_raster):
+        """Result shape matches input raster, dtype=bool."""
+        result = SlopeMask().generate_mask(ramp_raster, dem=slope_dem_raster)
+        assert result.shape == ramp_raster.data.shape
+        assert result.dtype == bool
+
+    def test_masked_dem_pixel_excluded(self, ramp_raster):
+        """Masked DEM pixel → result False."""
+        from .conftest import MockRaster
+        dem_data = np.ones((10, 10)) * 300.0
+        dem_masked = ma.array(dem_data, mask=False)
+        dem_masked.mask = np.zeros((10, 10), dtype=bool)
+        dem_masked.mask[3, 3] = True
+        dem_raster = MockRaster(data=dem_masked)
+        result = SlopeMask().generate_mask(ramp_raster, dem=dem_raster)
+        assert result[3, 3] == False
+
+
+class TestShadowMask:
+    """Tests for ShadowMask — hillshade-based shadow masking."""
+
+    def test_lit_terrain_kept(self, ramp_raster):
+        """Flat DEM, sun at 45° elev, hillshade ≈ 0.707, thresh=0.1: all → True."""
+        from .conftest import MockRaster
+        flat_dem = MockRaster(data=ma.array(np.ones((10, 10)) * 500.0))
+        result = ShadowMask(shadow_threshold=0.1).generate_mask(
+            ramp_raster, dem=flat_dem, sun_azimuth_deg=0, sun_elevation_deg=45
+        )
+        assert result.all() == True
+
+    def test_shadowed_terrain_masked(self, ramp_raster):
+        """thresh=0.9 > hillshade ≈ 0.707: all → False."""
+        from .conftest import MockRaster
+        flat_dem = MockRaster(data=ma.array(np.ones((10, 10)) * 500.0))
+        result = ShadowMask(shadow_threshold=0.9).generate_mask(
+            ramp_raster, dem=flat_dem, sun_azimuth_deg=0, sun_elevation_deg=45
+        )
+        assert result.any() == False
+
+    def test_default_threshold(self):
+        """Default threshold is 0.1."""
+        mask = ShadowMask()
+        assert mask.shadow_threshold == 0.1
+
+    def test_missing_dem_raises(self, ramp_raster):
+        """Missing dem= kwarg → KeyError."""
+        with pytest.raises(KeyError):
+            ShadowMask().generate_mask(
+                ramp_raster, sun_azimuth_deg=0, sun_elevation_deg=45
+            )
+
+
+class TestSnowMask:
+    """Tests for SnowMask — snow detection."""
+
+    def test_disabled_all_true(self, ramp_raster):
+        """enabled=False: all pixels → True."""
+        result = SnowMask(enabled=False).generate_mask(ramp_raster)
+        assert result.all() == True
+        assert result.shape == (10, 10)
+
+    def test_numpy_snow_inverted(self, ramp_raster):
+        """snow=True pixels masked out: snow inverted to get keep mask."""
+        snow_mask = np.array([[True, False], [False, True]])
+        from .conftest import MockRaster
+        snow_raster = MockRaster(data=ma.array(snow_mask.astype(float)))
+        result = SnowMask().generate_mask(
+            type(ramp_raster)(data=ma.array(np.ones((2, 2)))),
+            snow_mask=snow_raster
+        )
+        assert result[0, 0] == False  # was True → inverted
+        assert result[0, 1] == True   # was False → inverted
+
+    def test_raster_snow_inverted(self, ramp_raster):
+        """snow_mask as MockRaster with bool data → inverted."""
+        from .conftest import MockRaster
+        snow_data = np.array([[True, False]])
+        snow_raster = MockRaster(data=ma.array(snow_data))
+        small_raster = type(ramp_raster)(data=ma.array(np.ones((1, 2))))
+        result = SnowMask().generate_mask(small_raster, snow_mask=snow_raster)
+        assert result[0, 0] == False
+        assert result[0, 1] == True
+
+    def test_no_kwarg_raises(self, ramp_raster):
+        """No snow_mask= kwarg → NotImplementedError."""
+        with pytest.raises(NotImplementedError, match="snow_mask="):
+            SnowMask().generate_mask(ramp_raster)
+
+    def test_enabled_default_true(self):
+        """Default enabled=True."""
+        mask = SnowMask()
+        assert mask.enabled == True
+
+
+class TestCloudMask:
+    """Tests for CloudMask — cloud detection."""
+
+    def test_disabled_all_true(self, ramp_raster):
+        """enabled=False: all → True."""
+        result = CloudMask(enabled=False).generate_mask(ramp_raster)
+        assert result.all() == True
+
+    def test_numpy_cloud_inverted(self, ramp_raster):
+        """cloud=True pixels masked out."""
+        from .conftest import MockRaster
+        cloud_data = np.array([[True, False]])
+        cloud_raster = MockRaster(data=ma.array(cloud_data))
+        small_raster = type(ramp_raster)(data=ma.array(np.ones((1, 2))))
+        result = CloudMask().generate_mask(small_raster, cloud_mask=cloud_raster)
+        assert result[0, 0] == False
+        assert result[0, 1] == True
+
+    def test_raster_cloud_inverted(self, ramp_raster):
+        """Same as numpy case via MockRaster."""
+        from .conftest import MockRaster
+        cloud_data = np.array([[False, True]])
+        cloud_raster = MockRaster(data=ma.array(cloud_data))
+        small_raster = type(ramp_raster)(data=ma.array(np.ones((1, 2))))
+        result = CloudMask().generate_mask(small_raster, cloud_mask=cloud_raster)
+        assert result[0, 0] == True
+        assert result[0, 1] == False
+
+    def test_no_kwarg_raises(self, ramp_raster):
+        """No cloud_mask= kwarg → NotImplementedError."""
+        with pytest.raises(NotImplementedError, match="cloud_mask="):
+            CloudMask().generate_mask(ramp_raster)
+
+    def test_enabled_default_true(self):
+        """Default enabled=True."""
+        mask = CloudMask()
+        assert mask.enabled == True
+
+
+class TestStableAreaMask:
+    """Tests for StableAreaMask — known unstable area exclusion."""
+
+    def test_numpy_bool_passthrough(self, ramp_raster):
+        """Boolean array input: pixels marked False stay False."""
+        stable_arr = np.ones((10, 10), dtype=bool)
+        stable_arr[2, 2] = False
+        result = StableAreaMask(stable_arr).generate_mask(ramp_raster)
+        assert result[2, 2] == False
+        assert result[0, 0] == True
+
+    def test_all_true_numpy(self, ramp_raster):
+        """All-True array: all pixels → True."""
+        stable_arr = np.ones((10, 10), dtype=bool)
+        result = StableAreaMask(stable_arr).generate_mask(ramp_raster)
+        assert result.all() == True
+
+    def test_gu_vector_mock(self, ramp_raster):
+        """Mock geoutils.Vector with create_mask() → result inverted."""
+        import geoutils as gu
+        mock_vector = MagicMock(spec=gu.Vector)
+        from .conftest import MockRaster
+        moving_data = np.array([[True, False], [False, True]])
+        moving_raster = MockRaster(data=ma.array(moving_data.astype(float)))
+        mock_vector.create_mask.return_value = moving_raster
+        small_raster = type(ramp_raster)(data=ma.array(np.ones((2, 2))))
+        result = StableAreaMask(mock_vector).generate_mask(small_raster)
+        assert result[0, 0] == False  # moving → inverted
+        assert result[0, 1] == True   # not moving → inverted
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "Known bug: StableAreaMask str/Path code path attempts to import "
+            "_build_stable_area_mask and _load_stable_mask_gdf from corrections.py, "
+            "which don't exist there (logic is in BaseCorrection._load_gdf and "
+            "BaseCorrection._rasterize_moving_areas)"
+        ),
+    )
+    def test_str_path_import_error(self, ramp_raster):
+        """str/Path input → ImportError (known bug)."""
+        StableAreaMask("path/to/file.geojson").generate_mask(ramp_raster)
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "Known bug: StableAreaMask GeoDataFrame code path has same ImportError "
+            "as str/Path"
+        ),
+    )
+    def test_gdf_import_error(self, ramp_raster):
+        """GeoDataFrame input → ImportError (known bug)."""
+        import geopandas as gpd
+        gdf = gpd.GeoDataFrame()
+        StableAreaMask(gdf).generate_mask(ramp_raster)
+
+
+class TestFilterPipeline:
+    """Tests for FilterPipeline — sequential mask combination."""
+
+    def test_construct_with_plus(self):
+        """Using +: OutlierFilter() + CCFilter() → FilterPipeline."""
+        fp = OutlierFilter() + CCFilter(0.6)
+        assert isinstance(fp, FilterPipeline)
+        assert len(fp.masks) == 2
+
+    def test_three_mask_chain(self):
+        """Three masks chained with +."""
+        fp = OutlierFilter() + CCFilter(0.6) + SnowMask(enabled=False)
+        assert len(fp.masks) == 3
+
+    def test_compute_ands_masks(self):
+        """Masks AND-combined: if one rejects, result is False."""
+        from .conftest import MockRaster
+        data = np.array([[3.0]])
+        raster = MockRaster(data=ma.array(data))
+        fp = OutlierFilter((-5, 5)) + CCFilter(0.8)
+        cc_data = np.array([[0.6]])
+        cc_raster = MockRaster(data=ma.array(cc_data))
+        result = fp.compute(raster, cc=cc_raster)
+        assert result[0, 0] == False  # CC filter kills it
+
+    def test_compute_all_valid(self, ramp_raster, cc_raster):
+        """All-pass masks: all pixels → True."""
+        fp = OutlierFilter((-1e6, 1e6)) + CCFilter(0.0)
+        result = fp.compute(ramp_raster, cc=cc_raster)
+        assert result.all() == True
+
+    def test_compute_all_invalid(self, ramp_raster):
+        """Tight threshold kills all pixels."""
+        fp = OutlierFilter((0, 1))  # excludes most ramp values
+        result = fp.compute(ramp_raster)
+        assert result.any() == False
+
+    def test_apply_returns_tuple(self, ramp_raster):
+        """apply(xDisp, yDisp) returns tuple of 2 rasters."""
+        fp = OutlierFilter()
+        xc, yc = fp.apply(ramp_raster, ramp_raster)
+        assert hasattr(xc, "data")
+        assert hasattr(yc, "data")
+
+    def test_add_correction_raises(self):
+        """mask + correction → TypeError."""
+        mask = OutlierFilter()
+        corr = RampCorrection()
+        with pytest.raises(TypeError, match="Cannot chain"):
+            mask + corr
+
+    def test_repr(self):
+        """repr shows mask names."""
+        fp = OutlierFilter() + CCFilter(0.5)
+        assert "OutlierFilter" in repr(fp)
+        assert "CCFilter" in repr(fp)
+
+
+class TestBaseMaskApply:
+    """Tests for BaseMask.apply() and apply_single()."""
+
+    def test_apply_single_masks_outlier(self, ramp_raster):
+        """apply_single: outlier pixel becomes masked."""
+        from .conftest import MockRaster
+        data = np.array([[1.0, 5.0, 15.0, -3.0]])
+        raster = MockRaster(data=ma.array(data))
+        result = OutlierFilter((-10, 10)).apply_single(raster)
+        assert result.data.mask[0, 2] == True
+
+    def test_apply_single_meta_newly_masked(self, ramp_raster):
+        """apply_single sets meta['newly_masked'] and meta['masked_fraction']."""
+        from .conftest import MockRaster
+        data = np.array([[1.0, 5.0, 15.0]])
+        raster = MockRaster(data=ma.array(data))
+        corr = OutlierFilter((-10, 10))
+        result = corr.apply_single(raster)
+        assert corr.meta["newly_masked"] == 1
+        assert corr.meta["masked_fraction"] == pytest.approx(1 / 3, abs=1e-9)
+
+    def test_apply_returns_two_rasters(self, ramp_raster):
+        """apply(xDisp, yDisp) returns two rasters."""
+        corr = OutlierFilter()
+        xc, yc = corr.apply(ramp_raster, ramp_raster)
+        assert hasattr(xc, "data")
+        assert hasattr(yc, "data")
+
+    def test_apply_meta_both_components(self, ramp_raster):
+        """apply() sets meta with both x and y component counts."""
+        corr = OutlierFilter((-5, 5))
+        xc, yc = corr.apply(ramp_raster, ramp_raster)
+        assert "newly_masked_x" in corr.meta
+        assert "newly_masked_y" in corr.meta
+        assert "masked_fraction_x" in corr.meta
+        assert "masked_fraction_y" in corr.meta
+
+    def test_apply_preserves_existing_mask(self, partial_mask_raster):
+        """Pre-masked pixel stays masked regardless of value."""
+        corr = OutlierFilter((-1e6, 1e6))
+        result = corr.apply_single(partial_mask_raster)
+        assert result.data.mask[0, 0] == True
+        assert result.data.mask[9, 9] == True
