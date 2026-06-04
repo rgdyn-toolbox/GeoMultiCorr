@@ -35,4 +35,5 @@ from geomulticorr.stats.stats import (
     load_pair_stats,
     update_pair_stats,
     save_raw_corr_stats,
+    save_corrected_stats,
 )
