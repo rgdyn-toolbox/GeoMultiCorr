@@ -4,31 +4,16 @@ from tqdm import tqdm
 import itertools
 import rasterio
 import geoutils as gu
+import pandas as pd
 import geopandas as gpd
-from telenvi import raster_tools as rt
 from rasterio.features import shapes
 
-import cv2 as cv
+# import cv2 as cv
 import numpy as np
 from sklearn import cluster
 
 import geomulticorr.core.thumb as gmc_thumb
-
-# * Works properly
-def print_infoBM(text: str,
-                bold: bool = False) -> None:
-    """Prints a formatted message to the console.
-
-    Args:
-        text (str): The string to be printed.
-        bold (bool, optional): Whether to print the text in bold style. Defaults to False.
-    """
-    GMC_TEXT = "[ GMC-info ] :"
-    if bold:
-        print(f"\033[1m{GMC_TEXT} {text}\033[1m")
-    else:
-        print(f"{GMC_TEXT} {text}")
-#END def
+from geomulticorr._logging import logger
 
 class Pzone:
 
@@ -77,6 +62,7 @@ class Pzone:
         strategy: str = "consecutive",
         max_step: int | None = None,
         max_dt_days: int | None = None,
+        sensor_filter: str | None = None,
     ) -> list:
         """Return Pair objects for valid thumbs using the specified pairing strategy.
 
@@ -86,11 +72,13 @@ class Pzone:
                 distance between paired thumbs.
             max_dt_days: Optional upper bound on the absolute date difference
                 (in days). Pairs exceeding this are dropped.
+            sensor_filter: Optional sensor name substring to restrict thumbs
+                (e.g. ``"spot"``, ``"planetscope"``).
 
         Returns:
             List of Pair objects.
         """
-        thumbs = sorted(self.get_valid_thumbs(), key=lambda t: t.th_date_datetime)
+        thumbs = sorted(self.get_valid_thumbs(sensor_filter=sensor_filter), key=lambda t: t.th_date_datetime)
         n = len(thumbs)
         pairs_idx = []
 
@@ -139,16 +127,18 @@ class Pzone:
         strategy: str = "consecutive",
         max_step: int | None = None,
         max_dt_days: int | None = None,
+        sensor_filter: str | None = None,
     ) -> gpd.GeoDataFrame:
-        pairs = self.get_pairs_with_strategy(strategy, max_step, max_dt_days)
+        pairs = self.get_pairs_with_strategy(strategy, max_step, max_dt_days, sensor_filter=sensor_filter)
         return gpd.GeoDataFrame([p.to_pdserie() for p in pairs])
 
 
-    def get_valid_thumbs(self):
+    def get_valid_thumbs(self, sensor_filter: str | None = None):
         """
         Renvoie les vignettes selectionnées par l'user dans qgis, en modifiant la valeur attributaire "th_valid" dans la table Thumbs
         """
-        ths = self.session.get_thumbs_overview(self.pz_name)
+        criterias = [self.pz_name] + ([sensor_filter] if sensor_filter else [])
+        ths = self.session.get_thumbs_overview(criterias)
         ths_valid = ths[ths.th_valid == '1']
         gmc_ths_valid = [gmc_thumb.Thumb(th.th_path) for th in ths_valid.iloc]
         return gmc_ths_valid
@@ -167,7 +157,7 @@ class Pzone:
         if self.pz_dem_path.exists():
             return gu.Raster(str(self.pz_dem_path), load_data=True)
         else:
-            print(f'No dem for pzone {self.pz_name}')
+            logger.warning(f'No dem for pzone {self.pz_name}')
             return False
 
     def get_complete_pairs(self):
@@ -257,35 +247,35 @@ class Pzone:
         x = cluster_geoim(self.add_moving_areas())
         return x
 
-    def denoise_moving_areas(self, operator_size=30, n_clusters=2, mode='m', save=True):
-        """
-        Create new raster of the cumul of the moving areas, normally with less noise
-        """
+    # def denoise_moving_areas(self, operator_size=30, n_clusters=2, mode='m', save=True):
+    #     """
+    #     Create new raster of the cumul of the moving areas, normally with less noise
+    #     """
 
-        # Build output filepath
-        outpath = Path(self.session.path_raster_data, self.pz_name, f"{self.pz_name}_moving-areas_denoised-{operator_size}_round-0.tif")
+    #     # Build output filepath
+    #     outpath = Path(self.session.path_raster_data, self.pz_name, f"{self.pz_name}_moving-areas_denoised-{operator_size}_round-0.tif")
 
-        # Build a morphological operator
-        operator = np.ones((operator_size, operator_size))
+    #     # Build a morphological operator
+    #     operator = np.ones((operator_size, operator_size))
 
-        # Get the moving areas from displacement field by k-means clustering
-        mas = self.cluster_addition()
+    #     # Get the moving areas from displacement field by k-means clustering
+    #     mas = self.cluster_addition()
 
-        # Extract the array and convert it compatible with the operator
-        mas_ar = mas.array.astype('uint8')
+    #     # Extract the array and convert it compatible with the operator
+    #     mas_ar = mas.array.astype('uint8')
 
-        # Denoise
-        mas_denoised_ar = cv.morphologyEx(mas_ar, cv.MORPH_CLOSE, operator)
+    #     # Denoise
+    #     mas_denoised_ar = cv.morphologyEx(mas_ar, cv.MORPH_CLOSE, operator)
 
-        # Build a new geoim and change his array
-        mas_denoised = self.get_thumbs()[0].get_geoim().copy()
-        mas_denoised.array = mas_denoised_ar
+    #     # Build a new geoim and change his array
+    #     mas_denoised = self.get_thumbs()[0].get_geoim().copy()
+    #     mas_denoised.array = mas_denoised_ar
 
-        # Save
-        if save:
-            mas_denoised.save(str(outpath))
+    #     # Save
+    #     if save:
+    #         mas_denoised.save(str(outpath))
 
-        return mas_denoised
+    #     return mas_denoised
 
     def vectorize_multitemporal_moving_areas(self, epsg, min_surf = '', operator_size=30, n_clusters=2, mode='m'):
         mask = None
@@ -312,7 +302,7 @@ class Pzone:
                                    fixed_step: int = 3) -> gpd.GeoDataFrame:
         updated_frames = []
         for pz in self.get_pzones():
-            print_infoBM(f"Updating pairs for PZone: '{pz.pz_name}'")
+            logger.info(f"Updating pairs for PZone: '{pz.pz_name}'")
             pairs = pz.get_pairs_with_strategy(strategy, fixed_step)         # GeoDataFrame
             if not pairs.empty:
                 updated_frames.append(pairs)
