@@ -51,7 +51,7 @@ from datetime import datetime
 # Importing third-party libraries
 import itertools
 import numpy as np
-from osgeo import gdal
+# from osgeo import gdal
 import geoutils as gu
 import pandas as pd
 import geopandas as gpd
@@ -821,6 +821,8 @@ class Session:
         strategy: str = "consecutive",
         max_step: int | None = None,
         max_dt_days: int | str | None = None,
+        sensor_filter: str | None = None,
+        append: bool = False,
     ) -> gpd.GeoDataFrame:
         """Build pairs for all pzones using the specified strategy and persist to geodatabase.
 
@@ -832,6 +834,12 @@ class Session:
                 number of days or a duration string: ``'30D'``, ``'6M'``, ``'1Y'``,
                 ``'2W'``. Months and years use fixed approximations (30 d/month,
                 365 d/year), which is appropriate given the 1-day image resolution.
+            sensor_filter: Optional sensor name substring to restrict thumbs
+                (e.g. ``"spot"``, ``"planetscope"``). Pairs are built only from
+                thumbs whose path contains this string.
+            append: If ``True``, new pairs are concatenated with the existing
+                ``Pairs`` layer (duplicates resolved by ``pa_path``). If ``False``
+                (default), the layer is fully replaced.
 
         Returns:
             GeoDataFrame of all pairs written to the ``Pairs`` layer.
@@ -840,17 +848,24 @@ class Session:
         updated_frames = []
         for pz in self.get_pzones():
             logger.info(f"Updating pairs for PZone: '{pz.pz_name}'")
-            pairs_gdf = pz.get_valid_pairs_with_strategy_overview(strategy, max_step, max_dt_days)
+            pairs_gdf = pz.get_valid_pairs_with_strategy_overview(strategy, max_step, max_dt_days, sensor_filter=sensor_filter)
             if not pairs_gdf.empty:
                 updated_frames.append(pairs_gdf)
 
         if updated_frames:
-            updated = pd.concat(updated_frames, ignore_index=True)
-            if "geometry" not in updated.columns:
+            new_pairs = pd.concat(updated_frames, ignore_index=True)
+            if "geometry" not in new_pairs.columns:
                 raise ValueError("No 'geometry' column found in pairs DataFrame.")
-            updated = gpd.GeoDataFrame(updated, geometry="geometry", crs=self.epsg)
+            new_pairs = gpd.GeoDataFrame(new_pairs, geometry="geometry", crs=self.epsg)
         else:
-            updated = gpd.GeoDataFrame(geometry=[], crs=self.epsg)
+            new_pairs = gpd.GeoDataFrame(geometry=[], crs=self.epsg)
+
+        if append and not self._pairs.empty:
+            combined = pd.concat([self._pairs, new_pairs], ignore_index=True)
+            combined = combined.drop_duplicates(subset=["pa_path"]).reset_index(drop=True)
+            updated = gpd.GeoDataFrame(combined, geometry="geometry", crs=self.epsg)
+        else:
+            updated = new_pairs
 
         updated.to_file(self.path_geodb, layer="Pairs")
         self._pairs = updated
@@ -1086,29 +1101,92 @@ class Session:
         center: tuple = (46.8, 8.2),
         zoom: int = 6,
         default_crs: str = "EPSG:4326",
+        raster_bank: gpd.GeoDataFrame | None = None,
     ) -> callable:
         """Launch an interactive map for drawing a pzone polygon.
 
         Returns a callable; call it after drawing to get a GeoDataFrame of the
         drawn polygons reprojected to ``self.epsg``.
 
+        When *raster_bank* is provided the image footprints are overlaid on the
+        map (one layer per ``sensor_family``), the view is auto-fitted to their
+        extent, and a layers control lets you toggle each sensor on/off.
+
         Usage::
 
-            get_gdf = session.draw_polygon_manually()
+            raster_bank = session.map_georasters_bank(...)
+            get_gdf = session.draw_polygon_manually(raster_bank=raster_bank)
             # draw on the map, then:
             gdf = get_gdf()
             session.insert_pzone(gdf.geometry.iloc[0], ...)
 
         Args:
-            center: Initial map center as (lat, lon). Defaults to (46.8, 8.2).
-            zoom: Initial map zoom level.
+            center: Initial map center as (lat, lon). Used only when
+                *raster_bank* is None. Defaults to (46.8, 8.2).
+            zoom: Initial map zoom level. Used only when *raster_bank* is None.
             default_crs: CRS of coordinates returned by ipyleaflet (always EPSG:4326).
+            raster_bank: Optional GeoDataFrame returned by
+                :meth:`map_georasters_bank`.  When supplied, footprints are
+                shown on the map, coloured by ``sensor_family``, and the view
+                is fitted to their total extent.
 
         Returns:
             A callable ``get_gdf()`` that returns a GeoDataFrame in ``self.epsg``,
             or None if no polygon was drawn.
         """
+        from ipyleaflet import GeoData, LayersControl
+
+        _SENSOR_COLORS = {
+            "spot":      "#e6194b",
+            "sentinel2": "#3cb44b",
+            "landsat":   "#4363d8",
+            "pleiades":  "#f58231",
+            "planet":    "#911eb4",
+            "worldview": "#42d4f4",
+        }
+
+        def _json_safe(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+            """Stringify columns whose values are not JSON-serialisable (e.g. date, Path)."""
+            _ok = (str, int, float, bool, type(None))
+            out = gdf.copy()
+            for col in out.columns:
+                if col == "geometry":
+                    continue
+                sample = out[col].dropna()
+                if not sample.empty and not isinstance(sample.iloc[0], _ok):
+                    out[col] = out[col].astype(str)
+            return out
+
         m = Map(center=center, zoom=zoom)
+
+        if raster_bank is not None:
+            rb_4326 = raster_bank.to_crs("EPSG:4326")
+
+            if "sensor_family" in rb_4326.columns:
+                for sensor, group in rb_4326.groupby("sensor_family"):
+                    color = _SENSOR_COLORS.get(str(sensor).lower(), "#aaaaaa")
+                    m.add_layer(GeoData(
+                        geo_dataframe=_json_safe(group.reset_index(drop=True)),
+                        style={
+                            "color": color, "weight": 1.5,
+                            "fillColor": color, "fillOpacity": 0.1,
+                        },
+                        hover_style={"fillOpacity": 0.4},
+                        name=str(sensor),
+                    ))
+            else:
+                m.add_layer(GeoData(
+                    geo_dataframe=_json_safe(rb_4326),
+                    style={"color": "#3388ff", "weight": 1.5, "fillOpacity": 0.1},
+                    hover_style={"fillOpacity": 0.4},
+                    name="Raster Bank",
+                ))
+
+            m.add_control(LayersControl())
+
+            bounds = rb_4326.total_bounds  # [minx, miny, maxx, maxy] = [lon_min, lat_min, lon_max, lat_max]
+            m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+
         draw_control = DrawControl(
             polyline={}, circlemarker={}, marker={}, circle={},
             rectangle={"shapeOptions": {"color": "#3388ff", "weight": 3}},
@@ -1129,7 +1207,6 @@ class Session:
         def get_gdf():
             if drawn_polygons:
                 gdf = gpd.GeoDataFrame(geometry=drawn_polygons, crs=default_crs)
-                # Normalize to session CRS if needed
                 target_crs = getattr(self, 'epsg', None)
                 if target_crs and str(gdf.crs) != f"EPSG:{target_crs}":
                     try:
@@ -2035,6 +2112,114 @@ class Session:
 
         logger.success(
             f"Extracted raw displacements for {n_done}/{len(pairs)} pair(s) "
+            f"({n_skip} skipped)."
+        )
+        return results
+
+    def apply_pairs_corrections(
+        self,
+        pipeline,
+        criterias: str | list[str] = "",
+        overwrite: bool = False,
+        save_plot: bool = True,
+        **kwargs,
+    ) -> dict:
+        """Apply a correction pipeline to all processed pairs.
+
+        Iterates over pairs matching *criterias* that have EW and NS rasters on
+        disk, runs *pipeline*.apply(), writes ``*_EW_corr.tif`` /
+        ``*_NS_corr.tif``, and optionally saves a control figure.
+
+        Args:
+            pipeline: A :class:`~geomulticorr.corrections.CorrectionPipeline`
+                or any :class:`~geomulticorr.corrections.BaseCorrection` instance.
+            criterias: Same filter syntax as :meth:`get_pairs`.
+            overwrite: Re-process pairs whose corrected files already exist.
+            save_plot: Save a before/after control figure for each pair (default ``True``).
+            **kwargs: Forwarded to ``pipeline.apply()``
+                (e.g. ``cc=``, ``dem=``, ``stable_mask=``).
+
+        Returns:
+            Dict mapping ``pa_key`` → ``{"ew": Path, "ns": Path}`` or ``None`` if skipped.
+        """
+        import geoutils as gu
+        import matplotlib.pyplot as plt
+        from geomulticorr.utils.gmc_functions import plot_correction_result
+
+        pairs = self.get_pairs(criterias)
+        results: dict = {}
+        n_done = 0
+        n_skip = 0
+
+        for pair in pairs:
+            ew_corr = pair.pa_path / f"{pair.pa_key}-F_EW_corr.tif"
+            ns_corr = pair.pa_path / f"{pair.pa_key}-F_NS_corr.tif"
+
+            if not pair.pa_ew_path.exists() or not pair.pa_ns_path.exists():
+                logger.warning(f"Skipping '{pair.pa_key}' — EW/NS rasters not found")
+                results[pair.pa_key] = None
+                n_skip += 1
+                continue
+
+            if not overwrite and ew_corr.exists() and ns_corr.exists():
+                logger.info(f"Already corrected '{pair.pa_key}', skipping (use overwrite=True to redo)")
+                results[pair.pa_key] = None
+                n_skip += 1
+                continue
+
+            logger.launch(f"Applying corrections for '{pair.pa_key}'")
+            try:
+                x_cur = gu.Raster(str(pair.pa_ew_path))
+                y_cur = gu.Raster(str(pair.pa_ns_path))
+
+                # Auto-inject cc= from the pair folder if not already provided
+                pair_kwargs = dict(kwargs)
+                if "cc" not in pair_kwargs:
+                    cc_path = pair.pa_path / f"{pair.pa_key}_CC.tif"
+                    if not cc_path.exists():
+                        cc_path = pair.pa_cc_raw_path  # fallback to -ncc.tif
+                    if cc_path.exists():
+                        pair_kwargs["cc"] = gu.Raster(str(cc_path))
+
+                # Validate required kwargs upfront for all steps
+                steps = getattr(pipeline, "steps", [pipeline])
+                missing = [
+                    f"{type(s).__name__} requires '{k}'"
+                    for s in steps
+                    for k in getattr(s, "_REQUIRED_KWARGS", ())
+                    if k not in pair_kwargs
+                ]
+                if missing:
+                    raise ValueError(
+                        "Missing required kwargs — pass them to apply_pairs_corrections():\n  "
+                        + "\n  ".join(missing)
+                    )
+                for step in steps:
+                    x_prev, y_prev = x_cur, y_cur
+                    x_cur, y_cur = step.apply(x_prev, y_prev, **pair_kwargs)
+
+                    if save_plot:
+                        step_name = type(step).__name__
+                        plot_path = pair.pa_path / f"{pair.pa_key}_{step_name}_disp.jpg"
+                        fig = plot_correction_result(step, x_prev, x_cur, y_prev, y_cur,
+                                                     fig_name=f"{pair.pa_key} — {step_name}",
+                                                     **pair_kwargs)
+                        fig.savefig(str(plot_path), dpi=150, format='JPEG', bbox_inches="tight")
+                        plt.close(fig)
+                        logger.save(f"Correction plot saved: {plot_path.name}")
+
+                x_cur.save(str(ew_corr))
+                y_cur.save(str(ns_corr))
+                logger.file(f"Saved corrected EW: {ew_corr.name}")
+                logger.file(f"Saved corrected NS: {ns_corr.name}")
+                results[pair.pa_key] = {"ew": ew_corr, "ns": ns_corr}
+                n_done += 1
+            except Exception as exc:
+                logger.error(f"Failed for '{pair.pa_key}': {exc}")
+                results[pair.pa_key] = None
+
+        logger.success(
+            f"Applied corrections for {n_done}/{len(pairs)} pair(s) "
             f"({n_skip} skipped)."
         )
         return results
