@@ -21,3 +21,6 @@ devs_logs/
 # Claude files
 .claude/
 CLAUDE.md
+
+# Unit test cache and coverage reports
+.pytest_cache/
