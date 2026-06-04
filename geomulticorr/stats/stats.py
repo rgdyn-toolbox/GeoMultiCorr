@@ -147,6 +147,59 @@ def compute_raster_stats(
 
     return stats
 
+def _compute_array_stats(
+    arr_ma: np.ma.MaskedArray,
+    percentiles: list[int] | None = None,
+) -> dict:
+    """Compute descriptive statistics from an in-memory masked array.
+
+    Produces the same dict format as :func:`compute_raster_stats`:
+    ``count_total``, ``count_valid``, ``valid_fraction``, ``mean``,
+    ``median``, ``std``, ``nmad``, ``min``, ``max``, and one key per
+    percentile (e.g. ``p5``).
+
+    Args:
+        arr_ma:      Input masked array (any shape; flattened internally).
+        percentiles: Percentile values to compute (default [5, 25, 50, 75, 95]).
+
+    Returns:
+        Stats dict with the same keys as :func:`compute_raster_stats`.
+    """
+    if percentiles is None:
+        percentiles = [5, 25, 50, 75, 95]
+
+    arr = np.ma.filled(arr_ma, np.nan).astype(float).ravel()
+    count_total = int(arr.size)
+    valid = arr[np.isfinite(arr)]
+    count_valid = int(valid.size)
+    valid_fraction = round(count_valid / count_total, 6) if count_total > 0 else 0.0
+
+    def _r(v: float) -> float:
+        return float(round(v, 6))
+
+    stats: dict = {
+        "count_total":    count_total,
+        "count_valid":    count_valid,
+        "valid_fraction": valid_fraction,
+    }
+    if count_valid == 0:
+        for key in ("mean", "median", "std", "nmad", "min", "max"):
+            stats[key] = float("nan")
+        for p in percentiles:
+            stats[f"p{p}"] = float("nan")
+        return stats
+
+    stats.update({
+        "mean":   _r(np.mean(valid)),
+        "median": _r(np.median(valid)),
+        "std":    _r(np.std(valid)),
+        "nmad":   _r(nmad(valid)),
+        "min":    _r(np.min(valid)),
+        "max":    _r(np.max(valid)),
+    })
+    for p in percentiles:
+        stats[f"p{p}"] = _r(float(np.percentile(valid, p)))
+    return stats
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pair-level utilities
@@ -303,6 +356,61 @@ def update_pair_stats(pair, section: str, stats_data: dict) -> dict:
         json.dump(stats_dict, f, indent=2)
 
     return stats_dict
+
+
+def save_corrected_stats(
+    pair,
+    xDisp_corr: gu.Raster,
+    yDisp_corr: gu.Raster,
+    correction_name: str,
+    percentiles: list[int] | None = None,
+) -> dict:
+    """Persist corrected displacement statistics under a named key.
+
+    Loads the existing ``"corrected_stats"`` section, adds (or replaces) an
+    entry keyed by *correction_name* containing ``{"ew": {...}, "ns": {...}}``,
+    then writes the merged result back to disk.  Calling this function multiple
+    times with different *correction_name* values accumulates entries without
+    overwriting prior ones.
+
+    Args:
+        pair:            A ``Pair`` instance (must have ``pa_stats_path``).
+        xDisp_corr:      Corrected EW displacement (``gu.Raster``).
+        yDisp_corr:      Corrected NS displacement (``gu.Raster``).
+        correction_name: Key to use inside ``"corrected_stats"``
+                         (e.g. ``"MedianCentering"`` or ``str(pipeline)``).
+        percentiles:     Percentile values to compute (default [5, 25, 50, 75, 95]).
+
+    Returns:
+        The full updated stats dict (all sections).
+
+    Example::
+
+        xc, yc = gmc.MedianCentering().apply(xDisp, yDisp)
+        save_corrected_stats(pair, xc, yc, "MedianCentering")
+
+        pipeline = gmc.CCFilter(0.6) + gmc.OutlierFilter((-15, 15))
+        xc, yc = pipeline.apply(xDisp, yDisp, cc=cc_raster)
+        save_corrected_stats(pair, xc, yc, str(pipeline))
+    """
+    if pair.pa_stats_path.exists():
+        corrected = load_pair_stats(pair).get("corrected_stats", {})
+    else:
+        corrected = {}
+
+    corrected[correction_name] = {
+        "ew": _compute_array_stats(xDisp_corr.data, percentiles),
+        "ns": _compute_array_stats(yDisp_corr.data, percentiles),
+    }
+
+    result = update_pair_stats(pair, "corrected_stats", corrected)
+    ew_valid = corrected[correction_name]["ew"]["count_valid"]
+    ns_valid = corrected[correction_name]["ns"]["count_valid"]
+    logger.statistics(
+        f"Corrected stats saved for '{pair.pa_key}' [{correction_name}] "
+        f"(ew valid={ew_valid}, ns valid={ns_valid})"
+    )
+    return result
 
 
 def save_raw_corr_stats(pair) -> dict:
