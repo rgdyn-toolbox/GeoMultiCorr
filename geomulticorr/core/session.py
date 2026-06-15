@@ -2118,33 +2118,64 @@ class Session:
 
     def apply_pairs_corrections(
         self,
-        pipeline,
+        correction_pipeline=None,
+        filter_pipeline=None,
         criterias: str | list[str] = "",
         overwrite: bool = False,
         save_plot: bool = True,
         **kwargs,
     ) -> dict:
-        """Apply a correction pipeline to all processed pairs.
+        """Apply a filter and/or correction pipeline to all processed pairs.
 
-        Iterates over pairs matching *criterias* that have EW and NS rasters on
-        disk, runs *pipeline*.apply(), writes ``*_EW_corr.tif`` /
-        ``*_NS_corr.tif``, and optionally saves a control figure.
+        Follows the two-pipeline architecture:
+
+        1. **filter_pipeline** (:class:`~geomulticorr.corrections.FilterPipeline`):
+           Masks bad pixels (CC threshold, outlier rejection, slope, …).
+           Also produces per-component stable-area masks used when fitting
+           corrections.
+
+        2. **correction_pipeline** (:class:`~geomulticorr.corrections.CorrectionPipeline`):
+           Fits and subtracts systematic trends (median shift, ramp, topo, …)
+           estimated on stable pixels only.
+
+        At least one of the two must be provided.  Typical call::
+
+            session.apply_pairs_corrections(
+                filter_pipeline=CCFilter(0.5) + OutlierFilter((-15, 15)),
+                correction_pipeline=MedianCentering() + RampCorrection() + TopoCorrection(),
+                dem=dem,
+            )
 
         Args:
-            pipeline: A :class:`~geomulticorr.corrections.CorrectionPipeline`
-                or any :class:`~geomulticorr.corrections.BaseCorrection` instance.
+            correction_pipeline: A :class:`~geomulticorr.corrections.CorrectionPipeline`
+                instance (or any :class:`~geomulticorr.corrections.BaseCorrection`).
+                ``None`` skips the correction step.
+            filter_pipeline: A :class:`~geomulticorr.corrections.FilterPipeline`
+                instance (or any :class:`~geomulticorr.corrections.BaseMask`).
+                ``None`` skips filtering (all valid pixels used as stable ground).
             criterias: Same filter syntax as :meth:`get_pairs`.
             overwrite: Re-process pairs whose corrected files already exist.
-            save_plot: Save a before/after control figure for each pair (default ``True``).
-            **kwargs: Forwarded to ``pipeline.apply()``
-                (e.g. ``cc=``, ``dem=``, ``stable_mask=``).
+            save_plot: Save a before/after control figure for each pair.
+            **kwargs: Forwarded to both pipelines
+                (e.g. ``dem=`` for :class:`~geomulticorr.corrections.TopoCorrection`).
+                ``cc=`` is auto-injected from the pair folder when available.
 
         Returns:
             Dict mapping ``pa_key`` → ``{"ew": Path, "ns": Path}`` or ``None`` if skipped.
+
+        Raises:
+            ValueError: If neither *correction_pipeline* nor *filter_pipeline* is provided,
+                or if a required kwarg (e.g. ``dem=``) is missing.
         """
         import geoutils as gu
         import matplotlib.pyplot as plt
-        from geomulticorr.utils.gmc_functions import plot_correction_result
+        from geomulticorr.corrections.corrections import make_corrections
+        from geomulticorr.corrections.masks import FilterPipeline, BaseMask
+
+        if correction_pipeline is None and filter_pipeline is None:
+            raise ValueError(
+                "Provide at least one of correction_pipeline= or filter_pipeline=."
+            )
 
         pairs = self.get_pairs(criterias)
         results: dict = {}
@@ -2169,23 +2200,26 @@ class Session:
 
             logger.launch(f"Applying corrections for '{pair.pa_key}'")
             try:
-                x_cur = gu.Raster(str(pair.pa_ew_path))
-                y_cur = gu.Raster(str(pair.pa_ns_path))
+                x_raw = gu.Raster(str(pair.pa_ew_path))
+                y_raw = gu.Raster(str(pair.pa_ns_path))
 
                 # Auto-inject cc= from the pair folder if not already provided
                 pair_kwargs = dict(kwargs)
-                if "cc" not in pair_kwargs:
-                    cc_path = pair.pa_path / f"{pair.pa_key}_CC.tif"
-                    if not cc_path.exists():
-                        cc_path = pair.pa_cc_raw_path  # fallback to -ncc.tif
-                    if cc_path.exists():
-                        pair_kwargs["cc"] = gu.Raster(str(cc_path))
+                if "cc" not in pair_kwargs and pair.pa_cc_path.exists():
+                    pair_kwargs["cc"] = gu.Raster(str(pair.pa_cc_path))
 
-                # Validate required kwargs upfront for all steps
-                steps = getattr(pipeline, "steps", [pipeline])
+                # Validate required kwargs upfront
+                all_steps = []
+                if filter_pipeline is not None:
+                    fp = filter_pipeline
+                    all_steps += fp.masks if isinstance(fp, FilterPipeline) else [fp]
+                if correction_pipeline is not None:
+                    from geomulticorr.corrections.corrections import CorrectionPipeline
+                    cp = correction_pipeline
+                    all_steps += cp.steps if isinstance(cp, CorrectionPipeline) else [cp]
                 missing = [
                     f"{type(s).__name__} requires '{k}'"
-                    for s in steps
+                    for s in all_steps
                     for k in getattr(s, "_REQUIRED_KWARGS", ())
                     if k not in pair_kwargs
                 ]
@@ -2194,22 +2228,53 @@ class Session:
                         "Missing required kwargs — pass them to apply_pairs_corrections():\n  "
                         + "\n  ".join(missing)
                     )
-                for step in steps:
-                    x_prev, y_prev = x_cur, y_cur
-                    x_cur, y_cur = step.apply(x_prev, y_prev, **pair_kwargs)
 
-                    if save_plot:
-                        step_name = type(step).__name__
-                        plot_path = pair.pa_path / f"{pair.pa_key}_{step_name}_disp.jpg"
-                        fig = plot_correction_result(step, x_prev, x_cur, y_prev, y_cur,
-                                                     fig_name=f"{pair.pa_key} — {step_name}",
-                                                     **pair_kwargs)
-                        fig.savefig(str(plot_path), dpi=150, format='JPEG', bbox_inches="tight")
+                # Step 1: filter pipeline → masked rasters + stable-area masks
+                x_stable = y_stable = None
+                if filter_pipeline is not None:
+                    x_stable = filter_pipeline.compute(x_raw, **pair_kwargs)
+                    y_stable = filter_pipeline.compute(y_raw, **pair_kwargs)
+                    x_filt, y_filt = filter_pipeline.apply(x_raw, y_raw, **pair_kwargs)
+                else:
+                    x_filt, y_filt = x_raw, y_raw
+
+                # Step 2: correction pipeline — fit + apply each step individually
+                # so stats can be recorded after every correction.
+                import copy
+                import geomulticorr.stats.stats as gmc_stats
+
+                x_corr, y_corr = x_filt, y_filt
+                if correction_pipeline is not None:
+                    cp_x = copy.deepcopy(correction_pipeline)
+                    cp_y = copy.deepcopy(correction_pipeline)
+                    steps_x = cp_x.steps if isinstance(cp_x, CorrectionPipeline) else [cp_x]
+                    steps_y = cp_y.steps if isinstance(cp_y, CorrectionPipeline) else [cp_y]
+                    for step_x, step_y in zip(steps_x, steps_y):
+                        step_name = type(step_x).__name__
+                        step_x.fit(x_corr, stable_mask=x_stable, **pair_kwargs)
+                        x_corr = step_x.apply(x_corr)
+                        step_y.fit(y_corr, stable_mask=y_stable, **pair_kwargs)
+                        y_corr = step_y.apply(y_corr)
+                        gmc_stats.save_corrected_stats(pair, x_corr, y_corr, step_name)
+
+                # Optional before/after control plot
+                if save_plot:
+                    try:
+                        from geomulticorr.utils.gmc_functions import plot_correction_result
+                        fig = plot_correction_result(
+                            None, x_raw, x_corr, y_raw, y_corr,
+                            fig_name=pair.pa_key,
+                            **pair_kwargs,
+                        )
+                        plot_path = pair.pa_path / f"{pair.pa_key}_corrections_disp.jpg"
+                        fig.savefig(str(plot_path), dpi=150, format="JPEG", bbox_inches="tight")
                         plt.close(fig)
                         logger.save(f"Correction plot saved: {plot_path.name}")
+                    except Exception as plot_exc:
+                        logger.warning(f"Could not save control plot: {plot_exc}")
 
-                x_cur.save(str(ew_corr))
-                y_cur.save(str(ns_corr))
+                x_corr.save(str(ew_corr))
+                y_corr.save(str(ns_corr))
                 logger.file(f"Saved corrected EW: {ew_corr.name}")
                 logger.file(f"Saved corrected NS: {ns_corr.name}")
                 results[pair.pa_key] = {"ew": ew_corr, "ns": ns_corr}
