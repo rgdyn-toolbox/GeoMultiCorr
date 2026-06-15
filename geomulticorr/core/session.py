@@ -2028,7 +2028,7 @@ class Session:
 
         for pair, script in zip(active_pairs, bash_scripts):
             if use_cluster:
-                cmd = ["oarsub", "-S", f"./{script.name}"]
+                cmd = ["oarsub", "-S", str(script.resolve())]
             else:
                 cmd = ["bash", str(script)]
 
@@ -2050,7 +2050,7 @@ class Session:
                     f"Failed [{script.parent.name}]: {result.stderr.strip()}"
                 )
             else:
-                if clean and pair is not None:
+                if clean and pair is not None and not use_cluster:
                     asp.clean_pair_directory(pair)
             return_codes.append(result.returncode)
 
@@ -2067,6 +2067,41 @@ class Session:
             self._sync_pairs_status(run_pairs)
 
         return return_codes
+
+    def sync_pairs_after_cluster(
+        self,
+        criterias: str | list[str] = "",
+        clean: bool = True,
+        asp_bin_dir: str | pathlib.Path | None = None,
+    ) -> None:
+        """Sync geodatabase status and optionally clean after OAR jobs complete.
+
+        Call this once all ``oarsub`` jobs have finished on the cluster
+        (check with ``oarstat -u $USER``).  It reads the filesystem state of
+        each pair to determine whether the correlation completed successfully,
+        updates ``pa_status`` in the geodatabase, and — if *clean* is ``True``
+        — removes intermediate ASP files from pairs whose status is
+        ``"complete"``.
+
+        Args:
+            criterias: Same filter syntax as :meth:`get_pairs`.
+            clean: Delete intermediate ASP files for completed pairs (default ``True``).
+            asp_bin_dir: Optional path to the ASP bin directory (only used when *clean* is ``True``).
+        """
+        from geomulticorr.correlation import ASP
+
+        pairs = self.get_pairs(criterias)
+        if not pairs:
+            logger.warning("sync_pairs_after_cluster: no pairs found.")
+            return
+
+        if clean:
+            asp = ASP(session=self, asp_bin_dir=asp_bin_dir)
+            for pair in pairs:
+                if pair.get_status() == "complete":
+                    asp.clean_pair_directory(pair)
+
+        self._sync_pairs_status(pairs)
 
     def extract_pairs_raw_displacements(
         self,
