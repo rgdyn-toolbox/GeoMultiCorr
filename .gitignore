@@ -27,3 +27,6 @@ CLAUDE.md
 
 # Environment variables (API keys, secrets)
 .env
+
+# Logo files
+gmc_logo/
