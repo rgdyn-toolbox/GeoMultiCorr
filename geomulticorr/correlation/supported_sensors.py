@@ -49,7 +49,7 @@ SENSOR_CATALOG = [
     # Pléiades
     {"patterns": [r"pl[eé]iades\s*(1a|1b)?", r"pleiades-neo", r"pneo"], "sensor": "PLEIADES", "family": "pleiades"},
     # PlanetScope
-    {"patterns": [r"planetscope", r"psscene", r"superdove", r"ps2(sd)?", r"pscope"], "sensor": "PLANETSCOPE", "family": "planetscope"},
+    {"patterns": [r"planetscope", r"psscene", r"superdove", r"ps2(sd)?", r"pscope", r"analyticms"], "sensor": "PLANETSCOPE", "family": "planetscope"},
     # WorldView
     {"patterns": [r"worldview[-\s]?([1-4])", r"\bwv([1-4])\b"], "sensor": "WORLDVIEW{num}", "family": "worldview"},
     # GeoEye
@@ -76,7 +76,7 @@ supported_sensors = [
         "spot4", "spot5", "spot6", "spot7", "sp4", "sp5", "sp6", "sp7", "s4p", "s5p", "s6p", "s7p",
         "pleiades", "pléiades", "pleiades-neo", "pneo", "ple",
         # Planet
-        "planetscope", "planet", "psscene", "superdove", "ps2", "ps2sd", "pscope", "planet"
+        "planetscope", "planet", "psscene", "superdove", "ps2", "ps2sd", "pscope", "analyticms",
         # Maxar family
         "worldview", "wv1", "wv2", "wv3", "wv4", "geoeye1", "ge1", "quickbird", "ikonos",
         # RapidEye
@@ -346,7 +346,7 @@ def sensor_normalize(text: Optional[str]) -> dict:
         return out("pleiadesneo", platform=plat, family="pleiades")
 
     # --- PlanetScope (PS2, PS2.SD / SuperDove, PSScene)
-    m = re.search(r"\b(superdove|ps2\.?sd|psscene|planetscope|ps2|psb|planet)\b", t)
+    m = re.search(r"\b(superdove|ps2\.?sd|psscene|planetscope|ps2|psb|planet|analyticms)\b", t)
     if m:
         token = m.group(1)
         var = "SuperDove" if token in {"superdove", "ps2.sd", "ps2sd"} else None

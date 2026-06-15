@@ -943,7 +943,12 @@ class Session:
             georaster_metadata['bands'] = r.count
             georaster_metadata['rows'] = r.shape[0]
             georaster_metadata['cols'] = r.shape[1]
-            sensor = re_searcher(ta.name.lower(), gmc_sensors.sensors(gmc_sensors.supported_sensors)) if "opt" in image_types else ("dem" if "dem" in image_types else "unknown")
+            if "opt" in image_types:
+                sensor = re_searcher(ta.name.lower(), gmc_sensors.sensors(gmc_sensors.supported_sensors))
+                if sensor == "unknown":
+                    sensor = re_searcher(ta.parent.name.lower(), gmc_sensors.sensors(gmc_sensors.supported_sensors))
+            else:
+                sensor = "dem" if "dem" in image_types else "unknown"
             sensor_normalized = gmc_sensors.sensor_normalize(sensor)
             georaster_metadata['sensor'] = sensor_normalized['sensor']
             georaster_metadata['sensor_platform'] = sensor_normalized['platform']
