@@ -896,13 +896,8 @@ class TIOInversion:
                                     cores=16,
                                     walltime="06:00:00") # HPC
         """
-        # Local: use full resolved binary paths. HPC: rely on module load / PATH.
-        if cluster is None:
-            invers_pixel_bin = self.invers_pixel_omp_bin
-            lect_depl_bin    = self.lect_depl_cumule_lin_bin
-        else:
-            invers_pixel_bin = "invers_pixel_omp"
-            lect_depl_bin    = "lect_depl_cumule_lin"
+        invers_pixel_bin = self.invers_pixel_omp_bin
+        lect_depl_bin    = self.lect_depl_cumule_lin_bin
 
         width, height = self.raster_shape
         n_images = len(self.image_dates)
