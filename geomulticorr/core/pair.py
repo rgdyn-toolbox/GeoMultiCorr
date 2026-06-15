@@ -182,12 +182,14 @@ class Pair:
         self.pa_raw_right_path = Path(self.pa_path, f"{self.pa_key}-R.tif")
         self.pa_disparity_rd_path = Path(self.pa_path, f"{self.pa_key}-RD.tif")
         self.pa_disparity_f_path = Path(self.pa_path, f"{self.pa_key}-F.tif")
-        self.pa_cc_raw_path = Path(self.pa_path, f"{self.pa_key}-ncc.tif")
+        self.pa_cc_raw_path = Path(self.pa_path, f"{self.pa_key}-F-ncc.tif")
 
         # Derived outputs
         self.pa_ew_path = Path(self.pa_path, f"{self.pa_key}-F_EW.tif")
         self.pa_ns_path = Path(self.pa_path, f"{self.pa_key}-F_NS.tif")
         self.pa_cc_path = Path(self.pa_path, f"{self.pa_key}-F_CC.tif")
+        self.pa_ew_corr_path = Path(self.pa_path, f"{self.pa_key}-F_EW_corr.tif")
+        self.pa_ns_corr_path = Path(self.pa_path, f"{self.pa_key}-F_NS_corr.tif")
         self.pa_plot_raw_path = Path(self.pa_path, f"{self.pa_key}_raw_disp.jpg")
         self.pa_magn_path = Path(self.pa_path, f"{self.pa_key}_magn.tif")
         self.pa_vect_path = Path(self.pa_path, f"{self.pa_key}_vect.gpkg")
@@ -781,12 +783,10 @@ status    : {self.pa_status}
             plt.close(fig)
             logger.save(f"Control plot saved: {self.pa_plot_raw_path.name}")
 
-        # 6. Rename -ncc.tif → _CC.tif (after plot so pa_cc_raw_path is still valid above)
-        if self.pa_cc_raw_path.exists():
-            cc_renamed = self.pa_cc_raw_path.rename(
-                self.pa_path / f"{self.pa_key}_CC.tif"
-            )
-            logger.file(f"Renamed {self.pa_cc_raw_path.name} → {cc_renamed.name}")
+        # 6. Copy -F-ncc.tif → -F_CC.tif (keep original ncc file intact)
+        if self.pa_cc_raw_path.exists() and not self.pa_cc_path.exists():
+            shutil.copy2(self.pa_cc_raw_path, self.pa_cc_path)
+            logger.file(f"Copied {self.pa_cc_raw_path.name} → {self.pa_cc_path.name}")
 
         return stats_dict
 
