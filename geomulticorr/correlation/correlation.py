@@ -286,7 +286,7 @@ class ASP:
         left = str(p.parent / f"{p.name}-L.tif")
         right = str(p.parent / f"{p.name}-R.tif")
         disp = str(p.parent / f"{p.name}-F.tif")
-        output = str(p.parent / f"{p.name}-F-{metric}")
+        output = str(p.parent / f"{p.name}-F")
 
         cmd_correval: list[str] = []
         cmd_correval.append(str(correval_bin))
@@ -614,6 +614,8 @@ class ASP:
         "-R.tif",
         "-RD.tif",
         "-F-ncc.tif",
+        "_CorrelationJob.sh",
+        "_CorrParameters.txt",
     )
 
     def clean_pair_directory(self, pair, dry_run: bool = False) -> list[Path]:
