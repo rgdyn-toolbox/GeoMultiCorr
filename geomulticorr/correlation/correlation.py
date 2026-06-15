@@ -575,8 +575,7 @@ class ASP:
                 lines += [
                     "module load stereopipeline/3.6.0\n",
                     "\n",
-                    "source /usr/contrib/all/anaconda3/anaconda3.rc\n",
-                    f"conda activate {conda_env}\n",
+                    f"micromamba activate {conda_env}\n",
                 ]
             lines.append("\n")
 
