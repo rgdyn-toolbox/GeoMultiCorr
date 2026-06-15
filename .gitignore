@@ -24,3 +24,6 @@ CLAUDE.md
 
 # Unit test cache and coverage reports
 .pytest_cache/
+
+# Environment variables (API keys, secrets)
+.env
