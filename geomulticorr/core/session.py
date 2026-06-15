@@ -2108,6 +2108,8 @@ class Session:
         criterias: str | list[str] = "",
         save_plot: bool = True,
         overwrite: bool = False,
+        target_resolution: float | None = None,
+        resampling: str = "bilinear",
     ) -> dict:
         """Extract EW/NS displacements and compute raw stats for all complete pairs.
 
@@ -2119,6 +2121,14 @@ class Session:
             criterias: Same filter syntax as :meth:`get_pairs`.
             save_plot: Save the 9-panel control figure for each pair.
             overwrite: Re-process pairs that already have EW/NS files on disk.
+            target_resolution: If provided, resample EW, NS, and NCC outputs to this
+                pixel size (in the session CRS units, typically metres) after extraction.
+                Useful for homogenising multi-sensor archives — e.g. downsample SPOT
+                1.5 m outputs to 3.0 m to match PlanetScope before TIO inversion.
+                ``None`` keeps the native resolution.
+            resampling: Rasterio resampling algorithm used when *target_resolution* is
+                set. ``"bilinear"`` (default) gives smooth interpolation; ``"average"``
+                is physically appropriate for aggregating displacement fields.
 
         Returns:
             Dict mapping ``pa_key`` → full stats dict (or ``None`` if skipped).
@@ -2143,7 +2153,11 @@ class Session:
 
             logger.launch(f"Extracting raw displacements for '{pair.pa_key}'")
             try:
-                stats = pair.extract_raw_displacements(save_plot=save_plot)
+                stats = pair.extract_raw_displacements(
+                    save_plot=save_plot,
+                    target_resolution=target_resolution,
+                    resampling=resampling,
+                )
                 results[pair.pa_key] = stats
                 n_done += 1
             except Exception as exc:

@@ -712,30 +712,45 @@ status    : {self.pa_status}
 
         return magn_in_meters
 
-    def extract_raw_displacements(self, save_plot: bool = True) -> dict:
+    def extract_raw_displacements(
+        self,
+        save_plot: bool = True,
+        target_resolution: float | None = None,
+        resampling: str = "bilinear",
+    ) -> dict:
         """
         Extract and convert EW/NS displacements from ASP disparity raster to metres.
-        
+
         Reads the 3-band final disparity raster (xDisp, yDisp, GoodPixMap in pixels),
         converts pixel values to metres using the raster resolution, flips the NS sign
         (ASP uses upper-left corner convention), saves individual EW/NS rasters,
         renames the NCC quality raster, computes displacement statistics, and optionally
         generates a 9-panel control figure.
-        
+
         **Output files created:**
-        
+
         - ``pa_ew_path``: EW displacement in metres
         - ``pa_ns_path``: NS displacement in metres
         - ``pa_cc_path``: Renamed quality raster (NCC)
         - ``pa_plot_raw_path``: Control plot (if ``save_plot=True``)
         - ``pa_stats_path``: JSON file with raw correlation statistics
-        
+
         :param save_plot: If True, generate and save a 9-panel control figure.
         :type save_plot: bool
-        
+        :param target_resolution: If provided, resample EW, NS, and NCC outputs to this
+            pixel size (in the pair's CRS units, typically metres) after extraction.
+            Useful for homogenising multi-sensor archives (e.g. downsampling SPOT 1.5 m
+            outputs to 3.0 m to match PlanetScope). ``None`` keeps native resolution.
+        :type target_resolution: float or None
+        :param resampling: Rasterio resampling algorithm name used when
+            ``target_resolution`` is set. ``"bilinear"`` (default) gives smooth
+            interpolation; ``"average"`` is physically appropriate for aggregating
+            displacement fields.
+        :type resampling: str
+
         :return: Full pair stats dictionary (persisted to JSON).
         :rtype: dict
-        
+
         :raises AssertionError: If the disparity raster does not exist.
         """
         assert (
@@ -787,6 +802,19 @@ status    : {self.pa_status}
         if self.pa_cc_raw_path.exists() and not self.pa_cc_path.exists():
             shutil.copy2(self.pa_cc_raw_path, self.pa_cc_path)
             logger.file(f"Copied {self.pa_cc_raw_path.name} → {self.pa_cc_path.name}")
+
+        # 7. Optional: resample EW, NS, and NCC to a common target resolution.
+        # Resampling happens after pixel→metre conversion so displacement values are
+        # already in metres when averaged/interpolated — not raw pixel offsets.
+        if target_resolution is not None:
+            for path in [self.pa_ew_path, self.pa_ns_path, self.pa_cc_path]:
+                if path.exists():
+                    r = gu.Raster(str(path))
+                    r_resampled = r.reproject(res=target_resolution, resampling=resampling)
+                    r_resampled.save(str(path))
+            logger.info(
+                f"Resampled EW/NS/NCC to {target_resolution} m ({resampling}): {self.pa_key}"
+            )
 
         return stats_dict
 
