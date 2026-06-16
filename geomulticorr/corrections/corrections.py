@@ -618,10 +618,8 @@ class TopoCorrection(BaseCorrection):
         dem: gu.Raster = kwargs.get("dem")
         if dem is None:
             raise ValueError("TopoCorrection.fit() requires dem= kwarg.")
-        assert dem.data.shape == raster.data.shape, (
-            f"DEM shape {dem.data.shape} must match displacement {raster.data.shape}. "
-            "Pre-resample the DEM to the same grid."
-        )
+        if dem.data.shape != raster.data.shape:
+            dem = dem.reproject(ref=raster)
         dem_arr  = ma.filled(dem.data, np.nan).astype(float)
         fit_mask = self._resolve_stable_mask(
             stable_mask, raster.data, raster.data.shape, raster.transform, dem_arr
@@ -721,10 +719,8 @@ class TopoRampCorrection(BaseCorrection):
         dem: gu.Raster = kwargs.get("dem")
         if dem is None:
             raise ValueError("TopoRampCorrection.fit() requires dem= kwarg.")
-        assert dem.data.shape == raster.data.shape, (
-            f"DEM shape {dem.data.shape} must match displacement {raster.data.shape}. "
-            "Pre-resample the DEM to the same grid."
-        )
+        if dem.data.shape != raster.data.shape:
+            dem = dem.reproject(ref=raster)
         dem_arr  = ma.filled(dem.data, np.nan).astype(float)
         fit_mask = self._resolve_stable_mask(
             stable_mask, raster.data, raster.data.shape, raster.transform, dem_arr
@@ -814,10 +810,8 @@ class SlopeRampCorrection(BaseCorrection):
         dem: gu.Raster = kwargs.get("dem")
         if dem is None:
             raise ValueError("SlopeRampCorrection.fit() requires dem= kwarg.")
-        assert dem.data.shape == raster.data.shape, (
-            f"DEM shape {dem.data.shape} must match displacement {raster.data.shape}. "
-            "Pre-resample the DEM to the same grid."
-        )
+        if dem.data.shape != raster.data.shape:
+            dem = dem.reproject(ref=raster)
         dem_arr   = ma.filled(dem.data, np.nan).astype(float)
         slope_arr = compute_slope(dem_arr, raster.transform)
         fit_mask  = self._resolve_stable_mask(
