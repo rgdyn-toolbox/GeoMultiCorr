@@ -717,6 +717,8 @@ status    : {self.pa_status}
         save_plot: bool = True,
         target_resolution: float | None = None,
         resampling: str = "bilinear",
+        canonical_bounds: "object | None" = None,
+        canonical_grid_size: "tuple[int, int] | None" = None,
     ) -> dict:
         """
         Extract and convert EW/NS displacements from ASP disparity raster to metres.
@@ -747,6 +749,15 @@ status    : {self.pa_status}
             interpolation; ``"average"`` is physically appropriate for aggregating
             displacement fields.
         :type resampling: str
+        :param canonical_bounds: Exact output bounds (rasterio BoundingBox) for the
+            resampling step. When provided together with *canonical_grid_size*, forces
+            all pairs to share the same pixel grid origin and extent, preventing
+            sub-pixel misalignments between sensors. Typically computed via
+            :meth:`~geomulticorr.core.session.Session._compute_canonical_grid`.
+        :type canonical_bounds: rasterio.coords.BoundingBox or None
+        :param canonical_grid_size: Exact output grid size ``(width, height)`` in pixels
+            for the resampling step. Must be provided together with *canonical_bounds*.
+        :type canonical_grid_size: tuple[int, int] or None
 
         :return: Full pair stats dictionary (persisted to JSON).
         :rtype: dict
@@ -806,11 +817,23 @@ status    : {self.pa_status}
         # 7. Optional: resample EW, NS, and NCC to a common target resolution.
         # Resampling happens after pixel→metre conversion so displacement values are
         # already in metres when averaged/interpolated — not raw pixel offsets.
+        # When canonical_bounds + canonical_grid_size are provided, pass them to
+        # reproject() so all pairs snap to the same pixel grid (same origin and
+        # exact dimensions), preventing off-by-one row/column mismatches between
+        # sensors with different native resolutions (e.g. SPOT 1.5 m vs Planet 3 m).
         if target_resolution is not None:
+            use_canonical = canonical_bounds is not None and canonical_grid_size is not None
             for path in [self.pa_ew_path, self.pa_ns_path, self.pa_cc_path]:
                 if path.exists():
                     r = gu.Raster(str(path))
-                    r_resampled = r.reproject(res=target_resolution, resampling=resampling)
+                    if use_canonical:
+                        r_resampled = r.reproject(
+                            bounds=canonical_bounds,
+                            grid_size=canonical_grid_size,
+                            resampling=resampling,
+                        )
+                    else:
+                        r_resampled = r.reproject(res=target_resolution, resampling=resampling)
                     r_resampled.save(str(path))
             logger.info(
                 f"Resampled EW/NS/NCC to {target_resolution} m ({resampling}): {self.pa_key}"

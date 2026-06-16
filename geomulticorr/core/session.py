@@ -2110,6 +2110,8 @@ class Session:
         overwrite: bool = False,
         target_resolution: float | None = None,
         resampling: str = "bilinear",
+        canonical_bounds: "object | None" = None,
+        canonical_grid_size: "tuple[int, int] | None" = None,
     ) -> dict:
         """Extract EW/NS displacements and compute raw stats for all complete pairs.
 
@@ -2129,14 +2131,35 @@ class Session:
             resampling: Rasterio resampling algorithm used when *target_resolution* is
                 set. ``"bilinear"`` (default) gives smooth interpolation; ``"average"``
                 is physically appropriate for aggregating displacement fields.
+            canonical_bounds: Exact output bounds (rasterio BoundingBox) to use for the
+                resampling step. When provided together with *canonical_grid_size*,
+                overrides the auto-computed per-pzone canonical grid. Use this to pin
+                all pairs to a specific known grid.
+            canonical_grid_size: Exact output grid size ``(width, height)`` in pixels.
+                Must be provided together with *canonical_bounds*.
 
         Returns:
             Dict mapping ``pa_key`` → full stats dict (or ``None`` if skipped).
         """
+        import geopandas as gpd
+
         pairs = self.get_pairs(criterias)
         results: dict = {}
         n_done = 0
         n_skip = 0
+
+        # Pre-compute one canonical grid per pzone so all pairs within the same pzone
+        # are reprojected to identical bounds and dimensions when target_resolution is set.
+        # Mirrors the pattern used in sieve_bulk / _compute_canonical_grid.
+        pzone_canonical: dict = {}
+        if target_resolution is not None and canonical_bounds is None:
+            pzones_df = self.get_pzones_overview()
+            for _, row in pzones_df.iterrows():
+                pz_vec = gu.Vector(
+                    gpd.GeoDataFrame([row], crs=pzones_df.crs, geometry="geometry")
+                )
+                cb, cs = self._compute_canonical_grid(pz_vec, self.epsg, target_resolution)
+                pzone_canonical[row["pz_name"]] = (cb, cs)
 
         for pair in pairs:
             if not pair.pa_disparity_f_path.exists():
@@ -2151,12 +2174,21 @@ class Session:
                 n_skip += 1
                 continue
 
+            # Resolve canonical grid for this pair: explicit params take priority,
+            # otherwise fall back to the per-pzone auto-computed grid.
+            if canonical_bounds is not None and canonical_grid_size is not None:
+                pair_cb, pair_cs = canonical_bounds, canonical_grid_size
+            else:
+                pair_cb, pair_cs = pzone_canonical.get(pair.pa_pz_name, (None, None))
+
             logger.launch(f"Extracting raw displacements for '{pair.pa_key}'")
             try:
                 stats = pair.extract_raw_displacements(
                     save_plot=save_plot,
                     target_resolution=target_resolution,
                     resampling=resampling,
+                    canonical_bounds=pair_cb,
+                    canonical_grid_size=pair_cs,
                 )
                 results[pair.pa_key] = stats
                 n_done += 1
