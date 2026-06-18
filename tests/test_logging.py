@@ -170,6 +170,21 @@ class TestGMCFormatterBasics:
         assert LIST in GMCFormatter.ICONS
         assert LAUNCH in GMCFormatter.ICONS
     # END def
+
+    def test_formatter_has_styles_dict(self):
+        """Formatter should have a STYLES mapping covering all levels"""
+        assert hasattr(GMCFormatter, "STYLES")
+        assert isinstance(GMCFormatter.STYLES, dict)
+        for level in (
+            logging.DEBUG, logging.INFO, logging.WARNING,
+            logging.ERROR, logging.CRITICAL,
+            SUCCESS, FOLDER, SETTINGS, SEARCH, FILE,
+            STATISTICS, TIMER, SAVE, LIST, LAUNCH,
+        ):
+            assert level in GMCFormatter.STYLES, f"Level {level} missing from STYLES"
+            assert isinstance(GMCFormatter.STYLES[level], str)
+            assert len(GMCFormatter.STYLES[level]) > 0
+    # END def
 # END class
 # -------------------------------------------------------------- #
 # TEST GROUP 4: GMCFormatter output
@@ -219,38 +234,38 @@ class TestGMCFormatterIcons:
         """Formatter should exclude icons when use_icons=False"""
         record = make_log_record(msg="Test message")
         result = formatter_plain.format(record)
-        
-        # Check that known emojis are NOT in the result
-        emoji_list = ["🔧", "📋", "⚠️", "✗", "🚨", "✓", "📁", "⚙️"]
-        for emoji in emoji_list:
-            assert emoji not in result, f"Found emoji {emoji} in: {result}"
+
+        # None of the Unicode symbols used as icons should appear
+        symbol_list = ["·", "ℹ", "⚠", "✗", "✗✗", "✓", "»", "~", "?", "≈", "◷", "↓", "▸"]
+        for symbol in symbol_list:
+            assert symbol not in result, f"Found symbol {symbol!r} in: {result}"
     # END def
 
     def test_correct_icon_for_debug_level(self, formatter_with_icons):
-        """DEBUG level should use 🔧 icon."""
+        """DEBUG level should use · icon."""
         record = logging.LogRecord(
             name="GMC", level=logging.DEBUG, pathname="test.py", lineno=42, msg="Debug message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "🔧" in result, f"Did not find DEBUG icon in: {result}"
+        assert "·" in result, f"Did not find DEBUG icon in: {result}"
     # END def
 
     def test_correct_icon_for_info_level(self, formatter_with_icons):
-        """INFO level should use 📋 icon."""
+        """INFO level should use ℹ icon."""
         record = logging.LogRecord(
             name="GMC", level=logging.INFO, pathname="test.py", lineno=42, msg="Info message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "📋" in result, f"Did not find INFO icon in: {result}"
+        assert "ℹ" in result, f"Did not find INFO icon in: {result}"
     # END def
 
     def test_correct_icon_for_warning_level(self, formatter_with_icons):
-        """WARNING level should use ⚠️ icon."""
+        """WARNING level should use ⚠ icon."""
         record = logging.LogRecord(
             name="GMC", level=logging.WARNING, pathname="test.py", lineno=42, msg="Warning message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "⚠️" in result, f"Did not find WARNING icon in: {result}"
+        assert "⚠" in result, f"Did not find WARNING icon in: {result}"
     # END def
 
     def test_correct_icon_for_error_level(self, formatter_with_icons):
@@ -263,12 +278,12 @@ class TestGMCFormatterIcons:
     # END def
 
     def test_correct_icon_for_critical_level(self, formatter_with_icons):
-        """CRITICAL level should use 🚨 icon."""
+        """CRITICAL level should use ✗✗ icon."""
         record = logging.LogRecord(
             name="GMC", level=logging.CRITICAL, pathname="test.py", lineno=42, msg="Critical message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "🚨" in result, f"Did not find CRITICAL icon in: {result}"
+        assert "✗✗" in result, f"Did not find CRITICAL icon in: {result}"
     # END def
 
     def test_correct_icon_for_success_level(self, formatter_with_icons):
@@ -281,84 +296,84 @@ class TestGMCFormatterIcons:
     # END def
 
     def test_correct_icon_for_folder_level(self, formatter_with_icons):
-        """FOLDER level should use 📁 icon."""
+        """FOLDER level should use » icon."""
         record = logging.LogRecord(
             name="GMC", level=FOLDER, pathname="test.py", lineno=42, msg="Folder message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "📁" in result, f"Did not find FOLDER icon in: {result}"
+        assert "»" in result, f"Did not find FOLDER icon in: {result}"
     # END def
 
     def test_correct_icon_for_settings_level(self, formatter_with_icons):
-        """SETTINGS level should use ⚙️ icon."""
+        """SETTINGS level should use ~ icon."""
         record = logging.LogRecord(
             name="GMC", level=SETTINGS, pathname="test.py", lineno=42, msg="Settings message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "⚙️" in result, f"Did not find SETTINGS icon in: {result}"
+        assert "~" in result, f"Did not find SETTINGS icon in: {result}"
     # END def
 
     def test_correct_icon_for_search_level(self, formatter_with_icons):
-        """SEARCH level should use 🔍 icon."""
+        """SEARCH level should use ? icon."""
         record = logging.LogRecord(
             name="GMC", level=SEARCH, pathname="test.py", lineno=42, msg="Search message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "🔍" in result, f"Did not find SEARCH icon in: {result}"
+        assert "?" in result, f"Did not find SEARCH icon in: {result}"
     # END def
 
     def test_correct_icon_for_file_level(self, formatter_with_icons):
-        """FILE level should use 📄 icon."""
+        """FILE level should use » icon."""
         record = logging.LogRecord(
             name="GMC", level=FILE, pathname="test.py", lineno=42, msg="File message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "📄" in result, f"Did not find FILE icon in: {result}"
+        assert "»" in result, f"Did not find FILE icon in: {result}"
     # END def
 
     def test_correct_icon_for_statistics_level(self, formatter_with_icons):
-        """STATISTICS level should use 📊 icon."""
+        """STATISTICS level should use ≈ icon."""
         record = logging.LogRecord(
             name="GMC", level=STATISTICS, pathname="test.py", lineno=42, msg="Statistics message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "📊" in result, f"Did not find STATISTICS icon in: {result}"
+        assert "≈" in result, f"Did not find STATISTICS icon in: {result}"
     # END def
 
     def test_correct_icon_for_timer_level(self, formatter_with_icons):
-        """TIMER level should use ⏱️ icon."""
+        """TIMER level should use ◷ icon."""
         record = logging.LogRecord(
             name="GMC", level=TIMER, pathname="test.py", lineno=42, msg="Timer message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "⏱️" in result, f"Did not find TIMER icon in: {result}"
+        assert "◷" in result, f"Did not find TIMER icon in: {result}"
     # END def
 
     def test_correct_icon_for_save_level(self, formatter_with_icons):
-        """SAVE level should use 💾 icon."""
+        """SAVE level should use ↓ icon."""
         record = logging.LogRecord(
             name="GMC", level=SAVE, pathname="test.py", lineno=42, msg="Save message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "💾" in result, f"Did not find SAVE icon in: {result}"
+        assert "↓" in result, f"Did not find SAVE icon in: {result}"
     # END def
 
     def test_correct_icon_for_list_level(self, formatter_with_icons):
-        """LIST level should use 📋 icon."""
+        """LIST level should use · icon."""
         record = logging.LogRecord(
             name="GMC", level=LIST, pathname="test.py", lineno=42, msg="List message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "📋" in result, f"Did not find LIST icon in: {result}"
+        assert "·" in result, f"Did not find LIST icon in: {result}"
     # END def
 
     def test_correct_icon_for_launch_level(self, formatter_with_icons):
-        """LAUNCH level should use 🚀 icon."""
+        """LAUNCH level should use ▸ icon."""
         record = logging.LogRecord(
             name="GMC", level=LAUNCH, pathname="test.py", lineno=42, msg="Launch message", args=(), exc_info=None
         )
         result = formatter_with_icons.format(record)
-        assert "🚀" in result, f"Did not find LAUNCH icon in: {result}"
+        assert "▸" in result, f"Did not find LAUNCH icon in: {result}"
     # END def
 # END class
 
@@ -380,14 +395,14 @@ class TestGMCFormatterColors:
     # END def
 
     def test_formatter_includes_colors_when_enabled(self, formatter_with_colors):
-        """When use_color=True, ANSI codes should appear"""
+        """When use_color=True, rich markup tags should wrap the prefix."""
         record = logging.LogRecord(
             name="GMC", level=logging.INFO, pathname="test.py", lineno=42,
             msg="Info message", args=(), exc_info=None
         )
         result = formatter_with_colors.format(record)
-        # ANSI escape codes look like \033[31m for red, \033[32m for green, etc.
-        assert "\033[" in result, f"Did not find ANSI color code in: {result}"
+        # format() returns rich markup: e.g. [default][ GMC ℹ ][/default] : message
+        assert "[" in result and "[/" in result, f"Did not find rich markup tags in: {result}"
     # END def
 # END class
 

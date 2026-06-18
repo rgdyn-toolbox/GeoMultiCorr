@@ -35,6 +35,7 @@ dependencies:
   - earthengine-api
   - geodatasets
   - contextily
+  - rich
   - alive-progress
   - black
   - flake8
