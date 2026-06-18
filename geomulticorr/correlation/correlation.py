@@ -565,7 +565,9 @@ class ASP:
         lines: list[str] = ["#!/bin/bash\n"]
 
         lines += oar_header(
-            job_name, nodes, cores, walltime, cluster, besteffort=besteffort
+            job_name, nodes, cores, walltime, cluster,
+            besteffort=besteffort,
+            output_dir=pair.pa_path,
         )
         if cluster in ("gricad", "isterre"):
             lines += ["\n"] + cluster_base_env(cluster)

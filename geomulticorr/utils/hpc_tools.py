@@ -78,6 +78,7 @@ def oar_header(
     cluster: str,
     project: str | None = None,
     besteffort: bool = False,
+    output_dir: str | Path | None = None,
 ) -> list[str]:
     """Return ``#OAR`` directive lines for the given cluster profile.
 
@@ -97,6 +98,9 @@ def oar_header(
         *cluster* (``"rgdyn"`` for gricad, ``"iste-equ-risques"`` for isterre).
     besteffort:
         If True, append ``#OAR -t besteffort`` (uses idle resources).
+    output_dir:
+        Directory where ``-O`` stdout and ``-E`` stderr files are written.
+        When ``None``, files land in the current working directory (``./``).
 
     Returns
     -------
@@ -107,11 +111,13 @@ def oar_header(
         return []
     if project is None:
         project = _OAR_PROJECT[cluster]
+    _out = Path(output_dir) / f"{job_name}_%jobid%.out" if output_dir else f"./{job_name}_%jobid%.out"
+    _err = Path(output_dir) / f"{job_name}_%jobid%.err" if output_dir else f"./{job_name}_%jobid%.err"
     lines = [
         f"#OAR -n {job_name}\n",
         f"#OAR -l /nodes={nodes}/core={cores},walltime={walltime}\n",
-        f"#OAR -O ./{job_name}_%jobid%.out\n",
-        f"#OAR -E ./{job_name}_%jobid%.err\n",
+        f"#OAR -O {_out}\n",
+        f"#OAR -E {_err}\n",
         f"#OAR --project {project}\n",
     ]
     if besteffort:

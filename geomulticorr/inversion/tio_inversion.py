@@ -231,7 +231,7 @@ def _build_launch_script(
     lines = ["#!/bin/bash\n"]
 
     if cluster is not None:
-        lines += [f"{l}" for l in oar_header(job_name, nodes, cores, walltime, cluster)]
+        lines += [f"{l}" for l in oar_header(job_name, nodes, cores, walltime, cluster, output_dir=inv_dir)]
         if lines[-1] != "\n":
             lines.append("\n")
         lines += cluster_base_env(cluster)
