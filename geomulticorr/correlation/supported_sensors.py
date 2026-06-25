@@ -66,6 +66,19 @@ SENSOR_CATALOG = [
     {"patterns": [r"dem", r"hillshade"], "sensor": "DEM", "family": "dem"},
 ]
 
+AUXILIARY_FILE_PATTERNS: dict[str, list[str]] = {
+    "planetscope": ["_udm2_", "_udm_", "_confidence_"],
+    "sentinel":    ["_TCI_", "_SCL_", "_WVP_", "_AOT_"],
+    "landsat":     ["_QA_PIXEL_", "_QA_RADSAT_", "_ST_QA_"],
+    "worldview":   [],
+    "spot":        [],
+    "pleiades":    [],
+}
+
+AUXILIARY_FILE_EXCLUDE_PATTERNS: list[str] = [
+    pat for pats in AUXILIARY_FILE_PATTERNS.values() for pat in pats
+]
+
 supported_sensors = [
         # Landsat
         "landsat4", "landsat5", "landsat7", "landsat8", "landsat9",
