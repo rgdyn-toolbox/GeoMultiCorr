@@ -119,7 +119,9 @@ class ASP:
         :param corr_algorithm: Correlation algorithm (``asp_bm``, ``asp_sgm``, ``asp_mgm``, etc.).
         :param corr_kernel: Correlation kernel size as (height, width).
         :param n_levels: Number of coarse-to-fine levels. None disables.
-        :param corr_search: Search range as (x_min, x_max, y_min, y_max). None uses default.
+        :param corr_search: Search range as (x_min, y_min, x_max, y_max). None uses ASP auto-detection.
+            Best used with ``corr_seed_mode=0`` to skip the low-resolution disparity stage entirely.
+            Example: ``(-80, -2, 20, 2)`` = large horizontal shift, small vertical shift.
         :param corr_xthreshold: Cross-correlation threshold.
         :param subpixel_refinement_mode: Subpixel refinement mode.
         :param subpixel_kernel: Subpixel kernel size as (height, width).
