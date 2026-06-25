@@ -2,13 +2,12 @@
   <img src="docs/_static/GMC_logo.svg" width="320px" alt="GeoMultiCorr logo"/>
 </div>
 
-# GeoMultiCorr
-
-A Python framework for measuring earth-surface displacements from multi-sensor optical remote sensing archives.
-
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079420.svg)](https://doi.org/10.5281/zenodo.17079420)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE.md)
 
+# GeoMultiCorr
+
+A Python framework for measuring earth-surface displacements from multi-sensor optical remote sensing archives.
 ---
 
 # Contents
