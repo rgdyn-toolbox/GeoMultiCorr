@@ -395,14 +395,13 @@ class TestGMCFormatterColors:
     # END def
 
     def test_formatter_includes_colors_when_enabled(self, formatter_with_colors):
-        """When use_color=True, rich markup tags should wrap the prefix."""
+        """When use_color=True, ANSI escape codes should wrap the prefix."""
         record = logging.LogRecord(
             name="GMC", level=logging.INFO, pathname="test.py", lineno=42,
             msg="Info message", args=(), exc_info=None
         )
         result = formatter_with_colors.format(record)
-        # format() returns rich markup: e.g. [default][ GMC ℹ ][/default] : message
-        assert "[" in result and "[/" in result, f"Did not find rich markup tags in: {result}"
+        assert "\033[" in result, f"Did not find ANSI color code in: {result}"
     # END def
 # END class
 
