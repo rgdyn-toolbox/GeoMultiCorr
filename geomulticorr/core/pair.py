@@ -43,9 +43,9 @@ from sklearn import cluster
 import geoutils as gu
 import matplotlib.pyplot as plt
 
-# from telenvi import raster_tools as rt
-
 import geomulticorr.core.thumb as gmc_thumb
+import geomulticorr.stats.stats as gmc_stats
+from geomulticorr.utils.gmc_functions import plot_show_raw_results
 from geomulticorr.correlation.correlation import ASP
 from geomulticorr._logging import logger
 
@@ -708,7 +708,7 @@ status    : {self.pa_status}
 
         # Magnitude in meters
         magn_in_meters = magn * pxSizeX
-        magn_in_meters.save(str(self.pa_magn_path))
+        magn_in_meters.to_file(str(self.pa_magn_path))
 
         return magn_in_meters
 
@@ -719,6 +719,8 @@ status    : {self.pa_status}
         resampling: str = "bilinear",
         canonical_bounds: "object | None" = None,
         canonical_grid_size: "tuple[int, int] | None" = None,
+        out_dtype: str = "float32",
+        out_nodata: float = 0.0,
     ) -> dict:
         """
         Extract and convert EW/NS displacements from ASP disparity raster to metres.
@@ -770,7 +772,7 @@ status    : {self.pa_status}
 
         # 1. Split bands from -F.tif
         r = gu.Raster(str(self.pa_disparity_f_path), nodata=0.0)
-        xDisp_px, yDisp_px, goodPixMap = r.split_bands(copy=True)
+        xDisp_px, yDisp_px, _ = r.split_bands(copy=True)
 
         # 2. Convert pixels → metres; NS sign convention (ASP uses UL-corner reference)
         res_x, res_y = r.res
@@ -778,20 +780,17 @@ status    : {self.pa_status}
         yDisp_m = yDisp_px * res_y * -1.0
 
         # 3. Save EW and NS rasters
-        xDisp_m.save(str(self.pa_ew_path))
-        yDisp_m.save(str(self.pa_ns_path))
+        xDisp_m.to_file(str(self.pa_ew_path), dtype=out_dtype, nodata=out_nodata)
+        yDisp_m.to_file(str(self.pa_ns_path), dtype=out_dtype, nodata=out_nodata)
         logger.file(f"Saved EW displacement: {self.pa_ew_path.name}")
         logger.file(f"Saved NS displacement: {self.pa_ns_path.name}")
 
         # 4. Compute stats and persist to JSON under "raw_corr_stats"
-        import geomulticorr.stats.stats as gmc_stats
 
         stats_dict = gmc_stats.save_raw_corr_stats(self)
 
         # 5. Control plot
         if save_plot:
-            from geomulticorr.utils.gmc_functions import plot_show_raw_results
-
             ncc = (
                 gu.Raster(str(self.pa_cc_raw_path))
                 if self.pa_cc_raw_path.exists()
@@ -834,7 +833,7 @@ status    : {self.pa_status}
                         )
                     else:
                         r_resampled = r.reproject(res=target_resolution, resampling=resampling)
-                    r_resampled.save(str(path))
+                    r_resampled.to_file(str(path), dtype=out_dtype, nodata=out_nodata)
             logger.info(
                 f"Resampled EW/NS/NCC to {target_resolution} m ({resampling}): {self.pa_key}"
             )
@@ -1237,6 +1236,3 @@ status    : {self.pa_status}
         return self.get_interesting_geoim(mode).inspectRibsAlongthumb(
             geoLine, ribLength, ribStep, ribOrientation
         )
-
-
-# %%
