@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="gmc_logo/GMC_logo.svg" width="320px" alt="GeoMultiCorr logo"/>
+  <img src="docs/_static/GMC_logo.svg" width="320px" alt="GeoMultiCorr logo"/>
 </div>
 
 # GeoMultiCorr
@@ -32,7 +32,7 @@ The project is freely available to the scientific community (GNU AGPL v3) via th
 
 ## Matrioshka object hierarchy
 
-GeoMultiCorr organises a project as a set of nested spatial objects — like Russian matrioshka dolls, each layer contains and operates on the one inside it:
+**GeoMultiCorr** organises a project as a set of nested spatial objects — like matrioshka dolls, each layer contains and operates on the one inside it:
 
 ```
 Session  (project root — single entry point)
