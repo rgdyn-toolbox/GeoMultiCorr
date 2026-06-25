@@ -63,8 +63,7 @@ Available symbols by level:
 from __future__ import annotations
 
 import logging
-
-from rich.console import Console
+import sys
 
 # Define custom logging levels (between INFO=20 and WARNING=30)
 SUCCESS = 25
@@ -87,8 +86,6 @@ LIST = 31
 logging.addLevelName(LIST, "LIST")
 LAUNCH = 32
 logging.addLevelName(LAUNCH, "LAUNCH")
-
-_gmc_console = Console(highlight=False)
 
 
 def _add_success_method(logger_class: type[logging.Logger]) -> None:
@@ -150,11 +147,11 @@ _add_success_method(logging.Logger)
 
 
 class GMCFormatter(logging.Formatter):
-    """Custom formatter that renders the GMC prefix with rich markup or plain text.
+    """Custom formatter that adds GMC prefix, ANSI colors, and Unicode symbols.
 
     Output format:
-        use_color=False : [ GMC ✓ ] : message
-        use_color=True  : [bold green][ GMC ✓ ][/bold green] : message
+        use_color=False : [GMC ✓] : message
+        use_color=True  : <ansi>[GMC ✓]<reset> : message
     Only the prefix bracket is styled; the message text is always plain.
     """
 
@@ -177,23 +174,24 @@ class GMCFormatter(logging.Formatter):
     }
 
     STYLES = {
-        logging.DEBUG:    "dim",
-        logging.INFO:     "default",
-        logging.WARNING:  "bold yellow",
-        logging.ERROR:    "bold red",
-        logging.CRITICAL: "bold red",
-        SUCCESS:          "bold green",
-        FOLDER:           "blue",
-        SETTINGS:         "cyan",
-        SEARCH:           "cyan",
-        FILE:             "cyan",
-        STATISTICS:       "magenta",
-        TIMER:            "magenta",
-        SAVE:             "green",
-        LIST:             "dim",
-        LAUNCH:           "bold cyan",
+        logging.DEBUG:    "\033[2m",     # dim
+        logging.INFO:     "\033[0m",     # default
+        logging.WARNING:  "\033[1;33m",  # bold yellow
+        logging.ERROR:    "\033[1;31m",  # bold red
+        logging.CRITICAL: "\033[1;31m",  # bold red
+        SUCCESS:          "\033[1;32m",  # bold green
+        FOLDER:           "\033[34m",    # blue
+        SETTINGS:         "\033[36m",    # cyan
+        SEARCH:           "\033[36m",    # cyan
+        FILE:             "\033[36m",    # cyan
+        STATISTICS:       "\033[35m",    # magenta
+        TIMER:            "\033[35m",    # magenta
+        SAVE:             "\033[32m",    # green
+        LIST:             "\033[2m",     # dim
+        LAUNCH:           "\033[1;36m",  # bold cyan
     }
 
+    RESET = "\033[0m"
     PREFIX = "GMC"
 
     def __init__(self, use_color: bool = True, use_icons: bool = True):
@@ -202,35 +200,23 @@ class GMCFormatter(logging.Formatter):
         self.use_icons = use_icons
 
     def format(self, record: logging.LogRecord) -> str:
-        """Return the formatted log line as a plain string or rich markup string."""
+        """Return the formatted log line as a plain or ANSI-colored string."""
         msg = record.getMessage()
         icon = self.ICONS.get(record.levelno, "") if self.use_icons else ""
-        prefix = f"[ {self.PREFIX} {icon} ]" if icon else f"[ {self.PREFIX} ]"
+        prefix = f"[{self.PREFIX} {icon}]" if icon else f"[{self.PREFIX}]"
         if self.use_color:
-            style = self.STYLES.get(record.levelno, "default")
-            return f"[{style}]{prefix}[/{style}] : {msg}"
+            ansi = self.STYLES.get(record.levelno, self.RESET)
+            return f"{ansi}{prefix}{self.RESET} : {msg}"
         return f"{prefix} : {msg}"
-
-
-class GMCHandler(logging.Handler):
-    """Logging handler that renders GMC log lines via rich Console."""
-
-    def __init__(self, use_color: bool = True, use_icons: bool = True):
-        super().__init__()
-        self._fmt = GMCFormatter(use_color=use_color, use_icons=use_icons)
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            _gmc_console.print(self._fmt.format(record), markup=self._fmt.use_color)
-        except Exception:
-            self.handleError(record)
 
 
 def _setup_logger() -> logging.Logger:
     """Create and configure the GMC logger (called once at import time)."""
     _logger = logging.getLogger("GMC")
     if not _logger.handlers:
-        _logger.addHandler(GMCHandler(use_color=True, use_icons=True))
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(GMCFormatter())
+        _logger.addHandler(handler)
         _logger.setLevel(logging.INFO)
         _logger.propagate = False
     return _logger
