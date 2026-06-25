@@ -60,6 +60,14 @@ from shapely.geometry.base import BaseGeometry
 from shapely.geometry import shape
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from alive_progress import alive_bar
+from rich.console import Console as _RichConsole, Group as _RichGroup
+from rich.live import Live as _RichLive
+from rich.progress import (
+    Progress, TextColumn, BarColumn,
+    MofNCompleteColumn, TimeElapsedColumn, TimeRemainingColumn,
+)
+from rich.table import Table
+from rich.text import Text as _RichText
 
 # Interactive tools
 from ipyleaflet import Map, DrawControl
@@ -85,6 +93,8 @@ from geomulticorr._typing import (
 
 file_location = pathlib.Path(__file__)
 package_root = file_location.parent.parent  # geomulticorr/core/ -> geomulticorr/
+
+_rich_console = _RichConsole(highlight=False)
 resources_location = package_root / "resources"
 
 project_template_location = resources_location / "project_template"
@@ -979,7 +989,7 @@ class Session:
             georaster_metadata["geometry"] = geom_proj
             return georaster_metadata
         except Exception as e:
-            print(f"Skip {ta}: {e}")
+            logger.warning(f"Skip {ta.name}: {e}")
             return None
     
     # * Works properly
@@ -990,7 +1000,8 @@ class Session:
                             epsg_code: str | int | None = None,
                             suffix: str = "",
                             max_workers: int = None,
-                            save_georaster_bank: bool = False) -> gpd.GeoDataFrame:
+                            save_georaster_bank: bool = False,
+                            exclude_patterns: list[str] | None = None) -> gpd.GeoDataFrame:
         """Map georasters in the specified bank directory using parallel processing.
 
         Args:
@@ -1001,6 +1012,9 @@ class Session:
             suffix (str, optional): Suffix to append to output files. Defaults to "".
             max_workers (int, optional): Maximum number of workers for parallel processing. Defaults to None.
             save_georaster_bank (bool, optional): Whether to save the georaster bank. Defaults to False.
+            exclude_patterns (list[str] | None, optional): Substrings to match against filenames for exclusion.
+                Defaults to ``AUXILIARY_FILE_EXCLUDE_PATTERNS`` from ``supported_sensors.py``.
+                Pass ``[]`` to disable filtering.
 
         Raises:
             FileNotFoundError: If the georaster bank path does not exist.
@@ -1015,9 +1029,12 @@ class Session:
         georasters_bank_path = pathlib.Path(georasters_bank_path)
         if not georasters_bank_path.exists():
             raise FileNotFoundError(f"{georasters_bank_path} is not an existing path")
-        
+
         if extensions is None:
             extensions = ["tif", "jp2"]
+
+        if exclude_patterns is None:
+            exclude_patterns = gmc_sensors.AUXILIARY_FILE_EXCLUDE_PATTERNS
 
         # Normalize extensions (case-insensitive)
         targets = []
@@ -1027,25 +1044,47 @@ class Session:
         # targets = list({p for x in extensions
         #         for p in [*georasters_bank_path.glob(f"**/*.{x.lower()}"), *georasters_bank_path.glob(f"**/*.{x.upper()}")]})
 
+        if exclude_patterns:
+            targets = [t for t in targets if not any(pat in t.name for pat in exclude_patterns)]
+
         if not targets:
             raise FileNotFoundError(f"No raster files with extensions {extensions} found in {georasters_bank_path}")
         _image_types = {image_type.lower()} if isinstance(image_type, str) else {str(t).lower() for t in image_type}
         # Choose a project/target CRS (prefer your session's EPSG)
         target_crs = f"EPSG:{epsg_code}" if epsg_code is not None else f"EPSG:{self.epsg}"
         
+        file_name = _RichText("Mapping georasters: ", style="cyan")
+        progress = Progress(
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            console=_rich_console,
+        )
+
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = [ex.submit(self.map_single_georaster, ta, target_crs, _image_types) for ta in targets]
             rows = []
             errors = []
-            with alive_bar(len(futures), title=logger.search("Mapping georasters"), force_tty=True) as bar:
+            task = progress.add_task("", total=len(futures))
+            with _RichLive(
+                _RichGroup(file_name, progress),
+                console=_rich_console,
+                transient=False,
+                refresh_per_second=10,
+            ) as live:
                 for future in as_completed(futures):
                     try:
                         rec = future.result()
                         if rec:
+                            file_name.plain = f"Mapping georasters: {rec.get('filename', '')}"
                             rows.append(rec)
                     except Exception as e:
                         errors.append(str(e))
-                    bar()
+                    finally:
+                        progress.advance(task)
+                        live.refresh()
 
         if not rows:
             error_msg = "No features collected."
@@ -1661,6 +1700,7 @@ class Session:
         pzone_filter: list[str] | None = None,
         canonical_bounds: "object | None" = None,
         canonical_grid_size: "tuple[int, int] | None" = None,
+        print_summary: bool = True,
     ) -> dict[str, list[pathlib.Path]]:
         """Bulk sieve: crop all mosaics in ``georasters_map`` to each pzone AOI.
 
@@ -1699,7 +1739,7 @@ class Session:
         if georasters_map is None:
             georasters_map = self.get_georasters_map(image_type, suffix)
 
-        logger.info(f"Map epsg : {georasters_map.crs}\nPzone epsg : {self.get_pzones_overview().crs}")
+        logger.info(f"Map epsg : {georasters_map.crs}")
         logger.info(f"Target resolution: {target_resolution} (EPSG:{self.epsg})")
 
         written: dict[str, list[pathlib.Path]] = {}
@@ -1741,27 +1781,50 @@ class Session:
 
             groups = selection.groupby(["acq_date", "sensor"])["file_path"].apply(list)
             pz_written: list[pathlib.Path] = []
+            _summary_rows: list[dict] = []
 
-            for group_id, group in enumerate(groups):
-                acq_date = groups.index[group_id][0]
-                sensor = groups.index[group_id][1]
+            thumb_name_text = _RichText("", style="cyan")
+            progress = Progress(
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TextColumn("•"),
+                TimeElapsedColumn(),
+                console=_rich_console,
+            )
+            task = progress.add_task("", total=len(groups))
 
-                if image_type == "opt":
-                    thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}.tif"
-                    thumb_path = pathlib.Path(pz_opticals, thumb_name)
-                elif image_type == "dem":
-                    thumb_name = f"{pz['pz_name']}_dem.tif"
-                    thumb_path = pathlib.Path(pz_rasterdata, thumb_name)
-                else:
-                    raise ValueError(f"Unsupported image_type: {image_type}")
+            with _RichLive(
+                _RichGroup(thumb_name_text, progress),
+                console=_rich_console,
+                transient=False,
+                refresh_per_second=10,
+            ) as live:
+                for group_id, group in enumerate(groups):
+                    acq_date = groups.index[group_id][0]
+                    sensor = groups.index[group_id][1]
 
-                if skip_existing and thumb_path.exists():
-                    logger.info(f"Skipping existing: {thumb_name}")
-                    pz_written.append(thumb_path)
-                    continue
+                    if image_type == "opt":
+                        thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}.tif"
+                        thumb_path = pathlib.Path(pz_opticals, thumb_name)
+                    elif image_type == "dem":
+                        thumb_name = f"{pz['pz_name']}_dem.tif"
+                        thumb_path = pathlib.Path(pz_rasterdata, thumb_name)
+                    else:
+                        raise ValueError(f"Unsupported image_type: {image_type}")
 
-                fully: list[gu.Raster] = []
-                with alive_bar(len(group), title=f"Cropping {thumb_name}", force_tty=True) as bar:
+                    thumb_name_text.plain = thumb_name
+                    live.refresh()
+
+                    if skip_existing and thumb_path.exists():
+                        pz_written.append(thumb_path)
+                        _summary_rows.append({"name": thumb_name, "sensor": sensor, "status": "↷ skipped"})
+                        progress.advance(task)
+                        live.refresh()
+                        continue
+
+                    # Cropping phase
+                    fully: list[gu.Raster] = []
                     for mosaic_path in group:
                         try:
                             cropped = self.sieve_single_mosaic(
@@ -1782,31 +1845,42 @@ class Session:
                                 fully.append(cropped)
                         except Exception as e:
                             logger.error(f"Error on {mosaic_path}: {e}")
-                        finally:
-                            bar()
 
-                if len(fully) == 0:
-                    logger.warning(f"No usable data for {thumb_name}")
-                    continue
-                elif len(fully) == 1:
-                    thumb = fully[0]
-                else:
-                    logger.info(f"Merging {len(fully)} tiles for {thumb_name}")
-                    thumb = gu.raster.multiraster.merge_rasters(
-                        fully,
-                        merge_algorithm=merge_algorithm,
-                        resampling_method=resampling_method,
-                        use_ref_bounds=False,
-                    )
+                    if len(fully) == 0:
+                        logger.warning(f"No usable data for {thumb_name}")
+                        _summary_rows.append({"name": thumb_name, "sensor": sensor, "status": "✗ no data"})
+                        progress.advance(task)
+                        live.refresh()
+                        continue
+                    elif len(fully) == 1:
+                        thumb = fully[0]
+                    else:
+                        thumb = gu.raster.multiraster.merge_rasters(
+                            fully,
+                            merge_algorithm=merge_algorithm,
+                            resampling_method=resampling_method,
+                            use_ref_bounds=False,
+                        )
 
-                thumb.save(thumb_path, dtype=out_dtype)
-                logger.save(f"Saved: {thumb_path}")
-                pz_written.append(thumb_path)
-
-                del thumb
-                del fully
+                    thumb.to_file(thumb_path, dtype=out_dtype)
+                    pz_written.append(thumb_path)
+                    _summary_rows.append({"name": thumb_name, "sensor": sensor, "status": "✓ done"})
+                    del thumb, fully
+                    progress.advance(task)
+                    live.refresh()
 
             written[pz["pz_name"]] = pz_written
+
+        if print_summary and _summary_rows:
+            table = Table(title="sieve_bulk — processed thumbs", show_lines=False)
+            table.add_column("Thumb",   style="cyan", no_wrap=True)
+            table.add_column("Sensor",  style="default")
+            table.add_column("Res (m)", style="default", justify="right")
+            table.add_column("Status",  style="default")
+            for row in _summary_rows:
+                table.add_row(row["name"], row["sensor"], str(target_resolution), row["status"])
+            if print_summary:
+                _rich_console.print(table)
 
         return written
     
@@ -1828,6 +1902,7 @@ class Session:
         corr_tile_size: int = 2048,
         corr_algorithm: str = "asp_bm",
         corr_kernel: tuple[int, int] = (21, 21),
+        corr_search: tuple[int, int, int, int] | None = None,
         corr_xthreshold: int = 10,
         corr_seed_mode: int = 1,
         subpixel_mode: int = 2,
@@ -1838,6 +1913,7 @@ class Session:
         correval: bool = True,
         metric: str = "ncc",
         overwrite_scripts: bool = False,
+        print_summary: bool = True,
     ) -> list[pathlib.Path]:
         """Prepare the output directory and bash script for each pair.
 
@@ -1874,71 +1950,114 @@ class Session:
             f"[cluster={cluster_label}]"
         )
 
+        summary_rows: list[dict] = []
         bash_scripts: list[pathlib.Path] = []
 
-        for pair in pairs:
-            status = pair.get_status()
-
-            if all(pair.check_corr_outputs().values()) and not overwrite:
-                logger.info(f"Skipping '{pair.pa_key}' (already complete)")
-                continue
-
-            # 1. Create output directory
-            pair.pa_path.mkdir(parents=True, exist_ok=True)
-
-            # 2. Clip inputs if not already done
-            if status not in ("clipped", "complete"):
-                logger.info(f"Clipping '{pair.pa_key}'")
-                pair.clip()
-
-            # 3. Reuse existing script if allowed
-            bash_path = pair.pa_path / f"{pair.pa_key}_CorrelationJob.sh"
-            if bash_path.exists() and not overwrite_scripts:
-                logger.info(f"Reusing existing script: {bash_path.name}")
-                bash_scripts.append(bash_path)
-                continue
-
-            # 4. Write correlation parameters settings file
-            params_file = pair.pa_path / f"{pair.pa_key}_CorrParameters.txt"
-            asp.build_correlation_params(
-                corr_algorithm=corr_algorithm,
-                corr_kernel=corr_kernel,
-                corr_xthreshold=corr_xthreshold,
-                corr_seed_mode=corr_seed_mode,
-                subpixel_refinement_mode=subpixel_mode,
-                subpixel_kernel=subpixel_kernel,
-                prefilter_mode=prefilter_mode,
-                cost_mode=cost_mode,
-                save_disparity_difference=save_disparity_difference,
-                params_file_path=params_file,
-            )
-
-            # 5. Write bash script referencing that params file
-            bash_path = asp.write_bash_script(
-                pair,
-                corr_params_file=params_file,
-                cluster=cluster,
-                nodes=nodes,
-                cores=cores,
-                walltime=walltime,
-                besteffort=besteffort,
-                conda_env=conda_env,
-                processes=processes,
-                threads_multiprocess=threads_multiprocess,
-                threads_singleprocess=threads_singleprocess,
-                corr_memory_limit_mb=corr_memory_limit_mb,
-                corr_tile_size=corr_tile_size,
-                correval=correval,
-                corr_algorithm=corr_algorithm,
-                corr_kernel=corr_kernel,
-                metric=metric,
-            )
-            bash_scripts.append(bash_path)
-            logger.info(f"Ready: '{pair.pa_key}' → {bash_path.name}")
-
-        logger.success(
-            f"Prepared {len(bash_scripts)} bash script(s) in their respective pair directories."
+        pair_name = _RichText("", style="cyan")
+        progress = Progress(
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            console=_rich_console,
         )
+        task = progress.add_task("", total=len(pairs))
+
+        with _RichLive(
+            _RichGroup(pair_name, progress),
+            console=_rich_console,
+            transient=False,
+            refresh_per_second=10,
+        ) as live:
+            for pair in pairs:
+                pair_name.plain = pair.pa_key
+                rec = {"pair": pair.pa_key, "directory": "—", "symlink": "—", "params": "—", "script": "—"}
+                status = pair.get_status()
+
+                if all(pair.check_corr_outputs().values()) and not overwrite:
+                    rec["script"] = "skipped (complete)"
+                    summary_rows.append(rec)
+                    progress.advance(task)
+                    live.refresh()
+                    continue
+
+                # 1. Create output directory
+                pair.pa_path.mkdir(parents=True, exist_ok=True)
+                rec["directory"] = "created"
+
+                # 2. Clip inputs if not already done
+                if status not in ("clipped", "complete"):
+                    pair.clip()
+                    rec["symlink"] = "created"
+                else:
+                    rec["symlink"] = "exists"
+
+                # 3. Reuse existing script if allowed
+                bash_path = pair.pa_path / f"{pair.pa_key}_CorrelationJob.sh"
+                if bash_path.exists() and not overwrite_scripts:
+                    bash_scripts.append(bash_path)
+                    rec["script"] = "reused"
+                    summary_rows.append(rec)
+                    progress.advance(task)
+                    live.refresh()
+                    continue
+
+                # 4. Write correlation parameters settings file
+                params_file = pair.pa_path / f"{pair.pa_key}_CorrParameters.txt"
+                asp.build_correlation_params(
+                    corr_algorithm=corr_algorithm,
+                    corr_kernel=corr_kernel,
+                    corr_search=corr_search,
+                    corr_xthreshold=corr_xthreshold,
+                    corr_seed_mode=corr_seed_mode,
+                    subpixel_refinement_mode=subpixel_mode,
+                    subpixel_kernel=subpixel_kernel,
+                    prefilter_mode=prefilter_mode,
+                    cost_mode=cost_mode,
+                    save_disparity_difference=save_disparity_difference,
+                    params_file_path=params_file,
+                )
+                rec["params"] = params_file.name
+
+                # 5. Write bash script referencing that params file
+                bash_path = asp.write_bash_script(
+                    pair,
+                    corr_params_file=params_file,
+                    cluster=cluster,
+                    nodes=nodes,
+                    cores=cores,
+                    walltime=walltime,
+                    besteffort=besteffort,
+                    conda_env=conda_env,
+                    processes=processes,
+                    threads_multiprocess=threads_multiprocess,
+                    threads_singleprocess=threads_singleprocess,
+                    corr_memory_limit_mb=corr_memory_limit_mb,
+                    corr_tile_size=corr_tile_size,
+                    correval=correval,
+                    corr_algorithm=corr_algorithm,
+                    corr_kernel=corr_kernel,
+                    metric=metric,
+                )
+                bash_scripts.append(bash_path)
+                rec["script"] = bash_path.name
+
+                summary_rows.append(rec)
+                progress.advance(task)
+                live.refresh()
+
+        table = Table(title="prepare_pairs_correlation — summary", show_lines=False)
+        table.add_column("Pair",         style="cyan", no_wrap=True)
+        table.add_column("Directory",    style="dim")
+        table.add_column("Symlink",      style="dim")
+        table.add_column("Corr. params", style="dim")
+        table.add_column("Job Script",   style="dim")
+        for rec in summary_rows:
+            table.add_row(rec["pair"], rec["directory"], rec["symlink"], rec["params"], rec["script"])
+        if print_summary:
+            _rich_console.print(table)
+
         return bash_scripts
 
     def launch_pairs_correlation(
@@ -1961,6 +2080,7 @@ class Session:
         clean: bool = True,
         correval: bool = True,
         overwrite_scripts: bool = False,
+        print_summary: bool = True,
     ) -> list[int]:
         """Prepare (if needed) and launch correlation for all pairs matching *criterias*.
 
@@ -1992,79 +2112,110 @@ class Session:
         Returns:
             List of return codes (one per pair; 0 = success / submitted).
         """
-        bash_scripts = self.prepare_pairs_correlation(
-            criterias=criterias,
-            cluster=cluster,
-            overwrite=overwrite,
-            overwrite_scripts=overwrite_scripts,
-            asp_bin_dir=asp_bin_dir,
-            nodes=nodes,
-            cores=cores,
-            walltime=walltime,
-            besteffort=besteffort,
-            conda_env=conda_env,
-            processes=processes,
-            threads_multiprocess=threads_multiprocess,
-            threads_singleprocess=threads_singleprocess,
-            corr_memory_limit_mb=corr_memory_limit_mb,
-            corr_tile_size=corr_tile_size,
-            correval=correval,
-        )
-
-        if not bash_scripts:
+        pairs = self.get_pairs(criterias)
+        if not pairs:
+            logger.warning("No pairs found matching criterias.")
             return []
+
+        use_cluster = cluster in ("gricad", "isterre")
 
         if clean:
             from geomulticorr.correlation import ASP
             asp = ASP(session=self, asp_bin_dir=asp_bin_dir)
-            pair_map = {p.pa_key: p for p in self.get_pairs(criterias)}
-            active_pairs = [pair_map.get(s.parent.name) for s in bash_scripts]
         else:
             asp = None
-            active_pairs = [None] * len(bash_scripts)
+
+        # Resolve bash script paths and warn for any that are missing.
+        ready: list[tuple] = []   # (pair, script_path)
+        for pair in pairs:
+            script = pair.pa_path / f"{pair.pa_key}_CorrelationJob.sh"
+            if script.exists():
+                ready.append((pair, script))
+            else:
+                logger.warning(
+                    f"Script not found for {pair.pa_key} — run prepare_pairs_correlation() first."
+                )
+
+        if not ready:
+            logger.warning("No launch scripts found. Aborting.")
+            return []
+
+        logger.info(
+            f"Launching {len(ready)}/{len(pairs)} pair(s) "
+            f"[cluster={'cluster' if use_cluster else 'local'}, dry_run={dry_run}]"
+        )
 
         return_codes: list[int] = []
-        use_cluster = cluster in ("gricad", "isterre")
+        summary_rows: list[dict] = []
 
-        for pair, script in zip(active_pairs, bash_scripts):
-            if use_cluster:
-                cmd = ["oarsub", "-S", str(script.resolve())]
-            else:
-                cmd = ["bash", str(script)]
-
-            if dry_run:
-                print(f"DRY RUN [{script.parent.name}]: {' '.join(cmd)}")
-                return_codes.append(0)
-                continue
-
-            logger.info(f"Launching: {script.name}")
-            result = subprocess.run(
-                cmd,
-                cwd=script.parent,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            if result.returncode != 0:
-                logger.error(
-                    f"Failed [{script.parent.name}]: {result.stderr.strip()}"
-                )
-            else:
-                if clean and pair is not None and not use_cluster:
-                    asp.clean_pair_directory(pair)
-            return_codes.append(result.returncode)
-
-        n_ok = sum(r == 0 for r in return_codes)
-        logger.success(
-            f"Launched {n_ok}/{len(return_codes)} pair(s) successfully."
+        pair_name = _RichText("", style="cyan")
+        progress = Progress(
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            console=_rich_console,
         )
+        task = progress.add_task("", total=len(ready))
+
+        with _RichLive(
+            _RichGroup(pair_name, progress),
+            console=_rich_console,
+            transient=False,
+            refresh_per_second=10,
+        ) as live:
+            for pair, script in ready:
+                pair_name.plain = pair.pa_key
+                live.refresh()
+
+                if use_cluster:
+                    cmd = ["oarsub", "-S", str(script.resolve())]
+                else:
+                    cmd = ["bash", str(script)]
+
+                if dry_run:
+                    status = f"DRY RUN: {' '.join(cmd)}"
+                    return_codes.append(0)
+                    summary_rows.append({"pair": pair.pa_key, "status": "dry run"})
+                    progress.advance(task)
+                    live.refresh()
+                    continue
+
+                result = subprocess.run(
+                    cmd,
+                    cwd=script.parent,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                return_codes.append(result.returncode)
+
+                if result.returncode != 0:
+                    summary_rows.append({"pair": pair.pa_key, "status": f"[red]failed (rc={result.returncode})[/red]"})
+                    logger.error(f"Failed [{pair.pa_key}]: {result.stderr.strip()}")
+                else:
+                    if clean and not use_cluster:
+                        asp.clean_pair_directory(pair)
+                    summary_rows.append({"pair": pair.pa_key, "status": "[green]launched[/green]"})
+
+                progress.advance(task)
+                live.refresh()
+
+        # Summary table
+        table = Table(title="launch_pairs_correlation — summary", show_lines=False)
+        table.add_column("Pair", style="cyan", no_wrap=True)
+        table.add_column("Status")
+        for rec in summary_rows:
+            table.add_row(rec["pair"], rec["status"])
+        if print_summary:
+            _rich_console.print(table)
 
         # Sync pa_status back to the geodatabase for local runs.
         # For cluster (oarsub) jobs the processes are async — call
         # _sync_pairs_status(get_pairs(criterias)) manually after they finish.
         if not use_cluster and not dry_run:
-            run_pairs = [p for p in active_pairs if p is not None]
-            self._sync_pairs_status(run_pairs)
+            self._sync_pairs_status([p for p, _ in ready])
 
         return return_codes
 
@@ -2073,6 +2224,7 @@ class Session:
         criterias: str | list[str] = "",
         clean: bool = True,
         asp_bin_dir: str | pathlib.Path | None = None,
+        print_summary: bool = True,
     ) -> None:
         """Sync geodatabase status and optionally clean after OAR jobs complete.
 
@@ -2095,13 +2247,150 @@ class Session:
             logger.warning("sync_pairs_after_cluster: no pairs found.")
             return
 
-        if clean:
-            asp = ASP(session=self, asp_bin_dir=asp_bin_dir)
+        asp = ASP(session=self, asp_bin_dir=asp_bin_dir) if clean else None
+
+        summary_rows: list[dict] = []
+
+        pair_name = _RichText("", style="cyan")
+        progress = Progress(
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            console=_rich_console,
+        )
+        task = progress.add_task("", total=len(pairs))
+
+        with _RichLive(
+            _RichGroup(pair_name, progress),
+            console=_rich_console,
+            transient=False,
+            refresh_per_second=10,
+        ) as live:
             for pair in pairs:
-                if pair.get_status() == "complete":
-                    asp.clean_pair_directory(pair)
+                pair_name.plain = pair.pa_key
+                live.refresh()
+
+                status = pair.get_status()
+                n_deleted = 0
+
+                if clean and asp is not None and status == "complete":
+                    removed = asp.clean_pair_directory(pair)
+                    n_deleted = len(removed)
+
+                summary_rows.append({
+                    "pair": pair.pa_key,
+                    "correlated": "[green]yes[/green]" if status == "complete" else f"[red]no ({status})[/red]",
+                    "deleted": str(n_deleted) if n_deleted else "—",
+                    "db_status": status,
+                })
+
+                progress.advance(task)
+                live.refresh()
 
         self._sync_pairs_status(pairs)
+
+        table = Table(title="sync_pairs_after_cluster — summary", show_lines=False)
+        table.add_column("Pair", style="cyan", no_wrap=True)
+        table.add_column("Correlated OK")
+        table.add_column("Files deleted", justify="right")
+        table.add_column("DB status", style="dim")
+        for rec in summary_rows:
+            table.add_row(rec["pair"], rec["correlated"], rec["deleted"], rec["db_status"])
+        if print_summary:
+            _rich_console.print(table)
+
+    def reset_pairs_outputs(
+        self,
+        criterias: str | list[str] = "",
+        dry_run: bool = False,
+        print_summary: bool = True,
+    ) -> list[pathlib.Path]:
+        """Delete all correlation outputs for matching pairs, resetting them to 'clipped' status.
+
+        Removes every non-symlink file inside each pair's directory, preserving only the
+        two input symlinks (left / right image links).  After deletion ``get_status()``
+        returns ``"clipped"``, so the pair can be re-correlated with new parameters via
+        :meth:`prepare_pairs_correlation` and :meth:`launch_pairs_correlation`.
+
+        Args:
+            criterias: Filter pairs — same syntax as :meth:`get_pairs`.
+            dry_run: List files that would be deleted without removing them.
+            print_summary: Print a summary table after completion.
+
+        Returns:
+            List of deleted (or would-be-deleted) file paths.
+        """
+        pairs = self.get_pairs(criterias)
+        if not pairs:
+            logger.warning("reset_pairs_outputs: no pairs found.")
+            return []
+
+        logger.info(
+            f"{'[DRY RUN] ' if dry_run else ''}Resetting outputs for {len(pairs)} pair(s)."
+        )
+
+        deleted_all: list[pathlib.Path] = []
+        summary_rows: list[dict] = []
+
+        pair_name = _RichText("", style="cyan")
+        progress = Progress(
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            console=_rich_console,
+        )
+        task = progress.add_task("", total=len(pairs))
+
+        with _RichLive(
+            _RichGroup(pair_name, progress),
+            console=_rich_console,
+            transient=False,
+            refresh_per_second=10,
+        ) as live:
+            for pair in pairs:
+                pair_name.plain = pair.pa_key
+                live.refresh()
+
+                status_before = pair.get_status()
+                deleted: list[pathlib.Path] = []
+
+                if pair.pa_path.exists():
+                    for f in sorted(pair.pa_path.iterdir()):
+                        if f.is_symlink() or not f.is_file():
+                            continue
+                        if not dry_run:
+                            f.unlink()
+                        deleted.append(f)
+
+                deleted_all.extend(deleted)
+                status_after = pair.get_status() if not dry_run else "dry-run"
+                summary_rows.append({
+                    "pair": pair.pa_key,
+                    "status_before": status_before,
+                    "deleted": str(len(deleted)),
+                    "status_after": f"[dim]{status_after}[/dim]" if dry_run else status_after,
+                })
+                progress.advance(task)
+                live.refresh()
+
+        if not dry_run:
+            self._sync_pairs_status(pairs)
+
+        table = Table(title="reset_pairs_outputs — summary", show_lines=False)
+        table.add_column("Pair", style="cyan", no_wrap=True)
+        table.add_column("Status before", style="dim")
+        table.add_column("Files deleted", justify="right")
+        table.add_column("Status after")
+        for rec in summary_rows:
+            table.add_row(rec["pair"], rec["status_before"], rec["deleted"], rec["status_after"])
+        if print_summary:
+            _rich_console.print(table)
+
+        return deleted_all
 
     def extract_pairs_raw_displacements(
         self,
@@ -2112,6 +2401,7 @@ class Session:
         resampling: str = "bilinear",
         canonical_bounds: "object | None" = None,
         canonical_grid_size: "tuple[int, int] | None" = None,
+        print_summary: bool = True,
     ) -> dict:
         """Extract EW/NS displacements and compute raw stats for all complete pairs.
 
@@ -2145,12 +2435,9 @@ class Session:
 
         pairs = self.get_pairs(criterias)
         results: dict = {}
-        n_done = 0
-        n_skip = 0
 
         # Pre-compute one canonical grid per pzone so all pairs within the same pzone
         # are reprojected to identical bounds and dimensions when target_resolution is set.
-        # Mirrors the pattern used in sieve_bulk / _compute_canonical_grid.
         pzone_canonical: dict = {}
         if target_resolution is not None and canonical_bounds is None:
             pzones_df = self.get_pzones_overview()
@@ -2161,45 +2448,103 @@ class Session:
                 cb, cs = self._compute_canonical_grid(pz_vec, self.epsg, target_resolution)
                 pzone_canonical[row["pz_name"]] = (cb, cs)
 
-        for pair in pairs:
-            if not pair.pa_disparity_f_path.exists():
-                logger.warning(f"Skipping '{pair.pa_key}' — disparity raster not found")
-                results[pair.pa_key] = None
-                n_skip += 1
-                continue
+        summary_rows: list[dict] = []
 
-            if not overwrite and pair.pa_ew_path.exists() and pair.pa_ns_path.exists():
-                logger.info(f"Already processed '{pair.pa_key}', skipping (use overwrite=True to redo)")
-                results[pair.pa_key] = None
-                n_skip += 1
-                continue
-
-            # Resolve canonical grid for this pair: explicit params take priority,
-            # otherwise fall back to the per-pzone auto-computed grid.
-            if canonical_bounds is not None and canonical_grid_size is not None:
-                pair_cb, pair_cs = canonical_bounds, canonical_grid_size
-            else:
-                pair_cb, pair_cs = pzone_canonical.get(pair.pa_pz_name, (None, None))
-
-            logger.launch(f"Extracting raw displacements for '{pair.pa_key}'")
-            try:
-                stats = pair.extract_raw_displacements(
-                    save_plot=save_plot,
-                    target_resolution=target_resolution,
-                    resampling=resampling,
-                    canonical_bounds=pair_cb,
-                    canonical_grid_size=pair_cs,
-                )
-                results[pair.pa_key] = stats
-                n_done += 1
-            except Exception as exc:
-                logger.error(f"Failed for '{pair.pa_key}': {exc}")
-                results[pair.pa_key] = None
-
-        logger.success(
-            f"Extracted raw displacements for {n_done}/{len(pairs)} pair(s) "
-            f"({n_skip} skipped)."
+        pair_name = _RichText("", style="cyan")
+        progress = Progress(
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            console=_rich_console,
         )
+        task = progress.add_task("", total=len(pairs))
+
+        with _RichLive(
+            _RichGroup(pair_name, progress),
+            console=_rich_console,
+            transient=False,
+            refresh_per_second=10,
+        ) as live:
+            for pair in pairs:
+                pair_name.plain = pair.pa_key
+                live.refresh()
+
+                rec = {
+                    "pair": pair.pa_key,
+                    "ew": "—", "ns": "—", "cc": "—",
+                    "plot": "—", "stats": "—",
+                }
+
+                if not pair.pa_disparity_f_path.exists():
+                    logger.warning(f"Skipping '{pair.pa_key}' — disparity raster not found")
+                    rec["ew"] = rec["ns"] = rec["cc"] = "[red]no disparity[/red]"
+                    results[pair.pa_key] = None
+                    summary_rows.append(rec)
+                    progress.advance(task)
+                    live.refresh()
+                    continue
+
+                if not overwrite and pair.pa_ew_path.exists() and pair.pa_ns_path.exists():
+                    rec["ew"] = "[dim]exists[/dim]"
+                    rec["ns"] = "[dim]exists[/dim]"
+                    rec["cc"] = "[dim]exists[/dim]" if pair.pa_cc_path.exists() else "—"
+                    rec["plot"] = "[dim]exists[/dim]" if pair.pa_plot_raw_path.exists() else "—"
+                    rec["stats"] = "[dim]exists[/dim]" if pair.pa_stats_path.exists() else "—"
+                    results[pair.pa_key] = None
+                    summary_rows.append(rec)
+                    progress.advance(task)
+                    live.refresh()
+                    continue
+
+                # Resolve canonical grid for this pair.
+                if canonical_bounds is not None and canonical_grid_size is not None:
+                    pair_cb, pair_cs = canonical_bounds, canonical_grid_size
+                else:
+                    pair_cb, pair_cs = pzone_canonical.get(pair.pa_pz_name, (None, None))
+
+                try:
+                    stats = pair.extract_raw_displacements(
+                        save_plot=save_plot,
+                        target_resolution=target_resolution,
+                        resampling=resampling,
+                        canonical_bounds=pair_cb,
+                        canonical_grid_size=pair_cs,
+                    )
+                    results[pair.pa_key] = stats
+                    rec["ew"] = "[green]ok[/green]" if pair.pa_ew_path.exists() else "[red]missing[/red]"
+                    rec["ns"] = "[green]ok[/green]" if pair.pa_ns_path.exists() else "[red]missing[/red]"
+                    rec["cc"] = "[green]ok[/green]" if pair.pa_cc_path.exists() else "[red]missing[/red]"
+                    rec["plot"] = "[green]ok[/green]" if pair.pa_plot_raw_path.exists() else ("—" if not save_plot else "[red]missing[/red]")
+                    rec["stats"] = "[green]ok[/green]" if pair.pa_stats_path.exists() else "[red]missing[/red]"
+                except Exception as exc:
+                    logger.error(f"Failed for '{pair.pa_key}': {exc}")
+                    results[pair.pa_key] = None
+                    rec["ew"] = rec["ns"] = rec["cc"] = f"[red]error[/red]"
+                    rec["plot"] = rec["stats"] = "[red]error[/red]"
+
+                summary_rows.append(rec)
+                progress.advance(task)
+                live.refresh()
+
+        table = Table(title="extract_pairs_raw_displacements — summary", show_lines=False)
+        table.add_column("Pair", style="cyan", no_wrap=True)
+        table.add_column("EW", justify="center")
+        table.add_column("NS", justify="center")
+        table.add_column("CC", justify="center")
+        table.add_column("Raw plot", justify="center")
+        table.add_column("Stats", justify="center")
+        if target_resolution is not None:
+            table.add_column("Resampling", justify="center", style="dim")
+        for rec in summary_rows:
+            row_data = [rec["pair"], rec["ew"], rec["ns"], rec["cc"], rec["plot"], rec["stats"]]
+            if target_resolution is not None:
+                row_data.append(f"{resampling} @ {target_resolution} m")
+            table.add_row(*row_data)
+        if print_summary:
+            _rich_console.print(table)
+
         return results
 
     def apply_pairs_corrections(
@@ -2209,6 +2554,7 @@ class Session:
         criterias: str | list[str] = "",
         overwrite: bool = False,
         save_plot: bool = True,
+        print_summary: bool = True,
         **kwargs,
     ) -> dict:
         """Apply a filter and/or correction pipeline to all processed pairs.
@@ -2265,114 +2611,177 @@ class Session:
 
         pairs = self.get_pairs(criterias)
         results: dict = {}
-        n_done = 0
-        n_skip = 0
 
-        for pair in pairs:
-            ew_corr = pair.pa_path / f"{pair.pa_key}-F_EW_corr.tif"
-            ns_corr = pair.pa_path / f"{pair.pa_key}-F_NS_corr.tif"
+        _RAMP_TOPO_CLASSES = {
+            "RampCorrection", "TopoCorrection",
+            "TopoRampCorrection", "SlopeRampCorrection",
+        }
 
-            if not pair.pa_ew_path.exists() or not pair.pa_ns_path.exists():
-                logger.warning(f"Skipping '{pair.pa_key}' — EW/NS rasters not found")
-                results[pair.pa_key] = None
-                n_skip += 1
-                continue
+        summary_rows: list[dict] = []
 
-            if not overwrite and ew_corr.exists() and ns_corr.exists():
-                logger.info(f"Already corrected '{pair.pa_key}', skipping (use overwrite=True to redo)")
-                results[pair.pa_key] = None
-                n_skip += 1
-                continue
-
-            logger.launch(f"Applying corrections for '{pair.pa_key}'")
-            try:
-                x_raw = gu.Raster(str(pair.pa_ew_path))
-                y_raw = gu.Raster(str(pair.pa_ns_path))
-
-                # Auto-inject cc= from the pair folder if not already provided
-                pair_kwargs = dict(kwargs)
-                if "cc" not in pair_kwargs and pair.pa_cc_path.exists():
-                    pair_kwargs["cc"] = gu.Raster(str(pair.pa_cc_path))
-
-                # Validate required kwargs upfront
-                all_steps = []
-                if filter_pipeline is not None:
-                    fp = filter_pipeline
-                    all_steps += fp.masks if isinstance(fp, FilterPipeline) else [fp]
-                if correction_pipeline is not None:
-                    from geomulticorr.corrections.corrections import CorrectionPipeline
-                    cp = correction_pipeline
-                    all_steps += cp.steps if isinstance(cp, CorrectionPipeline) else [cp]
-                missing = [
-                    f"{type(s).__name__} requires '{k}'"
-                    for s in all_steps
-                    for k in getattr(s, "_REQUIRED_KWARGS", ())
-                    if k not in pair_kwargs
-                ]
-                if missing:
-                    raise ValueError(
-                        "Missing required kwargs — pass them to apply_pairs_corrections():\n  "
-                        + "\n  ".join(missing)
-                    )
-
-                # Step 1: filter pipeline → masked rasters + stable-area masks
-                x_stable = y_stable = None
-                if filter_pipeline is not None:
-                    x_stable = filter_pipeline.compute(x_raw, **pair_kwargs)
-                    y_stable = filter_pipeline.compute(y_raw, **pair_kwargs)
-                    x_filt, y_filt = filter_pipeline.apply(x_raw, y_raw, **pair_kwargs)
-                else:
-                    x_filt, y_filt = x_raw, y_raw
-
-                # Step 2: correction pipeline — fit + apply each step individually
-                # so stats can be recorded after every correction.
-                import copy
-                import geomulticorr.stats.stats as gmc_stats
-
-                x_corr, y_corr = x_filt, y_filt
-                if correction_pipeline is not None:
-                    cp_x = copy.deepcopy(correction_pipeline)
-                    cp_y = copy.deepcopy(correction_pipeline)
-                    steps_x = cp_x.steps if isinstance(cp_x, CorrectionPipeline) else [cp_x]
-                    steps_y = cp_y.steps if isinstance(cp_y, CorrectionPipeline) else [cp_y]
-                    for step_x, step_y in zip(steps_x, steps_y):
-                        step_name = type(step_x).__name__
-                        step_x.fit(x_corr, stable_mask=x_stable, **pair_kwargs)
-                        x_corr = step_x.apply(x_corr)
-                        step_y.fit(y_corr, stable_mask=y_stable, **pair_kwargs)
-                        y_corr = step_y.apply(y_corr)
-                        gmc_stats.save_corrected_stats(pair, x_corr, y_corr, step_name)
-
-                # Optional before/after control plot
-                if save_plot:
-                    try:
-                        from geomulticorr.utils.gmc_functions import plot_correction_result
-                        fig = plot_correction_result(
-                            None, x_raw, x_corr, y_raw, y_corr,
-                            fig_name=pair.pa_key,
-                            **pair_kwargs,
-                        )
-                        plot_path = pair.pa_path / f"{pair.pa_key}_corrections_disp.jpg"
-                        fig.savefig(str(plot_path), dpi=150, format="JPEG", bbox_inches="tight")
-                        plt.close(fig)
-                        logger.save(f"Correction plot saved: {plot_path.name}")
-                    except Exception as plot_exc:
-                        logger.warning(f"Could not save control plot: {plot_exc}")
-
-                x_corr.save(str(ew_corr))
-                y_corr.save(str(ns_corr))
-                logger.file(f"Saved corrected EW: {ew_corr.name}")
-                logger.file(f"Saved corrected NS: {ns_corr.name}")
-                results[pair.pa_key] = {"ew": ew_corr, "ns": ns_corr}
-                n_done += 1
-            except Exception as exc:
-                logger.error(f"Failed for '{pair.pa_key}': {exc}")
-                results[pair.pa_key] = None
-
-        logger.success(
-            f"Applied corrections for {n_done}/{len(pairs)} pair(s) "
-            f"({n_skip} skipped)."
+        pair_name = _RichText("", style="cyan")
+        progress = Progress(
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            console=_rich_console,
         )
+        task = progress.add_task("", total=len(pairs))
+
+        with _RichLive(
+            _RichGroup(pair_name, progress),
+            console=_rich_console,
+            transient=False,
+            refresh_per_second=10,
+        ) as live:
+            for pair in pairs:
+                pair_name.plain = pair.pa_key
+                live.refresh()
+
+                ew_corr = pair.pa_path / f"{pair.pa_key}-F_EW_corr.tif"
+                ns_corr = pair.pa_path / f"{pair.pa_key}-F_NS_corr.tif"
+
+                rec = {
+                    "pair": pair.pa_key,
+                    "median": "—",
+                    "ramp_topo": "—",
+                    "stats": "—",
+                    "ew_corr": "—",
+                    "ns_corr": "—",
+                }
+
+                if not pair.pa_ew_path.exists() or not pair.pa_ns_path.exists():
+                    logger.warning(f"Skipping '{pair.pa_key}' — EW/NS rasters not found")
+                    rec["ew_corr"] = rec["ns_corr"] = "[red]no input[/red]"
+                    results[pair.pa_key] = None
+                    summary_rows.append(rec)
+                    progress.advance(task)
+                    live.refresh()
+                    continue
+
+                if not overwrite and ew_corr.exists() and ns_corr.exists():
+                    rec["median"] = rec["ramp_topo"] = rec["stats"] = "[dim]exists[/dim]"
+                    rec["ew_corr"] = rec["ns_corr"] = "[dim]exists[/dim]"
+                    results[pair.pa_key] = None
+                    summary_rows.append(rec)
+                    progress.advance(task)
+                    live.refresh()
+                    continue
+
+                try:
+                    x_raw = gu.Raster(str(pair.pa_ew_path), nodata=0)
+                    y_raw = gu.Raster(str(pair.pa_ns_path), nodata=0)
+
+                    # Auto-inject cc= from the pair folder if not already provided
+                    pair_kwargs = dict(kwargs)
+                    if "cc" not in pair_kwargs and pair.pa_cc_path.exists():
+                        pair_kwargs["cc"] = gu.Raster(str(pair.pa_cc_path))
+
+                    # Validate required kwargs upfront
+                    all_steps = []
+                    if filter_pipeline is not None:
+                        fp = filter_pipeline
+                        all_steps += fp.masks if isinstance(fp, FilterPipeline) else [fp]
+                    if correction_pipeline is not None:
+                        from geomulticorr.corrections.corrections import CorrectionPipeline
+                        cp = correction_pipeline
+                        all_steps += cp.steps if isinstance(cp, CorrectionPipeline) else [cp]
+                    missing = [
+                        f"{type(s).__name__} requires '{k}'"
+                        for s in all_steps
+                        for k in getattr(s, "_REQUIRED_KWARGS", ())
+                        if k not in pair_kwargs
+                    ]
+                    if missing:
+                        raise ValueError(
+                            "Missing required kwargs — pass them to apply_pairs_corrections():\n  "
+                            + "\n  ".join(missing)
+                        )
+
+                    # Step 1: filter pipeline → masked rasters + stable-area masks
+                    x_stable = y_stable = None
+                    if filter_pipeline is not None:
+                        x_stable = filter_pipeline.compute(x_raw, **pair_kwargs)
+                        y_stable = filter_pipeline.compute(y_raw, **pair_kwargs)
+                        x_filt, y_filt = filter_pipeline.apply(x_raw, y_raw, **pair_kwargs)
+                    else:
+                        x_filt, y_filt = x_raw, y_raw
+
+                    # Step 2: correction pipeline — fit + apply each step, track names
+                    import copy
+                    import geomulticorr.stats.stats as gmc_stats
+
+                    x_corr, y_corr = x_filt, y_filt
+                    ramp_topo_names: list[str] = []
+                    if correction_pipeline is not None:
+                        cp_x = copy.deepcopy(correction_pipeline)
+                        cp_y = copy.deepcopy(correction_pipeline)
+                        steps_x = cp_x.steps if isinstance(cp_x, CorrectionPipeline) else [cp_x]
+                        steps_y = cp_y.steps if isinstance(cp_y, CorrectionPipeline) else [cp_y]
+                        for step_x, step_y in zip(steps_x, steps_y):
+                            step_name = type(step_x).__name__
+                            step_x.fit(x_corr, stable_mask=x_stable, **pair_kwargs)
+                            x_corr = step_x.apply(x_corr)
+                            step_y.fit(y_corr, stable_mask=y_stable, **pair_kwargs)
+                            y_corr = step_y.apply(y_corr)
+                            gmc_stats.save_corrected_stats(pair, x_corr, y_corr, step_name)
+
+                            if step_name == "MedianCentering":
+                                rec["median"] = "[green]ok[/green]"
+                            elif step_name in _RAMP_TOPO_CLASSES:
+                                ramp_topo_names.append(step_name)
+
+                    if ramp_topo_names:
+                        rec["ramp_topo"] = "[green]" + "+".join(ramp_topo_names) + "[/green]"
+                    rec["stats"] = "[green]ok[/green]" if pair.pa_stats_path.exists() else "[red]missing[/red]"
+
+                    # Optional before/after control plot
+                    if save_plot:
+                        try:
+                            from geomulticorr.utils.gmc_functions import plot_correction_result
+                            fig = plot_correction_result(
+                                None, x_raw, x_corr, y_raw, y_corr,
+                                fig_name=pair.pa_key,
+                                **pair_kwargs,
+                            )
+                            plot_path = pair.pa_path / f"{pair.pa_key}_corrections_disp.jpg"
+                            fig.savefig(str(plot_path), dpi=150, format="JPEG", bbox_inches="tight")
+                            plt.close(fig)
+                        except Exception as plot_exc:
+                            logger.warning(f"Could not save control plot: {plot_exc}")
+
+                    x_corr.save(str(ew_corr))
+                    y_corr.save(str(ns_corr))
+                    rec["ew_corr"] = "[green]ok[/green]" if ew_corr.exists() else "[red]missing[/red]"
+                    rec["ns_corr"] = "[green]ok[/green]" if ns_corr.exists() else "[red]missing[/red]"
+                    results[pair.pa_key] = {"ew": ew_corr, "ns": ns_corr}
+
+                except Exception as exc:
+                    logger.error(f"Failed for '{pair.pa_key}': {exc}")
+                    rec["ew_corr"] = rec["ns_corr"] = "[red]error[/red]"
+                    results[pair.pa_key] = None
+
+                summary_rows.append(rec)
+                progress.advance(task)
+                live.refresh()
+
+        table = Table(title="apply_pairs_corrections — summary", show_lines=False)
+        table.add_column("Pair",        style="cyan", no_wrap=True)
+        table.add_column("Median corr", justify="center")
+        table.add_column("Ramp/Topo",   justify="center")
+        table.add_column("Stats",       justify="center")
+        table.add_column("EW corr",     justify="center")
+        table.add_column("NS corr",     justify="center")
+        for rec in summary_rows:
+            table.add_row(
+                rec["pair"], rec["median"], rec["ramp_topo"],
+                rec["stats"], rec["ew_corr"], rec["ns_corr"],
+            )
+        if print_summary:
+            _rich_console.print(table)
+
         return results
 
     # TODO: to be completed with the other parameters
