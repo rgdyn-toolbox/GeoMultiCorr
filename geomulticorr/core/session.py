@@ -42,7 +42,7 @@ from contextlib import ExitStack
 from typing import IO, TYPE_CHECKING, Any, Callable, Iterable, Optional, Sequence, overload
 
 import re
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, MultiPolygon
 import tqdm
 import shutil
 import subprocess
@@ -684,6 +684,100 @@ class Session:
 
         return gmc_pzone.Pzone(pz_name, self)
 
+    def insert_pzone_from_file(self,
+                               source: str | pathlib.Path | gu.Vector | gu.Raster,
+                               pz_name: str,
+                               pz_shortname: str,
+                               layer: str | None = None,
+                               index: int = 0,
+                               dissolve: bool = False) -> gmc_pzone.Pzone:
+        """Insert a processing zone from an existing AOI instead of drawing it by hand.
+
+        The *source* is normalized through geoutils so the AOI stays consistent with the
+        rest of the package: a raster contributes its footprint, a vector its geometry,
+        and everything is reprojected to the session CRS via ``gu.Vector.reproject`` before
+        being handed to :meth:`insert_pzone`.
+
+        Args:
+            source (str | pathlib.Path | gu.Vector | gu.Raster): AOI to insert. May be a
+                vector file path (``.gpkg``/``.shp``/``.geojson`` ...), a raster file path
+                (``.tif``/``.tiff`` — its footprint is used), a ``gu.Vector`` object, or a
+                ``gu.Raster`` object.
+            pz_name (str): The name of the new processing zone.
+            pz_shortname (str): Short name / abbreviation for the processing zone.
+            layer (str | None, optional): Layer name to read when *source* is a multi-layer
+                vector file. Defaults to None (first/only layer).
+            index (int, optional): Feature index to use when the AOI has several features and
+                *dissolve* is False. Defaults to 0.
+            dissolve (bool, optional): Merge all features into a single polygon
+                (``union_all``) instead of picking one. Defaults to False.
+        Returns:
+            gmc_pzone.Pzone: The newly created processing zone object.
+        Raises:
+            TypeError: If *source* is not a supported type.
+            ValueError: If the AOI is empty, or resolves to a multi-part ``MultiPolygon``
+                without *dissolve*.
+            RuntimeError: If the pzone name / shortname were not persisted in the geodatabase.
+        """
+        # --- Normalize the input into a gu.Vector (geoutils connectivity) ---
+        raster_suffixes = (".tif", ".tiff")
+        if isinstance(source, gu.Vector):
+            pz_vec = source
+        elif isinstance(source, gu.Raster):
+            pz_vec = gu.Vector(source.footprint.ds)
+        elif isinstance(source, (str, pathlib.Path)):
+            path = pathlib.Path(source)
+            if path.suffix.lower() in raster_suffixes:
+                pz_vec = gu.Vector(gu.Raster(str(path), load_data=False).footprint.ds)
+            else:
+                read_kwargs = {"engine": "pyogrio"}
+                if layer is not None:
+                    read_kwargs["layer"] = layer
+                pz_vec = gu.Vector(gpd.read_file(str(path), **read_kwargs))
+        else:
+            raise TypeError(
+                "source must be a file path, gu.Vector, or gu.Raster "
+                f"(got {type(source).__name__})."
+            )
+
+        if pz_vec.ds.empty:
+            raise ValueError(f"No features found in AOI source: {source!r}")
+
+        # --- Reproject to the session CRS via geoutils ---
+        if pz_vec.crs is None or pz_vec.crs.to_epsg() != self.epsg:
+            pz_vec = pz_vec.reproject(crs=self.epsg)
+
+        # --- Resolve to a single Polygon ---
+        if dissolve or len(pz_vec.ds) > 1:
+            geom = pz_vec.ds.geometry.union_all()
+        else:
+            geom = pz_vec.ds.geometry.iloc[index]
+
+        if isinstance(geom, MultiPolygon):
+            parts = list(geom.geoms)
+            if len(parts) == 1:
+                geom = parts[0]
+            else:
+                raise ValueError(
+                    f"AOI resolves to a MultiPolygon with {len(parts)} parts. "
+                    "Pass dissolve=True to merge them, or index= to pick one feature."
+                )
+
+        # --- Delegate to insert_pzone (already in session CRS -> no extra reprojection) ---
+        pz = self.insert_pzone(geom, pz_name, pz_shortname, crs=self.epsg)
+
+        # --- Assure pz_name / pz_shortname were persisted in the geodatabase ---
+        saved = gpd.read_file(self.path_geodb, layer="Pzones", engine="pyogrio")
+        hit = saved[saved.pz_name == pz_name]
+        if hit.empty or hit.iloc[0].pz_shortname != pz_shortname:
+            raise RuntimeError(
+                f"Pzone '{pz_name}' was not persisted with its name/shortname in the geodatabase."
+            )
+        logger.success(
+            f"Pzone '{pz_name}' ({pz_shortname}) stored in geodatabase from {source!r}."
+        )
+        return pz
+
     # * Works properly
     def update_vector_data_session(self) -> None:
         """
@@ -738,6 +832,137 @@ class Session:
         # # Update pairs
         # self.update_pairs()
         return updated
+
+    def register_existing_thumbs(self,
+                                 sources: str | pathlib.Path | list[str | pathlib.Path],
+                                 pz_name: str,
+                                 glob_pattern: str = "*.tif",
+                                 move: bool = False,
+                                 overwrite: bool = False,
+                                 register: bool = True,
+                                 print_summary: bool = True) -> list[pathlib.Path]:
+        """Register already-cropped images as thumbs without re-cropping or resampling.
+
+        Use this when your images are already cropped to the pzone AOI and share the
+        same grid/resolution. Each source image is copied (or moved) into
+        ``raster_data_<project>/<pz_name>/opticals/`` and renamed to the GMC thumb
+        convention ``<pz_name>_YYYY-MM-DD_<sensor>.tif``. The acquisition date and
+        sensor are auto-detected from the filename using the same detectors as
+        :meth:`map_georasters_bank` (``re_searcher`` + ``sensor_normalize`` for the
+        sensor, :func:`supported_sensors.extract_acquisition_date` for the date).
+
+        Unlike :meth:`sieve_bulk`, no windowed crop or reprojection is performed —
+        pixels are passed through byte-for-byte.
+
+        Args:
+            sources: A directory, a single file path, or a list of file/directory
+                paths. Directories are expanded with *glob_pattern*.
+            pz_name: Target processing zone. Must already be registered and must not
+                contain ``_`` (it would break the thumb filename pattern).
+            glob_pattern: Pattern used to expand directory sources. Defaults to ``"*.tif"``.
+            move: If True, move files instead of copying. Defaults to False (copy).
+            overwrite: If True, overwrite an existing thumb of the same name.
+                Defaults to False (skip existing).
+            register: If True, refresh the Thumbs layer in the geodatabase via
+                :meth:`update_thumbs` after copying. Defaults to True.
+            print_summary: If True, print a Rich summary table. Defaults to True.
+
+        Returns:
+            list[pathlib.Path]: Paths of the thumbs written into the opticals folder.
+
+        Raises:
+            ValueError: If *pz_name* is unknown / contains ``_``, no images are found,
+                or the sensor / date cannot be detected for a source image.
+            FileNotFoundError: If a source path does not exist.
+        """
+        if pz_name not in self.pz_names:
+            raise ValueError(f"Pzone '{pz_name}' is not registered. Known pzones: {self.pz_names}")
+        if "_" in pz_name:
+            raise ValueError(
+                f"pz_name '{pz_name}' must not contain '_' — it breaks the thumb "
+                "filename pattern '<pzone>_YYYY-MM-DD_<sensor>.tif'."
+            )
+
+        # Resolve sources into a flat list of files
+        raw = sources if isinstance(sources, (list, tuple)) else [sources]
+        files: list[pathlib.Path] = []
+        for item in raw:
+            p = pathlib.Path(item)
+            if p.is_dir():
+                files.extend(sorted(p.glob(glob_pattern)))
+            elif p.is_file():
+                files.append(p)
+            else:
+                raise FileNotFoundError(f"Source path not found: {p}")
+        if not files:
+            raise ValueError(f"No images found in sources (glob_pattern={glob_pattern!r}).")
+
+        dest_dir = pathlib.Path(self.path_raster_data) / pz_name / "opticals"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        sensor_pattern = gmc_sensors.sensors(gmc_sensors.supported_sensors)
+        written: list[pathlib.Path] = []
+        summary_rows: list[dict] = []
+
+        for src in files:
+            # --- Detect sensor (filename first, then parent directory) ---
+            sensor = re_searcher(src.name.lower(), sensor_pattern)
+            if sensor == "unknown":
+                sensor = re_searcher(src.parent.name.lower(), sensor_pattern)
+            sensor_norm = gmc_sensors.sensor_normalize(sensor).get("sensor", "unknown")
+            if not sensor_norm or sensor_norm == "unknown":
+                raise ValueError(
+                    f"Could not detect a supported sensor for '{src.name}'. "
+                    "Rename the file/folder to include the sensor name, or register it manually."
+                )
+
+            # --- Detect acquisition date ---
+            acq_dt = gmc_sensors.extract_acquisition_date(src, sensor=sensor)
+            if acq_dt is None:
+                raise ValueError(
+                    f"Could not detect an acquisition date for '{src.name}'. "
+                    "Ensure the date is encoded in the filename or a sidecar XML/DIMAP file."
+                )
+            date_str = acq_dt.strftime("%Y-%m-%d")
+
+            thumb_name = f"{pz_name}_{date_str}_{sensor_norm}.tif"
+            if not gmc_thumb.THUMBNAME_PATTERN.match(thumb_name):
+                raise ValueError(
+                    f"Generated thumb name '{thumb_name}' does not match the GMC pattern."
+                )
+
+            dest_path = dest_dir / thumb_name
+            if dest_path.exists() and not overwrite:
+                logger.warning(f"Thumb already exists, skipping: {thumb_name}")
+                summary_rows.append({"src": src.name, "thumb": thumb_name, "status": "↷ skipped"})
+                written.append(dest_path)
+                continue
+
+            if move:
+                shutil.move(str(src), str(dest_path))
+            else:
+                shutil.copy2(str(src), str(dest_path))
+            written.append(dest_path)
+            summary_rows.append({"src": src.name, "thumb": thumb_name, "status": "✓ copied"})
+
+        # Register the new thumbs in the geodatabase
+        if register and written:
+            self.update_thumbs()
+
+        if print_summary and summary_rows:
+            table = Table(title=f"register_existing_thumbs — pzone '{pz_name}'", show_lines=False)
+            table.add_column("Source", style="default", no_wrap=True)
+            table.add_column("Thumb", style="cyan", no_wrap=True)
+            table.add_column("Status", style="default")
+            for row in summary_rows:
+                table.add_row(row["src"], row["thumb"], row["status"])
+            _rich_console.print(table)
+
+        logger.success(
+            f"Registered {len(written)} thumb(s) into pzone '{pz_name}'"
+            + (" (geodatabase updated)." if register and written else ".")
+        )
+        return written
 
     def validate_all_thumbs(self,
                             pzone_filter: list[str] | None = None
