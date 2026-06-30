@@ -81,6 +81,9 @@ from .fit import (
     fit_ramp_linear,
     fit_linear_with_predictor,
     fit_quadratic_with_predictor,
+    rotate_coords,
+    fit_directional_profile,
+    estimate_directional_angle,
 )
 
 
@@ -748,6 +751,157 @@ class TopoRampCorrection(BaseCorrection):
         return self
     # END def
 
+# --------------------------------------------------------------------------- #
+# DirectionalBiasCorrection
+# --------------------------------------------------------------------------- #
+class DirectionalBiasCorrection(BaseCorrection):
+    """Remove a directional (mosaic-seam) bias from the displacement field.
+
+    Models a 1-D bias that varies *across* an oblique seam and is ~constant
+    *along* it — typical of optical mosaics where two image tiles are joined.
+    The bias is fitted as a robust median profile along the seam-normal axis
+
+    .. math::
+
+        s = (x - x_{min}) \\cos\\theta - (y - y_{min}) \\sin\\theta
+
+    on stable pixels only, then broadcast back to 2-D and subtracted.
+
+    The angle convention is identical to xDEM's
+    :class:`~xdem.coreg.biascorr.DirectionalBias`: *angle* is measured from the
+    **X (East) geographic axis, increasing clockwise**, in **map space**
+    (``angle=0`` → vertical N-S seam; ``angle=90`` → horizontal E-W seam).
+    When *angle* is ``None`` the seam-normal direction is estimated
+    automatically and reported in ``meta`` normalised to ``(-90, 90]``.
+
+    :param angle: Seam-normal direction in degrees, or ``None`` to auto-estimate.
+    :type angle: float or None
+    :param n_bins: Number of bins along *s* for the median profile.  Default ``120``.
+    :type n_bins: int
+    :param profile: Profile-smoothing model — ``'spline'`` (default, smoothing
+        spline; good for a broad seam band), ``'poly'`` (polynomial ramp), or
+        ``'bin'`` (piecewise-linear; most faithful to a sharp step).
+    :type profile: str
+    :param smoothing: Smoothing-spline ``s`` parameter (``None`` = SciPy default).
+        Larger = smoother.  Only used when ``profile='spline'``.
+    :type smoothing: float or None
+    :param poly_order: Polynomial order when ``profile='poly'``.  Default ``3``.
+    :type poly_order: int
+    :param min_bin_count: Bins with fewer stable pixels than this are dropped.
+        Default ``20``.
+    :type min_bin_count: int
+    :param angle_grid: Candidate angles (degrees) for auto-estimation.  ``None``
+        uses ``np.arange(0, 180, 2)``.
+    :type angle_grid: np.ndarray or None
+    :raises ValueError: If *profile* is invalid, or numeric parameters are out
+        of range.
+
+    Example::
+
+        >>> corr = DirectionalBiasCorrection(angle=None, profile="bin")
+        >>> corr.fit(xDisp, stable_mask=stable)
+        >>> print(corr.meta["angle_deg"], corr.meta["std_before"], corr.meta["std_after"])
+        >>> xc = corr.apply(xDisp)
+        >>> # fix the estimated angle, then apply to the NS component too
+        >>> yc = DirectionalBiasCorrection(angle=corr.meta["angle_deg"]) \\
+        ...          .fit_and_apply(yDisp, stable_mask=stable_ns)
+    """
+
+    def __init__(
+        self,
+        angle: float | None = None,
+        n_bins: int = 120,
+        profile: str = "spline",
+        smoothing: float | None = None,
+        poly_order: int = 3,
+        min_bin_count: int = 20,
+        angle_grid=None,
+    ) -> None:
+        if profile not in ("spline", "poly", "bin"):
+            raise ValueError("profile must be 'spline', 'poly', or 'bin'")
+        if n_bins < 4:
+            raise ValueError("n_bins must be >= 4")
+        if poly_order < 1:
+            raise ValueError("poly_order must be >= 1")
+        if min_bin_count < 1:
+            raise ValueError("min_bin_count must be >= 1")
+        if angle is not None and not isinstance(angle, (int, float)):
+            raise ValueError("angle must be a number or None")
+        self.angle = float(angle) if angle is not None else None
+        self.n_bins = n_bins
+        self.profile = profile
+        self.smoothing = smoothing
+        self.poly_order = poly_order
+        self.min_bin_count = min_bin_count
+        self.angle_grid = angle_grid
+        self.meta: dict = {}
+    # END def
+
+    def fit(
+        self, raster: gu.Raster, stable_mask=None, **kwargs
+    ) -> DirectionalBiasCorrection:
+        """Estimate the directional bias profile on stable pixels.
+
+        Sets ``self._surface`` to the fitted 2-D bias surface and stores the
+        chosen angle, before/after residual std, and the 1-D profile arrays in
+        ``self.meta``.
+
+        :param raster: Displacement raster from which to estimate the bias.
+        :type raster: geoutils.Raster
+        :param stable_mask: Stable-area mask (see
+            :meth:`~BaseCorrection._resolve_stable_mask`).
+        :returns: ``self`` for chaining.
+        :rtype: DirectionalBiasCorrection
+        :raises ValueError: If fewer than ``max(n_bins, 50)`` stable pixels are
+            available.
+        """
+        fit_mask = self._resolve_stable_mask(
+            stable_mask, raster.data, raster.data.shape, raster.transform
+        )
+        if fit_mask.sum() < max(self.n_bins, 50):
+            raise ValueError(
+                "Too few stable pixels for DirectionalBiasCorrection "
+                f"(need >= {max(self.n_bins, 50)}, got {int(fit_mask.sum())})."
+            )
+
+        xx, yy = raster.coords(grid=True, force_offset="ll")
+        values = ma.filled(raster.data, np.nan).astype(float)
+
+        if self.angle is not None:
+            angle = self.angle
+        else:
+            angle = estimate_directional_angle(
+                xx, yy, values, fit_mask,
+                n_bins=self.n_bins, angle_grid=self.angle_grid,
+                min_bin_count=self.min_bin_count,
+            )
+
+        s = rotate_coords(xx, yy, angle)
+        surface, centers, median, fitted = fit_directional_profile(
+            s, values, fit_mask,
+            n_bins=self.n_bins, profile=self.profile,
+            smoothing=self.smoothing, poly_order=self.poly_order,
+            min_bin_count=self.min_bin_count,
+        )
+
+        self._surface = surface
+        std_before = float(np.nanstd(values[fit_mask]))
+        std_after = float(np.nanstd((values - surface)[fit_mask]))
+        self.meta = {
+            "angle_deg": angle,
+            "n_bins": self.n_bins,
+            "profile": self.profile,
+            "n_stable_px": int(fit_mask.sum()),
+            "std_before": std_before,
+            "std_after": std_after,
+            "profile_centers": centers,
+            "profile_median": median,
+            "profile_fitted": fitted,
+        }
+        self._fit_called = True
+        return self
+    # END def
+    # apply() / fit_and_apply() inherited — self._surface is a full 2-D array
 
 # --------------------------------------------------------------------------- #
 # SlopeRampCorrection

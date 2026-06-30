@@ -39,6 +39,7 @@ from geomulticorr.corrections import (
     MedianCentering,
     RampCorrection,
     TopoCorrection,
+    DirectionalBiasCorrection,
     AlongTrackDestriping,
     AcrossTrackDestriping,
     SnowMask,

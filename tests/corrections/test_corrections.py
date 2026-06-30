@@ -15,13 +15,25 @@ from geomulticorr.corrections.corrections import (
     RampCorrection,
     TopoCorrection,
     TopoRampCorrection,
+    DirectionalBiasCorrection,
     SlopeRampCorrection,
     AlongTrackDestriping,
     AcrossTrackDestriping,
     make_corrections,
 )
+# Import geomulticorr utilities for testing
+from .conftest import MockRaster
+from geomulticorr.corrections.fit import rotate_coords
 from geomulticorr.corrections.masks import SlopeMask
 
+def _seam_mock_raster(angle_deg=-12.0, nr=80, nc=100, noise=0.3, seed=0):
+    """MockRaster with a step seam whose normal is *angle_deg* (map space)."""
+    rng = np.random.default_rng(seed)
+    rast = MockRaster(data=ma.array(np.zeros((nr, nc)), mask=False))
+    xx, yy = rast.coords(grid=True, force_offset="ll")
+    s = rotate_coords(xx, yy, angle_deg)
+    field = np.where(s > np.median(s), 2.0, -2.0) + rng.normal(0, noise, (nr, nc))
+    return MockRaster(data=ma.array(field, mask=False))
 
 class TestBaseCorrection:
     """Tests for BaseCorrection abstract base and shared helpers."""
@@ -487,6 +499,61 @@ class TestSlopeRampCorrection:
         with pytest.raises(ValueError, match="Too few valid pixels for SlopeRampCorrection"):
             corr.fit(ramp_raster, stable_mask=stable_mask, dem=dem_raster)
 
+class TestDirectionalBiasCorrection:
+    """Tests for DirectionalBiasCorrection."""
+
+    def test_invalid_profile_raises(self):
+        with pytest.raises(ValueError, match="profile must be"):
+            DirectionalBiasCorrection(profile="bogus")
+
+    def test_invalid_n_bins_raises(self):
+        with pytest.raises(ValueError, match="n_bins"):
+            DirectionalBiasCorrection(n_bins=2)
+
+    def test_apply_before_fit_raises(self):
+        corr = DirectionalBiasCorrection(angle=0.0)
+        raster = _seam_mock_raster()
+        with pytest.raises(RuntimeError):
+            corr.apply(raster)
+
+    def test_too_few_pixels_raises(self):
+        from .conftest import MockRaster
+        small = MockRaster(data=ma.array(np.zeros((5, 5)), mask=False))
+        with pytest.raises(ValueError, match="Too few stable pixels"):
+            DirectionalBiasCorrection(n_bins=50).fit(small)
+
+    def test_auto_angle_recovered(self):
+        """Auto mode recovers the seam angle and logs it normalised."""
+        raster = _seam_mock_raster(angle_deg=-12.0)
+        corr = DirectionalBiasCorrection(angle=None, profile="bin", n_bins=80)
+        corr.fit(raster)
+        assert corr.meta["angle_deg"] == pytest.approx(-12.0, abs=1.5)
+        assert -90.0 < corr.meta["angle_deg"] <= 90.0
+
+    def test_reduces_residual_std(self):
+        raster = _seam_mock_raster(angle_deg=-12.0)
+        corr = DirectionalBiasCorrection(angle=None, profile="bin", n_bins=80)
+        out = corr.fit_and_apply(raster)
+        assert corr.meta["std_after"] < corr.meta["std_before"]
+        assert out.data.shape == raster.data.shape
+
+    def test_meta_contains_profile(self):
+        raster = _seam_mock_raster()
+        corr = DirectionalBiasCorrection(angle=0.0, n_bins=60).fit(raster)
+        for key in ("profile_centers", "profile_median", "profile_fitted",
+                    "std_before", "std_after", "angle_deg"):
+            assert key in corr.meta
+
+    def test_fixed_angle_used_verbatim(self):
+        raster = _seam_mock_raster()
+        corr = DirectionalBiasCorrection(angle=33.0, n_bins=60).fit(raster)
+        assert corr.meta["angle_deg"] == 33.0
+
+    def test_composable_into_pipeline(self):
+        """+ chains into a CorrectionPipeline."""
+        pipeline = MedianCentering() + DirectionalBiasCorrection(angle=0.0, n_bins=60)
+        assert isinstance(pipeline, CorrectionPipeline)
+        assert len(pipeline.steps) == 2
 
 class TestStubs:
     """Tests for unimplemented correction stubs."""

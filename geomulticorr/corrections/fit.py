@@ -2,17 +2,29 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-#
+# 
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-#
+# 
 # fit.py
-# creation date: 2026-05-28.
-#
+# creation date: 2026-06-30.
+# 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
+# 
+# You may obtain a copy of the License at
+# 
+# https://www.gnu.org/licenses/agpl-3.0.txt
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+# 
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
 """Pure-math fitting routines for displacement corrections.
 
@@ -42,6 +54,14 @@ Public API:
   by :class:`~geomulticorr.corrections.corrections.TopoCorrection`,
   :class:`~geomulticorr.corrections.corrections.TopoRampCorrection`, and
   :class:`~geomulticorr.corrections.corrections.SlopeRampCorrection`.
+- :func:`rotate_coords` — along-track projection of map coordinates for a given
+  angle, used by
+  :class:`~geomulticorr.corrections.corrections.DirectionalBiasCorrection`.
+- :func:`fit_directional_profile` — robust 1-D bias profile along a rotated axis,
+  used by
+  :class:`~geomulticorr.corrections.corrections.DirectionalBiasCorrection`.
+- :func:`estimate_directional_angle` — auto-estimate the seam-normal angle, used by
+  :class:`~geomulticorr.corrections.corrections.DirectionalBiasCorrection`.
 - :func:`fit_quadratic_with_predictor` — quadratic ramp + predictor, shared by
   the same three classes.
 - :func:`compute_slope` — terrain slope magnitude in degrees, used by
@@ -51,6 +71,8 @@ from __future__ import annotations
 
 import numpy as np
 import numpy.ma as ma
+from scipy.interpolate import UnivariateSpline
+from scipy.stats import binned_statistic
 
 
 # --------------------------------------------------------------------------- #
@@ -408,3 +430,196 @@ def fit_quadratic_with_predictor(
         float(ax), float(by), float(fp),
         surface, r2,
     )
+
+# --------------------------------------------------------------------------- #
+# Directional (mosaic-seam) bias
+# --------------------------------------------------------------------------- #
+
+def rotate_coords(
+    xx: np.ndarray,
+    yy: np.ndarray,
+    angle_deg: float,
+) -> np.ndarray:
+    """Project map coordinates onto the along-track (seam-normal) axis.
+
+    Returns the rotated *x* coordinate
+
+    .. math::
+
+        s = (x - x_{min}) \\cos\\theta - (y - y_{min}) \\sin\\theta
+
+    along which a directional bias varies.  The formula is copied from
+    :func:`geoutils.raster.get_xy_rotated` so the angle convention is identical
+    to xDEM's :class:`~xdem.coreg.biascorr.DirectionalBias`: *angle_deg* is
+    measured from the **X (East) geographic axis, increasing clockwise**, with
+    ``angle_deg=0`` → bias varies along East (vertical N-S seam) and
+    ``angle_deg=90`` → bias varies along North (horizontal E-W seam).
+
+    Used by
+    :class:`~geomulticorr.corrections.corrections.DirectionalBiasCorrection`.
+
+    :param xx: Full-grid easting coordinates (e.g. from ``raster.coords``).
+    :type xx: np.ndarray
+    :param yy: Full-grid northing coordinates, same shape as *xx*.
+    :type yy: np.ndarray
+    :param angle_deg: Seam-normal direction in degrees (see above).
+    :type angle_deg: float
+    :returns: Along-track coordinate ``s``, same shape as *xx*.
+    :rtype: np.ndarray
+    """
+    ang = np.deg2rad(angle_deg)
+    return (xx - np.min(xx)) * np.cos(ang) - (yy - np.min(yy)) * np.sin(ang)
+
+
+def fit_directional_profile(
+    s: np.ndarray,
+    values: np.ndarray,
+    fit_mask: np.ndarray,
+    n_bins: int = 120,
+    profile: str = "spline",
+    smoothing: float | None = None,
+    poly_order: int = 3,
+    min_bin_count: int = 20,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Fit a robust 1-D bias profile along the rotated axis *s*.
+
+    Bins ``values`` against the along-track coordinate ``s`` over stable
+    pixels, takes the median per bin (robust to outliers and residual motion),
+    smooths the binned profile, and evaluates it at every pixel to build a
+    full 2-D correction surface.
+
+    Used by
+    :class:`~geomulticorr.corrections.corrections.DirectionalBiasCorrection`.
+
+    :param s: Along-track coordinate (from :func:`rotate_coords`), full grid.
+    :type s: np.ndarray
+    :param values: Full-grid displacement values (``NaN`` where invalid).
+    :type values: np.ndarray
+    :param fit_mask: Boolean fit mask — ``True`` = stable valid pixel to
+        include.  Same shape as *s* and *values*.
+    :type fit_mask: np.ndarray
+    :param n_bins: Number of bins along *s* for the median profile.
+    :type n_bins: int
+    :param profile: Smoothing model — ``'spline'`` (smoothing spline),
+        ``'poly'`` (polynomial of order *poly_order*), or ``'bin'``
+        (piecewise-linear between bin medians).
+    :type profile: str
+    :param smoothing: Smoothing-spline ``s`` parameter (``None`` uses the SciPy
+        default).  Larger values give a smoother profile.
+    :type smoothing: float or None
+    :param poly_order: Polynomial order when ``profile='poly'``.
+    :type poly_order: int
+    :param min_bin_count: Bins with fewer stable pixels than this are dropped.
+    :type min_bin_count: int
+    :returns: Tuple ``(surface, centers, median, fitted)`` —
+
+        - **surface** — 2-D correction surface, same shape as *s*.
+        - **centers** — populated bin centres (1-D).
+        - **median**  — binned median bias at *centers* (1-D).
+        - **fitted**  — smoothed profile evaluated at *centers* (1-D).
+    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+    :raises ValueError: If fewer than 4 populated bins remain, or *profile*
+        is not one of the accepted values.
+    """
+    s_fit = s[fit_mask]
+    v_fit = values[fit_mask]
+
+    median, edges, _ = binned_statistic(
+        s_fit, v_fit, statistic="median", bins=n_bins
+    )
+    count, _, _ = binned_statistic(s_fit, v_fit, statistic="count", bins=n_bins)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+
+    good = np.isfinite(median) & (count >= min_bin_count)
+    centers, median = centers[good], median[good]
+    if centers.size < 4:
+        raise ValueError(
+            "Directional profile has too few populated bins "
+            f"({centers.size}); lower min_bin_count or n_bins."
+        )
+
+    if profile == "spline":
+        spl = UnivariateSpline(centers, median, k=3, s=smoothing, ext=3)
+        surface = spl(s)
+        fitted = spl(centers)
+    elif profile == "poly":
+        coeffs = np.polyfit(centers, median, poly_order)
+        surface = np.polyval(coeffs, s)
+        fitted = np.polyval(coeffs, centers)
+    elif profile == "bin":
+        surface = np.interp(s, centers, median)
+        fitted = median
+    else:
+        raise ValueError("profile must be 'spline', 'poly', or 'bin'")
+
+    return surface, centers, median, fitted
+
+
+def estimate_directional_angle(
+    xx: np.ndarray,
+    yy: np.ndarray,
+    values: np.ndarray,
+    fit_mask: np.ndarray,
+    n_bins: int = 120,
+    angle_grid: np.ndarray | None = None,
+    min_bin_count: int = 20,
+) -> float:
+    """Auto-estimate the seam-normal angle that best explains the bias.
+
+    Scans candidate angles, projects stable pixels onto the rotated axis
+    (:func:`rotate_coords`), and selects the angle whose binned-median profile
+    has the largest variance — i.e. the orientation along which the field has
+    the strongest 1-D structure (the seam).  The coarse argmax is refined
+    ±2° at 0.25° steps.
+
+    Searching ``0–180°`` is sufficient because :math:`\\theta \\equiv
+    \\theta + 180°` (the projection flips sign, giving the identical surface).
+    The returned angle is normalised into ``(-90, 90]`` so it reads as the
+    intuitive signed value (e.g. ``-10`` instead of ``170``).
+
+    Used by
+    :class:`~geomulticorr.corrections.corrections.DirectionalBiasCorrection`.
+
+    :param xx: Full-grid easting coordinates.
+    :type xx: np.ndarray
+    :param yy: Full-grid northing coordinates, same shape as *xx*.
+    :type yy: np.ndarray
+    :param values: Full-grid displacement values (``NaN`` where invalid).
+    :type values: np.ndarray
+    :param fit_mask: Boolean fit mask — ``True`` = stable valid pixel.
+    :type fit_mask: np.ndarray
+    :param n_bins: Number of bins for the profile variance metric.
+    :type n_bins: int
+    :param angle_grid: Candidate angles in degrees.  Default
+        ``np.arange(0, 180, 2)``.
+    :type angle_grid: np.ndarray or None
+    :param min_bin_count: Bins with fewer stable pixels than this are ignored.
+    :type min_bin_count: int
+    :returns: Estimated seam-normal angle in degrees, normalised to ``(-90, 90]``.
+    :rtype: float
+    """
+    grid = (
+        np.arange(0, 180, 2.0)
+        if angle_grid is None
+        else np.asarray(angle_grid, dtype=float)
+    )
+
+    def _strength(angle_deg: float) -> float:
+        s = rotate_coords(xx, yy, angle_deg)
+        median, edges, _ = binned_statistic(
+            s[fit_mask], values[fit_mask], statistic="median", bins=n_bins
+        )
+        count, _, _ = binned_statistic(
+            s[fit_mask], values[fit_mask], statistic="count", bins=n_bins
+        )
+        good = np.isfinite(median) & (count >= min_bin_count)
+        return float(np.var(median[good])) if good.sum() >= 3 else -np.inf
+
+    coarse = float(grid[int(np.argmax([_strength(a) for a in grid]))])
+    fine = np.arange(coarse - 2.0, coarse + 2.001, 0.25)
+    angle = float(fine[int(np.argmax([_strength(a) for a in fine]))])
+
+    # Normalise into (-90, 90] — theta and theta+180 give the identical surface.
+    if angle > 90.0:
+        angle -= 180.0
+    return angle

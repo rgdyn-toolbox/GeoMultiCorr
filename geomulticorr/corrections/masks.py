@@ -431,12 +431,10 @@ class StableAreaMask(BaseMask):
             return ~np.asarray(moving_mask.data, dtype=bool)
 
         # Fallback for str, Path, or gpd.GeoDataFrame inputs
-        from geomulticorr.corrections.corrections import (
-            _build_stable_area_mask,
-            _load_stable_mask_gdf,
+        gdf = BaseCorrection._load_gdf(self.stable_mask)
+        moving = BaseCorrection._rasterize_moving_areas(
+            gdf, raster.data.shape, raster.transform
         )
-        gdf = _load_stable_mask_gdf(self.stable_mask)
-        moving = _build_stable_area_mask(gdf, raster.data.shape, raster.transform)
         return ~moving  # True = stable = keep
 
 

@@ -56,6 +56,23 @@ class MockRaster:
     def copy(self, new_array: np.ma.MaskedArray) -> "MockRaster":
         """Return a new MockRaster with updated data, same georeference."""
         return MockRaster(data=new_array, transform=self.transform, res=self.res)
+    #END def
+
+    def coords(self, grid: bool = True, force_offset: str = "ll", **_):
+        """Map-coordinate meshgrids (x, y), mimicking geoutils.Raster.coords.
+
+        Lower-left ("ll") pixel-corner offset, derived from the affine
+        transform — enough for DirectionalBiasCorrection's rotated projection.
+        """
+        n_rows, n_cols = self.data.shape
+        cols = np.arange(n_cols)
+        rows = np.arange(n_rows)
+        x = self.transform.c + (cols + 0.0) * self.transform.a
+        y = self.transform.f + (rows + 1.0) * self.transform.e
+        if not grid:
+            return x, y
+        return np.meshgrid(x, y)
+    #END def
 
 # ---------------------------------------------------------------------------- #
 # Fixtures

@@ -13,7 +13,24 @@ from geomulticorr.corrections.fit import (
     fit_ramp_linear,
     fit_linear_with_predictor,
     fit_quadratic_with_predictor,
+    rotate_coords,
+    fit_directional_profile,
+    estimate_directional_angle,
 )
+
+def _seam_field(angle_deg, nr=120, nc=180, res=3.0, noise=0.3, seed=0):
+    """Synthetic displacement with a step seam whose normal is *angle_deg*.
+
+    Returns (xx, yy, field) in a north-up map frame.
+    """
+    rng = np.random.default_rng(seed)
+    xx, yy = np.meshgrid(
+        np.arange(nc) * res,
+        (np.arange(nr) * -res) + 6_477_000.0,
+    )
+    s = rotate_coords(xx, yy, angle_deg)
+    field = np.where(s > np.median(s), 2.0, -2.0) + rng.normal(0, noise, (nr, nc))
+    return xx, yy, field
 
 
 class TestComputeShift:
@@ -307,3 +324,90 @@ class TestFitQuadraticWithPredictor:
         )
         assert len(result) == 9
         assert isinstance(result[7], np.ndarray)
+
+class TestRotateCoords:
+    """Tests for rotate_coords() — along-track projection."""
+
+    def test_angle_zero_is_easting(self):
+        """angle=0 → s varies with x (East) only, constant down columns."""
+        xx, yy = np.meshgrid(np.arange(5) * 3.0, np.arange(4) * -3.0 + 100.0)
+        s = rotate_coords(xx, yy, 0.0)
+        # every row identical (no dependence on y)
+        assert np.allclose(s - s[0, :], 0.0)
+
+    def test_angle_90_is_northing(self):
+        """angle=90 → s varies with y only, constant along rows."""
+        xx, yy = np.meshgrid(np.arange(5) * 3.0, np.arange(4) * -3.0 + 100.0)
+        s = rotate_coords(xx, yy, 90.0)
+        assert np.allclose(s - s[:, [0]], 0.0)
+
+    def test_180_periodicity_flips_sign(self):
+        """s(θ+180) == -s(θ): the projection axis reverses direction."""
+        xx, yy, _ = _seam_field(0.0)
+        s = rotate_coords(xx, yy, 30.0)
+        s180 = rotate_coords(xx, yy, 210.0)
+        assert np.allclose(s180, -s, atol=1e-6)
+
+
+class TestFitDirectionalProfile:
+    """Tests for fit_directional_profile()."""
+
+    def test_reduces_residual_std(self):
+        """Subtracting the fitted surface cuts the seam std toward the noise floor."""
+        xx, yy, field = _seam_field(-12.0)
+        mask = np.ones_like(field, dtype=bool)
+        s = rotate_coords(xx, yy, -12.0)
+        surface, centers, median, fitted = fit_directional_profile(
+            s, field, mask, n_bins=100, profile="bin"
+        )
+        std_before = np.nanstd(field[mask])
+        std_after = np.nanstd((field - surface)[mask])
+        assert std_after < 0.5 * std_before
+        assert surface.shape == field.shape
+
+    def test_invalid_profile_raises(self):
+        xx, yy, field = _seam_field(0.0)
+        s = rotate_coords(xx, yy, 0.0)
+        with pytest.raises(ValueError, match="profile must be"):
+            fit_directional_profile(
+                s, field, np.ones_like(field, bool), profile="bogus"
+            )
+
+    def test_too_few_bins_raises(self):
+        """A near-constant s with high min_bin_count leaves too few bins."""
+        xx, yy, field = _seam_field(0.0)
+        s = rotate_coords(xx, yy, 0.0)
+        with pytest.raises(ValueError, match="too few populated bins"):
+            fit_directional_profile(
+                s, field, np.ones_like(field, bool),
+                n_bins=4, min_bin_count=10_000_000,
+            )
+
+    def test_profile_models_run(self):
+        """spline / poly / bin all return a full-grid surface."""
+        xx, yy, field = _seam_field(-8.0)
+        s = rotate_coords(xx, yy, -8.0)
+        mask = np.ones_like(field, dtype=bool)
+        for model in ("spline", "poly", "bin"):
+            surface, *_ = fit_directional_profile(s, field, mask, profile=model)
+            assert surface.shape == field.shape
+
+
+class TestEstimateDirectionalAngle:
+    """Tests for estimate_directional_angle()."""
+
+    @pytest.mark.parametrize("true_angle", [-12.0, 0.0, 25.0, -40.0])
+    def test_recovers_angle(self, true_angle):
+        """Auto-estimate recovers the seam angle within the refine resolution."""
+        xx, yy, field = _seam_field(true_angle)
+        mask = np.ones_like(field, dtype=bool)
+        est = estimate_directional_angle(xx, yy, field, mask, n_bins=100)
+        assert est == pytest.approx(true_angle, abs=2.0)
+
+    def test_returns_normalised_range(self):
+        """A seam at 170° is reported as its (-90, 90] equivalent (≈-10°)."""
+        xx, yy, field = _seam_field(170.0)
+        mask = np.ones_like(field, dtype=bool)
+        est = estimate_directional_angle(xx, yy, field, mask, n_bins=100)
+        assert -90.0 < est <= 90.0
+        assert est == pytest.approx(-10.0, abs=2.0)

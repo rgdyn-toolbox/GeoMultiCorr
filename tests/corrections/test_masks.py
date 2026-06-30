@@ -8,6 +8,8 @@ import numpy as np
 import numpy.ma as ma
 import pytest
 
+import geoutils as gu
+
 from geomulticorr.corrections.masks import (
     BaseMask,
     FilterPipeline,
@@ -302,7 +304,6 @@ class TestStableAreaMask:
 
     def test_gu_vector_mock(self, ramp_raster):
         """Mock geoutils.Vector with create_mask() → result inverted."""
-        import geoutils as gu
         mock_vector = MagicMock(spec=gu.Vector)
         from .conftest import MockRaster
         moving_data = np.array([[True, False], [False, True]])
@@ -313,31 +314,29 @@ class TestStableAreaMask:
         assert result[0, 0] == False  # moving → inverted
         assert result[0, 1] == True   # not moving → inverted
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Known bug: StableAreaMask str/Path code path attempts to import "
-            "_build_stable_area_mask and _load_stable_mask_gdf from corrections.py, "
-            "which don't exist there (logic is in BaseCorrection._load_gdf and "
-            "BaseCorrection._rasterize_moving_areas)"
-        ),
-    )
-    def test_str_path_import_error(self, ramp_raster):
-        """str/Path input → ImportError (known bug)."""
-        StableAreaMask("path/to/file.geojson").generate_mask(ramp_raster)
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Known bug: StableAreaMask GeoDataFrame code path has same ImportError "
-            "as str/Path"
-        ),
-    )
-    def test_gdf_import_error(self, ramp_raster):
-        """GeoDataFrame input → ImportError (known bug)."""
+    def test_str_path_loads_mask(self, ramp_raster, tmp_path):
+        """str/Path to a vector file → pixels inside polygons masked out."""
         import geopandas as gpd
-        gdf = gpd.GeoDataFrame()
-        StableAreaMask(gdf).generate_mask(ramp_raster)
+        from shapely.geometry import box
+        # ramp_raster: 10×10, transform Affine(10,0,0,0,-10,0) → extent x[0,100], y[-100,0]
+        gdf = gpd.GeoDataFrame(geometry=[box(0, -50, 50, 0)], crs="EPSG:2154")
+        fn = tmp_path / "moving.gpkg"
+        gdf.to_file(fn)
+        result = StableAreaMask(str(fn)).generate_mask(ramp_raster)
+        assert result.shape == ramp_raster.data.shape
+        assert result.dtype == bool
+        assert (~result).sum() > 0   # some pixels inside the polygon are masked (moving)
+        assert result.sum() > 0      # some pixels outside are kept (stable)
+
+    def test_gdf_loads_mask(self, ramp_raster):
+        """GeoDataFrame input → pixels inside polygons masked out."""
+        import geopandas as gpd
+        from shapely.geometry import box
+        gdf = gpd.GeoDataFrame(geometry=[box(0, -50, 50, 0)], crs="EPSG:2154")
+        result = StableAreaMask(gdf).generate_mask(ramp_raster)
+        assert result.shape == ramp_raster.data.shape
+        assert (~result).sum() > 0   # inside polygon → masked
+        assert result.sum() > 0      # outside → kept
 
 
 class TestFilterPipeline:
