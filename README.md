@@ -66,6 +66,7 @@ raw displacement maps (EW, NS, NMAD)
     ↓  MedianCentering     — centre displacement around zero
     ↓  RampCorrection      — remove systematic orbital/atmospheric tilts
     ↓  TopoCorrection      — correct for topographic slope effects
+    ↓  DirectionalBiasCorrection  — reduce an oblique mosaic-seam bias typical of images that have been mosaicked
     ↓  AlongTrackDestriping  — remove along-track scanner artifacts
     ↓  AcrossTrackDestriping — remove across-track scanner artifacts
     ↓  Spatial Masks       — SnowMask · CloudMask · SlopeMask · ShadowMask
@@ -205,7 +206,7 @@ jupyter lab notebooks/
 
 # Contact and citation ![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079420.svg)
 
-For any question, bug, or issue regarding this tool, please report it in the [Issues](../../issues) section or contact the developer team:
+For any question, bug, or issue regarding this pipeline/package, please report it in the [Issues](../../issues) section or contact the developer team:
 - [diego.cusicanqui@univ-grenoble-alpes.fr](mailto:diego.cusicanqui@univ-grenoble-alpes.fr)
 - [thibaut.duvanel@unil.ch](mailto:thibaut.duvanel@unil.ch)
 
