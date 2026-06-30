@@ -45,6 +45,11 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.stats import linregress
 
 from geomulticorr.stats import nmad
+from geomulticorr.corrections.corrections import (
+    RampCorrection,
+    TopoCorrection,
+    DirectionalBiasCorrection,
+)
 
 def outlier_filter(disp_array: np.array,
                    disp_threshold: tuple[int, float] = (-10, 10)) -> np.array:
@@ -491,6 +496,97 @@ def plot_median_centering(
     fig.tight_layout()
     return fig
 
+def plot_directional_bias_correction(
+    step,
+    xDisp_before: gu.Raster,
+    xDisp_after: gu.Raster,
+    yDisp_before: gu.Raster,
+    yDisp_after: gu.Raster,
+    fig_name: str | None = None,
+    figsize: tuple[float, float] = (16, 11),
+    cmap_ew: str = 'PuOr',
+    cmap_ns: str = 'PiYG',
+    cmap_bias: str = 'RdBu_r',
+) -> plt.Figure:
+    """Control figure for a DirectionalBiasCorrection step.
+
+    The removed bias is the surface that was subtracted (before − after).  A
+    full-width bottom panel shows the fitted 1-D bias profile stored in
+    ``step.meta`` (``profile_centers`` / ``profile_median`` / ``profile_fitted``),
+    annotated with the seam angle and the before/after residual std.
+
+    Layout
+    ------
+    a) EW before  |  b) EW bias  |  c) EW after
+    d) NS before  |  e) NS bias  |  f) NS after
+    g) 1-D bias profile along the seam-normal axis (spans all columns)
+    """
+    import numpy.ma as ma
+
+    fig, axs = plt.subplot_mosaic(
+        [['a)', 'b)', 'c)'],
+         ['d)', 'e)', 'f)'],
+         ['g)', 'g)', 'g)']],
+        figsize=figsize,
+    )
+    angle = step.meta.get("angle_deg") if getattr(step, "meta", None) else None
+    title = "Directional bias correction"
+    if angle is not None:
+        title += f" — angle = {angle:.2f}°"
+    if fig_name:
+        title = f"{fig_name} — {title}"
+    fig.suptitle(title)
+
+    # Removed bias = what was subtracted (before − after)
+    x_bias_data = ma.array(
+        xDisp_before.data.data - xDisp_after.data.data,
+        mask=np.ma.getmaskarray(xDisp_before.data),
+    )
+    y_bias_data = ma.array(
+        yDisp_before.data.data - yDisp_after.data.data,
+        mask=np.ma.getmaskarray(yDisp_before.data),
+    )
+    x_bias = xDisp_before.copy(new_array=x_bias_data)
+    y_bias = yDisp_before.copy(new_array=y_bias_data)
+
+    vlim_x  = get_rounded_limits(xDisp_before, round_to=1, symmetric=True)
+    vlim_y  = get_rounded_limits(yDisp_before, round_to=1, symmetric=True)
+    vlim_bx = get_rounded_limits(x_bias,       round_to=1, symmetric=True)
+    vlim_by = get_rounded_limits(y_bias,       round_to=1, symmetric=True)
+
+    xDisp_before.plot(ax=axs['a)'], cmap=cmap_ew,   vmin=-vlim_x,  vmax=vlim_x,  title="EW before")
+    x_bias.plot(      ax=axs['b)'], cmap=cmap_bias,  vmin=-vlim_bx, vmax=vlim_bx, title="EW bias")
+    xDisp_after.plot( ax=axs['c)'], cmap=cmap_ew,   vmin=-vlim_x,  vmax=vlim_x,  title="EW after")
+
+    yDisp_before.plot(ax=axs['d)'], cmap=cmap_ns,   vmin=-vlim_y,  vmax=vlim_y,  title="NS before")
+    y_bias.plot(      ax=axs['e)'], cmap=cmap_bias,  vmin=-vlim_by, vmax=vlim_by, title="NS bias")
+    yDisp_after.plot( ax=axs['f)'], cmap=cmap_ns,   vmin=-vlim_y,  vmax=vlim_y,  title="NS after")
+
+    # 1-D bias profile from the fitted step metadata
+    meta = getattr(step, "meta", {}) or {}
+    centers = meta.get("profile_centers")
+    median  = meta.get("profile_median")
+    fitted  = meta.get("profile_fitted")
+    if centers is not None and median is not None:
+        axs['g)'].plot(centers, median, ".", ms=4, alpha=0.5, label="binned median (stable)")
+        if fitted is not None:
+            axs['g)'].plot(centers, fitted, "-", lw=2, label="fitted profile")
+        axs['g)'].set_xlabel("Seam-normal coordinate s (m)")
+        axs['g)'].set_ylabel("Bias (m)")
+        sub = []
+        if meta.get("std_before") is not None and meta.get("std_after") is not None:
+            sub.append(f"std {meta['std_before']:.3f} → {meta['std_after']:.3f} m")
+        axs['g)'].set_title("1-D bias profile" + (f"  ({'; '.join(sub)})" if sub else ""))
+        axs['g)'].legend()
+        axs['g)'].grid(alpha=0.3)
+    else:
+        axs['g)'].axis("off")
+        axs['g)'].text(0.5, 0.5, "No profile metadata available",
+                       ha="center", va="center", transform=axs['g)'].transAxes)
+
+    fig.tight_layout()
+    return fig
+#END def
 
 def plot_ramp_correction(
     xDisp_before: gu.Raster,
@@ -575,10 +671,13 @@ def plot_correction_result(
     """Dispatch to the appropriate plot for a single correction step.
 
     - ``RampCorrection`` / ``TopoCorrection`` → :func:`plot_ramp_correction`
+    - ``DirectionalBiasCorrection`` → :func:`plot_directional_bias_correction`
     - All other steps → :func:`plot_median_centering`
     """
-    from geomulticorr.corrections.corrections import RampCorrection, TopoCorrection
-
+    if isinstance(step, DirectionalBiasCorrection):
+        return plot_directional_bias_correction(
+            step, xDisp_before, xDisp_after, yDisp_before, yDisp_after, fig_name=fig_name
+        )
     if isinstance(step, (RampCorrection, TopoCorrection)):
         return plot_ramp_correction(xDisp_before, xDisp_after, yDisp_before, yDisp_after,
                                     fig_name=fig_name)

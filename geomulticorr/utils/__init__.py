@@ -38,6 +38,7 @@ from geomulticorr.utils.gmc_functions import (
     plot_median_centering,
     plot_ramp_correction,
     plot_correction_result,
+    plot_directional_bias_correction,
     plot_disp_vs_elev_raw,
     plot_disp_vs_elev_bins,
     plot_disp_vs_elev_hexbin,
