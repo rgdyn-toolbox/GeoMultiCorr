@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.1] — 2026-06-30
+
+### Improvements
+- `README` with new `DirectionalBiasCorrection()` method (052851a)
+
 ## [0.1.0] — 2026-06-30
 
 ### Features
