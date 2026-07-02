@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.2] — 2026-07-02
+
+### Features
+- unit test for stats.py module. Using `Mock` for generate synthetic data until we get the examples. (21d91c8)
+- Enriching default statistics on CC map. Estimation of general CC quality score based on fixed thresholds (0.25; 0.5; 0.75) and the proportion of valid pixels. add functions: `fraction_above() and count_above()`. Function helper in black format (47a9bc2)
+
+### Bug Fixes
+- homogenize template geodatabase and `pair.to_pdserie()` function for better sync (31ee1f9)
+
+### Improvements
+- small modifications on raster statistics keys after `save_corrected_stats()`. add new key final_corrected_stats() after corrections. Even it is redundant, it allows to isolate final stats; add: `sync_pairs_stats()`, `sync_raw_stats()` and `sync_corrected_stats()`; add: sync_geodb argument to `extract_pairs_raw_displacements()`, `apply_pairs_corrections()`, for syncing to GPKG database (65169be)
+
 ## [0.1.1] — 2026-06-30
 
 ### Improvements
