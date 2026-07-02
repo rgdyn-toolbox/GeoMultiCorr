@@ -45,9 +45,12 @@ from geomulticorr.stats.stats import (
     count_above,
     fraction_above,
     init_pair_stats,
+    last_correction_block,
     load_pair_stats,
     nmad,
+    resolve_stat_columns,
     save_corrected_stats,
+    save_final_corrected_stats,
     save_raw_corr_stats,
     update_pair_stats,
 )
@@ -555,12 +558,15 @@ class TestInitPairStats:
         init_pair_stats(mock_pair)
         assert mock_pair.pa_stats_path.exists()
 
-    def test_skeleton_has_three_sections(self, mock_pair):
-        """Returned dict has metadata, raw_corr_stats, corrected_stats."""
+    def test_skeleton_has_four_sections(self, mock_pair):
+        """Returned dict has metadata, raw_corr_stats, correction_stats, final."""
         result = init_pair_stats(mock_pair)
-        assert set(result.keys()) >= {"metadata", "raw_corr_stats", "corrected_stats"}
+        assert set(result.keys()) >= {
+            "metadata", "raw_corr_stats", "correction_stats", "final_corrected_stats",
+        }
         assert result["raw_corr_stats"] == {}
-        assert result["corrected_stats"] == {}
+        assert result["correction_stats"] == {}
+        assert result["final_corrected_stats"] == {}
 
     def test_file_content_is_valid_json(self, mock_pair):
         """Written file parses as valid JSON and has the skeleton keys."""
@@ -626,7 +632,7 @@ class TestUpdatePairStats:
         init_pair_stats(mock_pair)
         update_pair_stats(mock_pair, "raw_corr_stats", {"ew": {}})
         loaded = load_pair_stats(mock_pair)
-        assert "corrected_stats" in loaded
+        assert "correction_stats" in loaded
         assert "metadata" in loaded
 
     def test_returns_full_dict(self, mock_pair):
@@ -634,7 +640,7 @@ class TestUpdatePairStats:
         result = update_pair_stats(mock_pair, "raw_corr_stats", {})
         assert "metadata" in result
         assert "raw_corr_stats" in result
-        assert "corrected_stats" in result
+        assert "correction_stats" in result
 
     def test_second_call_replaces_section(self, mock_pair):
         """Calling twice with the same section name overwrites it."""
@@ -656,23 +662,23 @@ class TestSaveCorrectedStats:
     def test_saves_ew_and_ns_under_correction_name(self, mock_pair):
         """Stats saved under correction_name with 'ew' and 'ns' sub-keys."""
         save_corrected_stats(mock_pair, self._raster(1.0), self._raster(2.0), "MedianCentering")
-        entry = load_pair_stats(mock_pair)["corrected_stats"]["MedianCentering"]
+        entry = load_pair_stats(mock_pair)["correction_stats"]["MedianCentering"]
         assert "ew" in entry
         assert "ns" in entry
 
     def test_ew_and_ns_means_match_data(self, mock_pair):
         """Stored mean values match the constant raster values."""
         save_corrected_stats(mock_pair, self._raster(3.0), self._raster(7.0), "TestCorr")
-        entry = load_pair_stats(mock_pair)["corrected_stats"]["TestCorr"]
+        entry = load_pair_stats(mock_pair)["correction_stats"]["TestCorr"]
         assert entry["ew"]["mean"] == pytest.approx(3.0, abs=1e-4)
         assert entry["ns"]["mean"] == pytest.approx(7.0, abs=1e-4)
 
     def test_multiple_corrections_accumulate(self, mock_pair):
-        """Two calls with different names both appear in corrected_stats."""
+        """Two calls with different names both appear in correction_stats."""
         r = self._raster()
         save_corrected_stats(mock_pair, r, r, "MedianCentering")
         save_corrected_stats(mock_pair, r, r, "RampCorrection")
-        corrected = load_pair_stats(mock_pair)["corrected_stats"]
+        corrected = load_pair_stats(mock_pair)["correction_stats"]
         assert "MedianCentering" in corrected
         assert "RampCorrection" in corrected
 
@@ -680,7 +686,7 @@ class TestSaveCorrectedStats:
         """Two calls with the same correction_name: second overwrites first."""
         save_corrected_stats(mock_pair, self._raster(1.0), self._raster(1.0), "TestCorr")
         save_corrected_stats(mock_pair, self._raster(5.0), self._raster(5.0), "TestCorr")
-        entry = load_pair_stats(mock_pair)["corrected_stats"]["TestCorr"]
+        entry = load_pair_stats(mock_pair)["correction_stats"]["TestCorr"]
         assert entry["ew"]["mean"] == pytest.approx(5.0, abs=1e-4)
 
     def test_custom_percentiles_stored(self, mock_pair):
@@ -688,7 +694,7 @@ class TestSaveCorrectedStats:
         save_corrected_stats(
             mock_pair, self._raster(), self._raster(), "TestCorr", percentiles=[10, 90]
         )
-        ew = load_pair_stats(mock_pair)["corrected_stats"]["TestCorr"]["ew"]
+        ew = load_pair_stats(mock_pair)["correction_stats"]["TestCorr"]["ew"]
         assert "p10" in ew
         assert "p90" in ew
         assert "p5" not in ew
@@ -696,8 +702,52 @@ class TestSaveCorrectedStats:
     def test_count_valid_nonzero_for_unmasked_data(self, mock_pair):
         """Unmasked raster → count_valid > 0."""
         save_corrected_stats(mock_pair, self._raster(), self._raster(), "TestCorr")
-        ew = load_pair_stats(mock_pair)["corrected_stats"]["TestCorr"]["ew"]
+        ew = load_pair_stats(mock_pair)["correction_stats"]["TestCorr"]["ew"]
         assert ew["count_valid"] == 25  # 5×5 raster, all valid
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestSaveFinalCorrectedStats:
+    """Tests for save_final_corrected_stats() — canonical final-correction copy."""
+
+    def _raster(self, value: float = 1.0, shape: tuple = (5, 5)) -> MockRasterData:
+        return MockRasterData(data=ma.array(np.full(shape, value), mask=False))
+
+    def test_copies_last_correction_block(self, mock_pair):
+        """Without a name, copies the last-inserted correction block."""
+        save_corrected_stats(mock_pair, self._raster(1.0), self._raster(1.0), "MedianCentering")
+        save_corrected_stats(mock_pair, self._raster(3.0), self._raster(3.0), "RampCorrection")
+        save_final_corrected_stats(mock_pair)
+        js = load_pair_stats(mock_pair)
+        assert js["final_corrected_stats"] == js["correction_stats"]["RampCorrection"]
+        assert js["final_corrected_stats"]["ew"]["mean"] == pytest.approx(3.0, abs=1e-4)
+
+    def test_explicit_name_copies_that_block(self, mock_pair):
+        """With last_correction_name, copies that named block (not the last)."""
+        save_corrected_stats(mock_pair, self._raster(1.0), self._raster(1.0), "MedianCentering")
+        save_corrected_stats(mock_pair, self._raster(3.0), self._raster(3.0), "RampCorrection")
+        save_final_corrected_stats(mock_pair, last_correction_name="MedianCentering")
+        js = load_pair_stats(mock_pair)
+        assert js["final_corrected_stats"] == js["correction_stats"]["MedianCentering"]
+        assert js["final_corrected_stats"]["ew"]["mean"] == pytest.approx(1.0, abs=1e-4)
+
+    def test_is_deep_copy(self, mock_pair):
+        """Mutating final_corrected_stats does not alter correction_stats."""
+        save_corrected_stats(mock_pair, self._raster(2.0), self._raster(2.0), "TestCorr")
+        save_final_corrected_stats(mock_pair)
+        js = load_pair_stats(mock_pair)
+        js["final_corrected_stats"]["ew"]["mean"] = -999.0
+        assert js["correction_stats"]["TestCorr"]["ew"]["mean"] != -999.0
+
+    def test_no_correction_writes_empty_block(self, mock_pair):
+        """No corrections recorded → final_corrected_stats is {} and sections kept."""
+        init_pair_stats(mock_pair)
+        save_final_corrected_stats(mock_pair)
+        js = load_pair_stats(mock_pair)
+        assert js["final_corrected_stats"] == {}
+        assert "correction_stats" in js
+        assert "raw_corr_stats" in js
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -723,4 +773,121 @@ class TestSaveRawCorrStats:
         save_raw_corr_stats(mock_pair)
         loaded = load_pair_stats(mock_pair)
         assert "metadata" in loaded
-        assert "corrected_stats" in loaded
+        assert "correction_stats" in loaded
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestLastCorrectionBlock:
+    """Tests for last_correction_block() — final-correction entry selector."""
+
+    def test_empty_corrected_stats_returns_empty(self):
+        """No corrections recorded → empty dict."""
+        assert last_correction_block({"correction_stats": {}}) == {}
+
+    def test_missing_section_returns_empty(self):
+        """Absent correction_stats section → empty dict."""
+        assert last_correction_block({}) == {}
+
+    def test_returns_last_inserted_entry(self):
+        """Returns the last-inserted correction block (pipeline order)."""
+        js = {
+            "correction_stats": {
+                "MedianCentering": {"ew": {"nmad": 1.0}},
+                "RampCorrection": {"ew": {"nmad": 0.5}},
+                "TopoCorrection": {"ew": {"nmad": 0.2}},
+            }
+        }
+        assert last_correction_block(js) == {"ew": {"nmad": 0.2}}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestResolveStatColumns:
+    """Tests for resolve_stat_columns() — flatten stats JSON into columns."""
+
+    _JSON = {
+        "raw_corr_stats": {
+            "ew": {"nmad": 0.11, "mean": 1.0},
+            "ns": {"nmad": 0.22},
+            "cc": {"cc_quality_gte_050": 0.73},
+        },
+        "correction_stats": {
+            "MedianCentering": {"ew": {"nmad": 0.09}, "ns": {"nmad": 0.19}},
+            "RampCorrection": {"ew": {"nmad": 0.05}, "ns": {"nmad": 0.15}},
+        },
+        "final_corrected_stats": {"ew": {"nmad": 0.05}, "ns": {"nmad": 0.15}},
+    }
+
+    def test_final_corrected_section_string(self):
+        """String section selects the canonical final-correction block."""
+        cols = resolve_stat_columns(
+            self._JSON,
+            {"pa_ew_nmad_corr": ("ew", "nmad"),
+             "pa_ns_nmad_corr": ("ns", "nmad")},
+            "final_corrected_stats",
+        )
+        assert cols == {"pa_ew_nmad_corr": 0.05, "pa_ns_nmad_corr": 0.15}
+
+    def test_raw_section_string(self):
+        """String section selects the raw block; values pulled exactly."""
+        cols = resolve_stat_columns(
+            self._JSON,
+            {"pa_ew_nmad": ("ew", "nmad"),
+             "pa_cc_quality050": ("cc", "cc_quality_gte_050")},
+            "raw_corr_stats",
+        )
+        assert cols == {"pa_ew_nmad": 0.11, "pa_cc_quality050": 0.73}
+
+    def test_tuple_section_selects_named_correction(self):
+        """A (section, subkey) tuple picks that correction's block."""
+        cols = resolve_stat_columns(
+            self._JSON,
+            {"pa_ew_nmad_corr": ("ew", "nmad")},
+            ("correction_stats", "MedianCentering"),
+        )
+        assert cols == {"pa_ew_nmad_corr": 0.09}
+
+    def test_callable_section_last_correction(self):
+        """A callable section (last_correction_block) picks the last entry."""
+        cols = resolve_stat_columns(
+            self._JSON,
+            {"pa_ew_nmad_corr": ("ew", "nmad"),
+             "pa_ns_nmad_corr": ("ns", "nmad")},
+            last_correction_block,
+        )
+        assert cols == {"pa_ew_nmad_corr": 0.05, "pa_ns_nmad_corr": 0.15}
+
+    def test_missing_layer_or_key_is_nan(self):
+        """Missing layer or stat key resolves to nan (not KeyError)."""
+        cols = resolve_stat_columns(
+            self._JSON,
+            {"missing_layer": ("magn", "nmad"),
+             "missing_key": ("ew", "does_not_exist")},
+            "raw_corr_stats",
+        )
+        assert math.isnan(cols["missing_layer"])
+        assert math.isnan(cols["missing_key"])
+
+    def test_missing_section_all_nan(self):
+        """A section absent from the JSON yields nan for every metric."""
+        cols = resolve_stat_columns(
+            self._JSON, {"pa_ew_nmad": ("ew", "nmad")}, "does_not_exist"
+        )
+        assert math.isnan(cols["pa_ew_nmad"])
+
+    def test_extra_cols_constant_and_callable(self):
+        """extra_cols supports constants and callables over the whole JSON."""
+        cols = resolve_stat_columns(
+            self._JSON,
+            {},
+            "raw_corr_stats",
+            extra_cols={
+                "pa_n_corrections": (lambda js: len(js.get("correction_stats", {}))),
+                "pa_const": 4,
+            },
+        )
+        assert cols["pa_n_corrections"] == 2
+        assert cols["pa_const"] == 4

@@ -80,6 +80,7 @@ import geomulticorr.core.pair as gmc_pair
 import geomulticorr.core.spine as gmc_spine
 import geomulticorr.core.thumb as gmc_thumb
 import geomulticorr.core.xzone as gmc_xzone
+import geomulticorr.stats.stats as gmc_stats
 import geomulticorr.correlation.supported_sensors as gmc_sensors
 
 from geomulticorr._logging import logger
@@ -100,6 +101,21 @@ resources_location = package_root / "resources"
 project_template_location = resources_location / "project_template"
 
 _DT_UNIT_TO_DAYS: dict[str, int] = {"D": 1, "W": 7, "M": 30, "Y": 365}
+
+# Metric maps for syncing per-pair stats JSON into the Pairs geodatabase layer.
+# Each entry is ``pairs_column: (stats_layer, stat_key)`` — see
+# ``geomulticorr.stats.stats.resolve_stat_columns``. Column names are defined
+# here so they live in a single place (the sync is a derived cache; these columns
+# are intentionally NOT part of ``Pair.to_pdserie()``).
+RAW_STATS_SYNC: dict[str, tuple[str, str]] = {
+    "pa_ew_nmad_raw": ("ew", "nmad"),
+    "pa_ns_nmad_raw": ("ns", "nmad"),
+    "pa_cc_quality050": ("cc", "cc_quality_gte_050"),
+}
+CORR_STATS_SYNC: dict[str, tuple[str, str]] = {
+    "pa_ew_nmad_corr": ("ew", "nmad"),
+    "pa_ns_nmad_corr": ("ns", "nmad"),
+}
 
 def _parse_dt_days(value: int | str | None) -> int | None:
     """Convert a duration string to integer days.
@@ -1050,6 +1066,114 @@ class Session:
             self._pairs.loc[mask, "pa_status"] = fresh_status
         self._pairs.to_file(self.path_geodb, layer="Pairs")
         logger.save(f"Geodatabase updated: pa_status synced for {len(pairs)} pair(s).")
+
+    def sync_pairs_stats(
+        self,
+        metric_map: dict,
+        section,
+        pairs: list | None = None,
+        criterias: str | list[str] = "",
+        extra_cols: dict | None = None,
+    ) -> gpd.GeoDataFrame:
+        """Sync selected per-pair stats (from the stats JSON) into the Pairs layer.
+
+        Reads each pair's stats JSON (``pair.pa_stats_path``), flattens the
+        requested values via
+        :func:`geomulticorr.stats.stats.resolve_stat_columns`, and writes them as
+        columns on the matching Pairs-layer row (matched by ``pa_path``), then
+        persists the layer once. Mirrors :meth:`_sync_pairs_status`.
+
+        These columns are a **derived cache**: they are not part of
+        :meth:`~geomulticorr.core.pair.Pair.to_pdserie` and are dropped when the
+        Pairs layer is rebuilt (:meth:`update_pairs_with_strategy`) — re-run the
+        sync afterwards.
+
+        Args:
+            metric_map: ``{pairs_column: (stats_layer, stat_key)}`` mapping.
+            section: Section selector passed through to ``resolve_stat_columns``
+                (a section name like ``"raw_corr_stats"`` or
+                ``"final_corrected_stats"``, a ``("correction_stats", "<StepName>")``
+                tuple, or a callable).
+            pairs: Pairs to sync. Defaults to ``get_pairs(criterias)``.
+            criterias: Filter used when *pairs* is not given.
+            extra_cols: Optional derived columns ``{column: value_or_callable}``.
+
+        Returns:
+            The updated in-memory Pairs GeoDataFrame.
+        """
+        if pairs is None:
+            pairs = self.get_pairs(criterias)
+
+        n = 0
+        for pair in pairs:
+            try:
+                js = gmc_stats.load_pair_stats(pair)
+            except FileNotFoundError:
+                continue
+            mask = self._pairs["pa_path"] == str(pair.pa_path)
+            if not mask.any():
+                continue
+            cols = gmc_stats.resolve_stat_columns(js, metric_map, section, extra_cols)
+            for col, val in cols.items():
+                self._pairs.loc[mask, col] = val
+            n += 1
+
+        if n:
+            self._pairs.to_file(self.path_geodb, layer="Pairs")
+            synced = list(metric_map) + list(extra_cols or {})
+            logger.save(
+                f"Geodatabase updated: synced {synced} for {n} pair(s)."
+            )
+        return self._pairs
+
+    def sync_raw_stats(
+        self,
+        pairs: list | None = None,
+        criterias: str | list[str] = "",
+    ) -> gpd.GeoDataFrame:
+        """Sync raw correlation stats (:data:`RAW_STATS_SYNC`) into the Pairs layer.
+
+        Populates ``pa_ew_nmad_raw``, ``pa_ns_nmad_raw`` and ``pa_cc_quality050``
+        from each pair's ``raw_corr_stats``. Call after
+        :meth:`extract_pairs_raw_displacements` (done automatically unless
+        ``sync_geodb=False``), or standalone to (re)populate the columns.
+        """
+        return self.sync_pairs_stats(
+            RAW_STATS_SYNC, "raw_corr_stats", pairs=pairs, criterias=criterias
+        )
+
+    def sync_corrected_stats(
+        self,
+        pairs: list | None = None,
+        criterias: str | list[str] = "",
+        n_corrections: int | None = None,
+    ) -> gpd.GeoDataFrame:
+        """Sync final-correction stats (:data:`CORR_STATS_SYNC`) into the Pairs layer.
+
+        Populates ``pa_ew_nmad_corr``/``pa_ns_nmad_corr`` from the canonical
+        ``final_corrected_stats`` section (the fully-corrected field, written by
+        :func:`~geomulticorr.stats.stats.save_final_corrected_stats`) plus
+        ``pa_n_corrections``.
+
+        Args:
+            pairs: Pairs to sync. Defaults to ``get_pairs(criterias)``.
+            criterias: Filter used when *pairs* is not given.
+            n_corrections: Number of corrections applied. When given (the
+                auto-wired call from :meth:`apply_pairs_corrections`, where the
+                pipeline is fixed for all pairs) it is used directly; otherwise it
+                is derived per pair from ``len(correction_stats)``.
+        """
+        extra_cols = {
+            "pa_n_corrections": (
+                n_corrections
+                if n_corrections is not None
+                else (lambda js: len(js.get("correction_stats", {})))
+            )
+        }
+        return self.sync_pairs_stats(
+            CORR_STATS_SYNC, "final_corrected_stats",
+            pairs=pairs, criterias=criterias, extra_cols=extra_cols,
+        )
 
     def update_pairs_with_strategy(
         self,
@@ -2627,6 +2751,7 @@ class Session:
         canonical_bounds: "object | None" = None,
         canonical_grid_size: "tuple[int, int] | None" = None,
         print_summary: bool = True,
+        sync_geodb: bool = True,
     ) -> dict:
         """Extract EW/NS displacements and compute raw stats for all complete pairs.
 
@@ -2652,6 +2777,9 @@ class Session:
                 all pairs to a specific known grid.
             canonical_grid_size: Exact output grid size ``(width, height)`` in pixels.
                 Must be provided together with *canonical_bounds*.
+            sync_geodb: If ``True`` (default), sync raw stats
+                (:data:`RAW_STATS_SYNC`) into the Pairs geodatabase layer for the
+                pairs processed in this call. See :meth:`sync_raw_stats`.
 
         Returns:
             Dict mapping ``pa_key`` → full stats dict (or ``None`` if skipped).
@@ -2770,6 +2898,11 @@ class Session:
         if print_summary:
             _rich_console.print(table)
 
+        if sync_geodb:
+            done = [p for p in pairs if results.get(p.pa_key) is not None]
+            if done:
+                self.sync_raw_stats(pairs=done)
+
         return results
 
     def apply_pairs_corrections(
@@ -2780,6 +2913,7 @@ class Session:
         overwrite: bool = False,
         save_plot: bool = True,
         print_summary: bool = True,
+        sync_geodb: bool = True,
         **kwargs,
     ) -> dict:
         """Apply a filter and/or correction pipeline to all processed pairs.
@@ -2813,6 +2947,10 @@ class Session:
             criterias: Same filter syntax as :meth:`get_pairs`.
             overwrite: Re-process pairs whose corrected files already exist.
             save_plot: Save a before/after control figure for each pair.
+            sync_geodb: If ``True`` (default) and a *correction_pipeline* is given,
+                sync last-correction stats (:data:`CORR_STATS_SYNC`) and
+                ``pa_n_corrections`` into the Pairs geodatabase layer for the pairs
+                corrected in this call. See :meth:`sync_corrected_stats`.
             **kwargs: Forwarded to both pipelines
                 (e.g. ``dem=`` for :class:`~geomulticorr.corrections.TopoCorrection`).
                 ``cc=`` is auto-injected from the pair folder when available.
@@ -2958,6 +3096,12 @@ class Session:
                             elif step_name in _RAMP_TOPO_CLASSES:
                                 ramp_topo_names.append(step_name)
 
+                        # After all corrections: copy the last step's block into
+                        # the canonical 'final_corrected_stats' section.
+                        if steps_x:
+                            gmc_stats.save_final_corrected_stats(
+                                pair, last_correction_name=type(steps_x[-1]).__name__)
+
                     if ramp_topo_names:
                         rec["ramp_topo"] = "[green]" + "+".join(ramp_topo_names) + "[/green]"
                     rec["stats"] = "[green]ok[/green]" if pair.pa_stats_path.exists() else "[red]missing[/red]"
@@ -3006,6 +3150,20 @@ class Session:
             )
         if print_summary:
             _rich_console.print(table)
+
+        if sync_geodb and correction_pipeline is not None:
+            from geomulticorr.corrections.corrections import CorrectionPipeline
+            steps = (
+                correction_pipeline.steps
+                if isinstance(correction_pipeline, CorrectionPipeline)
+                else [correction_pipeline]
+            )
+            done = [p for p in pairs if results.get(p.pa_key)]
+            if done and steps:
+                self.sync_corrected_stats(
+                    pairs=done,
+                    n_corrections=len(steps),
+                )
 
         return results
 

@@ -46,9 +46,16 @@ Pair-level API
     update_pair_stats(pair, section, stats_data)
     save_raw_corr_stats(pair)
     save_corrected_stats(pair, xDisp_corr, yDisp_corr, correction_name)
+    save_final_corrected_stats(pair, last_correction_name)
+
+Geodatabase-sync helpers
+------------------------
+    last_correction_block(stats_json)
+    resolve_stat_columns(stats_json, metric_map, section, extra_cols)
 """
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -420,9 +427,10 @@ def init_pair_stats(pair: Pair) -> dict:
     The file is created at ``pair.pa_stats_path`` with the structure::
 
         {
-            "metadata":        { ... },
-            "raw_corr_stats":  {},
-            "corrected_stats": {}
+            "metadata":              { ... },
+            "raw_corr_stats":        {},
+            "correction_stats":      {},
+            "final_corrected_stats": {}
         }
 
     :param pair: Source pair instance.
@@ -433,7 +441,8 @@ def init_pair_stats(pair: Pair) -> dict:
     stats_dict = {
         "metadata": build_pair_metadata(pair),
         "raw_corr_stats": {},
-        "corrected_stats": {},
+        "correction_stats": {},
+        "final_corrected_stats": {},
     }
     pair.pa_stats_path.parent.mkdir(parents=True, exist_ok=True)
     with open(pair.pa_stats_path, "w") as f:
@@ -497,7 +506,7 @@ def save_corrected_stats(
 ) -> dict:
     """Persist corrected displacement statistics under a named key.
 
-    Loads the existing ``"corrected_stats"`` section, adds (or replaces) an
+    Loads the existing ``"correction_stats"`` section, adds (or replaces) an
     entry keyed by *correction_name* with ``{"ew": {...}, "ns": {...}}``,
     then writes the merged result back to disk. Multiple calls with
     different *correction_name* values accumulate without overwriting.
@@ -508,7 +517,7 @@ def save_corrected_stats(
     :type xDisp_corr: geoutils.Raster
     :param yDisp_corr: Corrected NS displacement raster.
     :type yDisp_corr: geoutils.Raster
-    :param correction_name: Key to use inside ``"corrected_stats"``
+    :param correction_name: Key to use inside ``"correction_stats"``
         (e.g. ``"MedianCentering"`` or ``str(pipeline)``).
     :type correction_name: str
     :param percentiles: Percentile values to compute.
@@ -526,7 +535,7 @@ def save_corrected_stats(
         save_corrected_stats(pair, xc, yc, "MedianCentering")
     """
     if pair.pa_stats_path.exists():
-        corrected = load_pair_stats(pair).get("corrected_stats", {})
+        corrected = load_pair_stats(pair).get("correction_stats", {})
     else:
         corrected = {}
 
@@ -535,7 +544,7 @@ def save_corrected_stats(
         "ns": _compute_array_stats(yDisp_corr.data, percentiles),
     }
 
-    result = update_pair_stats(pair, "corrected_stats", corrected)
+    result = update_pair_stats(pair, "correction_stats", corrected)
     ew_valid = corrected[correction_name]["ew"]["count_valid"]
     ns_valid = corrected[correction_name]["ns"]["count_valid"]
     logger.statistics(
@@ -544,6 +553,37 @@ def save_corrected_stats(
     )
     return result
 
+
+def save_final_corrected_stats(
+    pair: Pair,
+    last_correction_name: str | None = None,
+) -> dict:
+    """Copy the last correction's stats into the ``final_corrected_stats`` section.
+
+    Called once, *after all corrections are applied* for a pair. The
+    ``final_corrected_stats`` section is a deep copy of the last correction's
+    ``{"ew": {...}, "ns": {...}}`` block from ``correction_stats`` — a deliberate,
+    explicit home for the final result (rather than relying on the last-inserted
+    key of ``correction_stats``).
+
+    :param pair: Source pair instance (must have ``pa_stats_path``).
+    :type pair: Pair
+    :param last_correction_name: Name of the last-applied correction (class name).
+        When given, that named block is copied (robust against stale
+        ``correction_stats`` keys from a prior run). When ``None``, falls back to
+        :func:`last_correction_block` (the last-inserted entry).
+    :type last_correction_name: str | None
+    :returns: The full updated stats dict (all sections). ``final_corrected_stats``
+        is ``{}`` when no correction has been recorded.
+    :rtype: dict
+    """
+    js = load_pair_stats(pair)
+    if last_correction_name is not None:
+        block = js.get("correction_stats", {}).get(last_correction_name, {})
+    else:
+        block = last_correction_block(js)
+    return update_pair_stats(pair, "final_corrected_stats", copy.deepcopy(block))
+# END def
 
 def save_raw_corr_stats(pair: Pair) -> dict:
     """Compute and persist raw correlation statistics for a pair.
@@ -563,3 +603,77 @@ def save_raw_corr_stats(pair: Pair) -> dict:
         f"({len(raw)} raster(s) processed)"
     )
     return result
+# END def
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Geodatabase-sync helpers (flatten stats JSON → Pairs-layer columns)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def last_correction_block(stats_json: dict) -> dict:
+    """Return the ``correction_stats`` entry of the last-applied correction.
+
+    Corrections are applied cumulatively and saved in pipeline order, so the
+    last-inserted entry holds the fully-corrected field. Returns ``{}`` when no
+    correction has been recorded.
+
+    :param stats_json: A pair stats dict (as returned by :func:`load_pair_stats`).
+    :type stats_json: dict
+    :returns: The ``{"ew": {...}, "ns": {...}}`` block of the last correction,
+        or ``{}`` if ``correction_stats`` is empty/absent.
+    :rtype: dict
+    """
+    corr = stats_json.get("correction_stats", {})
+    return corr[list(corr)[-1]] if corr else {}
+# END def
+
+def resolve_stat_columns(
+    stats_json: dict,
+    metric_map: dict,
+    section,
+    extra_cols: dict | None = None,
+) -> dict:
+    """Flatten selected values from a pair stats JSON into ``{column: value}``.
+
+    Pure helper used by the geodatabase sync: given a metric mapping and a
+    section selector, it pulls each requested statistic out of the JSON and
+    returns a flat dict ready to be written as Pairs-layer columns. Missing
+    layers/keys resolve to ``nan`` so the sync is robust to partially-processed
+    pairs.
+
+    :param stats_json: A pair stats dict (as returned by :func:`load_pair_stats`).
+    :type stats_json: dict
+    :param metric_map: Mapping ``{column_name: (layer, stat_key)}`` — e.g.
+        ``{"pa_ew_nmad": ("ew", "nmad")}``. ``layer`` indexes the resolved
+        section block; ``stat_key`` indexes that layer's stats dict.
+    :type metric_map: dict
+    :param section: Section selector, one of:
+
+        * ``str`` — a top-level section key (e.g. ``"raw_corr_stats"``);
+        * ``tuple`` — ``(section, subkey)`` (e.g.
+          ``("correction_stats", "MedianCentering")``);
+        * ``callable`` — ``fn(stats_json) -> block dict`` (e.g.
+          :func:`last_correction_block`).
+    :param extra_cols: Optional ``{column_name: value_or_callable}`` for derived
+        columns; a callable is invoked as ``fn(stats_json)`` (e.g.
+        ``{"pa_n_corrections": lambda js: len(js.get("correction_stats", {}))}``).
+    :type extra_cols: dict | None
+    :returns: Flat ``{column_name: value}`` dict (values are scalars or ``nan``).
+    :rtype: dict
+    """
+    if callable(section):
+        block = section(stats_json) or {}
+    elif isinstance(section, tuple):
+        block = stats_json.get(section[0], {}).get(section[1], {})
+    else:
+        block = stats_json.get(section, {})
+
+    out = {
+        col: block.get(layer, {}).get(key, float("nan"))
+        for col, (layer, key) in metric_map.items()
+    }
+    for col, val in (extra_cols or {}).items():
+        out[col] = val(stats_json) if callable(val) else val
+    return out
+# END def

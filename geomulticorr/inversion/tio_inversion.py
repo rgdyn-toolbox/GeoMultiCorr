@@ -925,12 +925,13 @@ class TIOInversion:
     ) -> tuple[list, list]:
         """Remove pairs whose NMAD exceeds *threshold* from ``self.pairs``.
 
-        Reads each pair's stats JSON at ``pair.pa_stats_path``.  For pairs
-        with corrected stats the section keyed by *correction_name* is used;
-        when *correction_name* is ``None`` the last recorded corrected section
-        is used.  Falls back to ``raw_corr_stats`` when no corrected stats
-        are available.  Pairs whose stats file is missing are retained with a
-        warning so the inversion is not silently broken.
+        Reads each pair's stats JSON at ``pair.pa_stats_path``.  When
+        *correction_name* is given, that named section of ``correction_stats``
+        is used; when *correction_name* is ``None`` the canonical
+        ``final_corrected_stats`` section (the fully-corrected field) is used.
+        Falls back to ``raw_corr_stats`` when no corrected stats are available.
+        Pairs whose stats file is missing are retained with a warning so the
+        inversion is not silently broken.
 
         ``self.pairs`` is updated in-place and the :attr:`image_dates` cache
         is cleared so the date list reflects the filtered pair set.
@@ -938,8 +939,8 @@ class TIOInversion:
         :param threshold: Maximum NMAD in metres.  ``max(nmad_EW, nmad_NS)``
             is compared against this value.
         :type threshold: float
-        :param correction_name: Key inside ``corrected_stats`` to read.
-            When ``None``, the last entry in the dict is used.
+        :param correction_name: Key inside ``correction_stats`` to read.
+            When ``None``, the ``final_corrected_stats`` section is used.
         :type correction_name: str or None
         :returns: Two lists — ``(good, bad)`` — pairs retained and pairs removed.
         :rtype: tuple[list, list]
@@ -963,15 +964,13 @@ class TIOInversion:
                 good.append(pair)
                 continue
 
-            corrected = stats.get("corrected_stats", {})
             nmad_ew = nmad_ns = float("nan")
 
-            if corrected:
-                if correction_name and correction_name in corrected:
-                    key = correction_name
-                else:
-                    key = list(corrected)[-1]
-                section = corrected[key]
+            if correction_name:
+                section = stats.get("correction_stats", {}).get(correction_name, {})
+            else:
+                section = stats.get("final_corrected_stats", {})
+            if section:
                 nmad_ew = section.get("ew", {}).get("nmad", float("nan"))
                 nmad_ns = section.get("ns", {}).get("nmad", float("nan"))
 
