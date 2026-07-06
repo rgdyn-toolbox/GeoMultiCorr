@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0] — 2026-07-06
+
+### Features
+- major update weighting calculation (6 methods) and unit test (1e8277c)
+- `save_pair_weight()` on unit test (bd7b721)
+- major update weighting calculation (6 methods); sync weights and inversion stats with GPKG database; `explore_weights()` interactively function on Geojson and GPKG database; update: in function documentation (f0765a7)
+- `save_pair_weight()` function on Geojson and GPKG database (f279a58)
+- `save_pair_weight()` on init file (4afada9)
+- sync_pairs_weight() Sync important statistics in GPKG database (7a97343)
+
+### Improvements
+- ipywidgets, ploty for interactive data analysis (6096436)
+
 ## [0.1.2] — 2026-07-02
 
 ### Features
