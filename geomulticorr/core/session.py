@@ -1175,6 +1175,46 @@ class Session:
             pairs=pairs, criterias=criterias, extra_cols=extra_cols,
         )
 
+    def sync_pairs_weights(
+        self,
+        pairs: list | None = None,
+        criterias: str | list[str] = "",
+    ) -> gpd.GeoDataFrame:
+        """Sync the per-direction inversion weights (``weight`` section) into the Pairs layer.
+
+        Populates ``pa_ew_weight`` / ``pa_ns_weight`` (the EW/NS weights),
+        ``pa_weight`` (their per-pair maximum, a single-number summary), and
+        ``pa_weight_mode`` (the ``mode``) from each pair's stats JSON ``weight``
+        section, written by
+        :func:`~geomulticorr.stats.stats.save_pair_weight`. Typically called by
+        :meth:`~geomulticorr.inversion.tio_inversion.TIOInversion.write_liste_couple`
+        after weights are computed, or standalone to (re)populate the columns.
+
+        Args:
+            pairs: Pairs to sync. Defaults to ``get_pairs(criterias)``.
+            criterias: Filter used when *pairs* is not given.
+        """
+        def _ew(js):
+            return js.get("weight", {}).get("ew", float("nan"))
+
+        def _ns(js):
+            return js.get("weight", {}).get("ns", float("nan"))
+
+        def _max(js):
+            w = js.get("weight", {})
+            vals = [v for v in (w.get("ew"), w.get("ns")) if isinstance(v, (int, float))]
+            return max(vals) if vals else float("nan")
+
+        extra_cols = {
+            "pa_ew_weight": _ew,
+            "pa_ns_weight": _ns,
+            "pa_weight": _max,
+            "pa_weight_mode": (lambda js: js.get("weight", {}).get("mode")),
+        }
+        return self.sync_pairs_stats(
+            {}, "weight", pairs=pairs, criterias=criterias, extra_cols=extra_cols,
+        )
+
     def update_pairs_with_strategy(
         self,
         strategy: str = "consecutive",
