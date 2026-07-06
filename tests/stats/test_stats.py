@@ -51,6 +51,7 @@ from geomulticorr.stats.stats import (
     resolve_stat_columns,
     save_corrected_stats,
     save_final_corrected_stats,
+    save_pair_weight,
     save_raw_corr_stats,
     update_pair_stats,
 )
@@ -558,15 +559,17 @@ class TestInitPairStats:
         init_pair_stats(mock_pair)
         assert mock_pair.pa_stats_path.exists()
 
-    def test_skeleton_has_four_sections(self, mock_pair):
-        """Returned dict has metadata, raw_corr_stats, correction_stats, final."""
+    def test_skeleton_has_all_sections(self, mock_pair):
+        """Returned dict has metadata, raw/correction/final stats, and weight."""
         result = init_pair_stats(mock_pair)
         assert set(result.keys()) >= {
-            "metadata", "raw_corr_stats", "correction_stats", "final_corrected_stats",
+            "metadata", "raw_corr_stats", "correction_stats",
+            "final_corrected_stats", "weight",
         }
         assert result["raw_corr_stats"] == {}
         assert result["correction_stats"] == {}
         assert result["final_corrected_stats"] == {}
+        assert result["weight"] == {}
 
     def test_file_content_is_valid_json(self, mock_pair):
         """Written file parses as valid JSON and has the skeleton keys."""
@@ -748,6 +751,48 @@ class TestSaveFinalCorrectedStats:
         assert js["final_corrected_stats"] == {}
         assert "correction_stats" in js
         assert "raw_corr_stats" in js
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestSavePairWeight:
+    """Tests for save_pair_weight() — persist the per-direction weight section."""
+
+    def test_writes_weight_section(self, mock_pair):
+        """weight section stores ew / ns / mode / combine / params."""
+        save_pair_weight(mock_pair, 0.42, 0.55, mode="quality:geomean",
+                         combine="geomean", params={"weight_mode": "quality"})
+        w = load_pair_stats(mock_pair)["weight"]
+        assert w["ew"] == pytest.approx(0.42)
+        assert w["ns"] == pytest.approx(0.55)
+        assert w["mode"] == "quality:geomean"
+        assert w["combine"] == "geomean"
+        assert w["params"] == {"weight_mode": "quality"}
+
+    def test_values_coerced_to_float(self, mock_pair):
+        """int/np weights are stored as plain floats."""
+        save_pair_weight(mock_pair, 1, 0, mode="uniform")
+        w = load_pair_stats(mock_pair)["weight"]
+        assert isinstance(w["ew"], float) and isinstance(w["ns"], float)
+
+    def test_second_call_overwrites(self, mock_pair):
+        """Re-saving replaces the weight section."""
+        save_pair_weight(mock_pair, 0.1, 0.1, mode="uniform")
+        save_pair_weight(mock_pair, 0.9, 0.8, mode="temporal")
+        w = load_pair_stats(mock_pair)["weight"]
+        assert w["ew"] == pytest.approx(0.9)
+        assert w["ns"] == pytest.approx(0.8)
+        assert w["mode"] == "temporal"
+
+    def test_preserves_other_sections(self, mock_pair):
+        """Saving the weight leaves the other sections intact."""
+        init_pair_stats(mock_pair)
+        save_pair_weight(mock_pair, 0.5, 0.5, mode="uniform")
+        js = load_pair_stats(mock_pair)
+        assert "metadata" in js
+        assert "raw_corr_stats" in js
+        assert "final_corrected_stats" in js
 
 
 # ──────────────────────────────────────────────────────────────────────────────
