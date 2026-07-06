@@ -47,6 +47,7 @@ Pair-level API
     save_raw_corr_stats(pair)
     save_corrected_stats(pair, xDisp_corr, yDisp_corr, correction_name)
     save_final_corrected_stats(pair, last_correction_name)
+    save_pair_weight(pair, ew, ns, mode, combine, params)
 
 Geodatabase-sync helpers
 ------------------------
@@ -430,7 +431,8 @@ def init_pair_stats(pair: Pair) -> dict:
             "metadata":              { ... },
             "raw_corr_stats":        {},
             "correction_stats":      {},
-            "final_corrected_stats": {}
+            "final_corrected_stats": {},
+            "weight":                {}
         }
 
     :param pair: Source pair instance.
@@ -443,6 +445,7 @@ def init_pair_stats(pair: Pair) -> dict:
         "raw_corr_stats": {},
         "correction_stats": {},
         "final_corrected_stats": {},
+        "weight": {},
     }
     pair.pa_stats_path.parent.mkdir(parents=True, exist_ok=True)
     with open(pair.pa_stats_path, "w") as f:
@@ -584,6 +587,47 @@ def save_final_corrected_stats(
         block = last_correction_block(js)
     return update_pair_stats(pair, "final_corrected_stats", copy.deepcopy(block))
 # END def
+
+
+def save_pair_weight(
+    pair: Pair,
+    ew: float,
+    ns: float,
+    mode: str,
+    combine: str | None = None,
+    params: dict | None = None,
+) -> dict:
+    """Persist a pair's per-direction inversion weights into the ``weight`` section.
+
+    Stores ``{"ew": …, "ns": …, "mode": …, "combine": …, "params": …}`` under the
+    top-level ``weight`` key. These are configuration/derived values (the TIO
+    ``liste_couple`` weights), stored so they can be promoted to the Pairs layer
+    via :meth:`~geomulticorr.core.session.Session.sync_pairs_weights`.
+
+    :param pair: Source pair instance (must have ``pa_stats_path``).
+    :type pair: Pair
+    :param ew: The EW-direction weight in ``[0, 1]``.
+    :type ew: float
+    :param ns: The NS-direction weight in ``[0, 1]``.
+    :type ns: float
+    :param mode: Weighting mode label (e.g. ``"uniform"`` or ``"quality:geomean"``).
+    :type mode: str
+    :param combine: Combination method used for the ``quality`` mode, if any.
+    :type combine: str | None
+    :param params: Optional extra parameters recorded for provenance.
+    :type params: dict | None
+    :returns: The full updated stats dict.
+    :rtype: dict
+    """
+    payload = {
+        "ew": float(ew),
+        "ns": float(ns),
+        "mode": mode,
+        "combine": combine,
+        "params": params or {},
+    }
+    return update_pair_stats(pair, "weight", payload)
+
 
 def save_raw_corr_stats(pair: Pair) -> dict:
     """Compute and persist raw correlation statistics for a pair.
