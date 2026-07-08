@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.2] — 2026-07-08
+
+### Features
+- UnitTest for `Destriping()` methods and `FitFourierStripProfile()` (61051b5)
+
 ## [0.2.0] — 2026-07-06
 
 ### Features
