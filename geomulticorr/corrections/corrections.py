@@ -84,6 +84,7 @@ from .fit import (
     rotate_coords,
     fit_directional_profile,
     estimate_directional_angle,
+    fit_fourier_stripe_profile,
 )
 
 
@@ -1002,51 +1003,153 @@ class SlopeRampCorrection(BaseCorrection):
 
 
 # --------------------------------------------------------------------------- #
-# Destriping stubs
+# Fourier destriping (along- / across-track jitter)
 # --------------------------------------------------------------------------- #
-class AlongTrackDestriping(BaseCorrection):
-    """Stub — along-track stripe correction for line-scan sensors (e.g. Sentinel-2).
+class _FourierDestriping(BaseCorrection):
+    """Shared machinery for FFT-based stripe / jitter removal.
 
-    Planned implementation will estimate a linear displacement shift within
-    each detector stripe along the flight direction and subtract it from the
-    displacement field.
+    Collapses the displacement field to a 1-D profile (median across the
+    perpendicular axis, **stable pixels only**), models the coherent undulation
+    in a wavelength band with :func:`~geomulticorr.corrections.fit.fit_fourier_stripe_profile`,
+    broadcasts the 1-D model back to 2-D, and subtracts it.
 
-    .. note:: Not yet implemented.  Calling :meth:`fit` raises
-       :exc:`NotImplementedError`.
+    Subclasses set :attr:`_profile_axis` — the array axis the profile varies
+    *over* (``0`` = rows, ``1`` = columns).  Not instantiated directly; use
+    :class:`AlongTrackDestriping` or :class:`AcrossTrackDestriping`.
+
+    :param wavelength_min: Shortest wavelength (m) removed; ``None`` auto-detects
+        the dominant spectral peak and removes a one-octave band around it.
+    :type wavelength_min: float or None
+    :param wavelength_max: Longest wavelength (m) removed; ``None`` = no upper
+        bound (remove everything at/above *wavelength_min*).
+    :type wavelength_max: float or None
+    :param detrend: Remove a linear trend before the FFT (default ``True``).
+    :type detrend: bool
+    :param taper: Tukey taper fraction in ``[0, 1)`` on the reconstructed model
+        to roll off the scene edges (default ``0.0``).
+    :type taper: float
     """
 
-    def __init__(self) -> None:
+    _profile_axis: int = 0
+
+    def __init__(
+        self,
+        wavelength_min: float | None = None,
+        wavelength_max: float | None = None,
+        detrend: bool = True,
+        taper: float = 0.0,
+    ) -> None:
+        if not 0.0 <= taper < 1.0:
+            raise ValueError("taper must be in [0, 1)")
+        if wavelength_min is not None and wavelength_min <= 0:
+            raise ValueError("wavelength_min must be > 0")
+        if (
+            wavelength_min is not None
+            and wavelength_max is not None
+            and wavelength_max <= wavelength_min
+        ):
+            raise ValueError("wavelength_max must be > wavelength_min")
+        self.wavelength_min = wavelength_min
+        self.wavelength_max = wavelength_max
+        self.detrend = detrend
+        self.taper = taper
         self.meta: dict = {}
     # END def
 
-    def fit(self, raster, stable_mask=None, **kwargs):
-        raise NotImplementedError(
-            "AlongTrackDestriping is not yet implemented. "
-            "Planned: linear shift estimation per Sentinel-2 sensor stripe."
+    def fit(self, raster: gu.Raster, stable_mask=None, **kwargs) -> _FourierDestriping:
+        """Estimate the stripe/jitter undulation on stable pixels.
+
+        Sets ``self._surface`` to the fitted 2-D undulation and stores the band,
+        before/after residual std, and the 1-D profile/spectrum in ``self.meta``.
+
+        :param raster: Displacement raster from which to estimate the undulation.
+        :type raster: geoutils.Raster
+        :param stable_mask: Stable-area mask (see
+            :meth:`~BaseCorrection._resolve_stable_mask`).
+        :returns: ``self`` for chaining.
+        :rtype: _FourierDestriping
+        """
+        fit_mask = self._resolve_stable_mask(
+            stable_mask, raster.data, raster.data.shape, raster.transform
         )
+        values = ma.filled(raster.data, np.nan).astype(float)
+        stable_values = np.where(fit_mask, values, np.nan)
+
+        collapse_axis = 1 - self._profile_axis
+        profile = np.nanmedian(stable_values, axis=collapse_axis)
+        spacing = raster.res[1] if self._profile_axis == 0 else raster.res[0]
+
+        model_1d, fmeta = fit_fourier_stripe_profile(
+            profile, spacing,
+            wavelength_min=self.wavelength_min,
+            wavelength_max=self.wavelength_max,
+            detrend=self.detrend,
+            taper=self.taper,
+        )
+
+        # Broadcast the 1-D model back to 2-D along the collapsed axis.
+        if self._profile_axis == 0:
+            surface = np.broadcast_to(model_1d[:, None], values.shape)
+        else:
+            surface = np.broadcast_to(model_1d[None, :], values.shape)
+        self._surface = np.array(surface, dtype=float)
+
+        std_before = float(np.nanstd(values[fit_mask]))
+        std_after = float(np.nanstd((values - self._surface)[fit_mask]))
+        self.meta = {
+            "profile_axis": self._profile_axis,
+            "spacing": spacing,
+            "band": fmeta["band"],
+            "wavelength_peak": fmeta["wavelength_peak"],
+            "detrend": self.detrend,
+            "taper": self.taper,
+            "n_stable_px": int(fit_mask.sum()),
+            "std_before": std_before,
+            "std_after": std_after,
+            "profile_raw": profile,
+            "profile_model": model_1d,
+            "freqs": fmeta["freqs"],
+            "amp_raw": fmeta["amp_raw"],
+            "amp_kept": fmeta["amp_kept"],
+        }
+        self._fit_called = True
+        return self
     # END def
+    # apply() / fit_and_apply() inherited — self._surface is a full 2-D array
 
 
-class AcrossTrackDestriping(BaseCorrection):
-    """Stub — across-track jitter correction via wavelet filter.
+class AlongTrackDestriping(_FourierDestriping):
+    """Remove along-track jitter — a quasi-periodic undulation that varies down
+    the flight direction and is coherent across the swath.
 
-    Planned implementation will remove short-wavelength jitter undulations in
-    the across-track direction using a wavelet decomposition filter.
+    The 1-D profile runs over **rows** (``f(row)``); it is built by taking the
+    median across columns over stable pixels, band-pass modelled, and subtracted.
+    Ideal for smooth, periodic platform-vibration undulations (see
+    :class:`_FourierDestriping` for parameters).
 
-    .. note:: Not yet implemented.  Calling :meth:`fit` raises
-       :exc:`NotImplementedError`.
+    Example::
+
+        >>> corr = AlongTrackDestriping(wavelength_min=None)   # auto-detect the jitter band
+        >>> xc = corr.fit_and_apply(xDisp, stable_mask=stable)
+        >>> print(corr.meta["band"], corr.meta["std_before"], corr.meta["std_after"])
     """
 
-    def __init__(self) -> None:
-        self.meta: dict = {}
-    # END def
+    _profile_axis = 0
 
-    def fit(self, raster, stable_mask=None, **kwargs):
-        raise NotImplementedError(
-            "AcrossTrackDestriping is not yet implemented. "
-            "Planned: wavelet-based short-wavelength stripe removal."
-        )
-    # END def
+
+class AcrossTrackDestriping(_FourierDestriping):
+    """Remove across-track striping — a banding that varies across the swath.
+
+    The 1-D profile runs over **columns** (``f(col)``); it is built by taking the
+    median down rows over stable pixels, band-pass modelled, and subtracted.
+
+    .. note:: This is the unified Fourier band-pass approach.  Sharp,
+       high-frequency *per-detector* striping (near the pixel scale) overlaps
+       real terrain frequencies and may be better served by a future wavelet
+       variant; choose a narrow, short-wavelength band accordingly.
+    """
+
+    _profile_axis = 1
 
 
 # --------------------------------------------------------------------------- #
