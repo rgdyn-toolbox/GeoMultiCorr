@@ -62,6 +62,10 @@ Public API:
   :class:`~geomulticorr.corrections.corrections.DirectionalBiasCorrection`.
 - :func:`estimate_directional_angle` — auto-estimate the seam-normal angle, used by
   :class:`~geomulticorr.corrections.corrections.DirectionalBiasCorrection`.
+- :func:`fit_fourier_stripe_profile` — 1-D FFT band-pass model of a stripe/jitter
+  undulation, used by
+  :class:`~geomulticorr.corrections.corrections.AlongTrackDestriping` and
+  :class:`~geomulticorr.corrections.corrections.AcrossTrackDestriping`.
 - :func:`fit_quadratic_with_predictor` — quadratic ramp + predictor, shared by
   the same three classes.
 - :func:`compute_slope` — terrain slope magnitude in degrees, used by
@@ -72,6 +76,7 @@ from __future__ import annotations
 import numpy as np
 import numpy.ma as ma
 from scipy.interpolate import UnivariateSpline
+from scipy.signal.windows import tukey
 from scipy.stats import binned_statistic
 
 
@@ -623,3 +628,137 @@ def estimate_directional_angle(
     if angle > 90.0:
         angle -= 180.0
     return angle
+
+
+# --------------------------------------------------------------------------- #
+# Fourier stripe / jitter destriping
+# --------------------------------------------------------------------------- #
+
+def fit_fourier_stripe_profile(
+    profile: np.ndarray,
+    spacing: float,
+    wavelength_min: float | None = None,
+    wavelength_max: float | None = None,
+    detrend: bool = True,
+    taper: float = 0.0,
+    min_valid: int = 8,
+) -> tuple[np.ndarray, dict]:
+    """Model a stripe/jitter undulation in a 1-D profile via FFT band-pass.
+
+    Given a 1-D *profile* (the median displacement across the swath, as a
+    function of the along- or across-track coordinate), isolates the coherent
+    undulation in a wavelength band and returns it as a full-length 1-D model
+    to subtract.  Hardened against the classic failure modes of naive FFT
+    destriping:
+
+    - **NaN handling** — interior gaps are linearly interpolated and the ends
+      nearest-filled (never zero-filled, which injects step discontinuities and
+      spectral ringing).
+    - **Detrend** — a linear trend is removed before the transform for spectral
+      stability and *not* re-added (a global tilt is not jitter; it is handled
+      upstream by ramp/topo corrections).
+    - **Band-pass** — only wavelengths in ``[wavelength_min, wavelength_max]``
+      are kept in the model, so real long-wavelength signal can be preserved.
+    - **Edge taper** — an optional Tukey taper rolls the model off at the ends
+      (under-correcting rather than ringing).
+
+    Used by :class:`~geomulticorr.corrections.corrections.AlongTrackDestriping`
+    and :class:`~geomulticorr.corrections.corrections.AcrossTrackDestriping`.
+
+    :param profile: 1-D profile (may contain ``NaN`` where a whole
+        row/column was masked out).
+    :type profile: np.ndarray
+    :param spacing: Sample spacing along the profile, in metres (the pixel size
+        in the profile direction).
+    :type spacing: float
+    :param wavelength_min: Shortest wavelength (m) kept in the removed
+        undulation.  ``None`` auto-detects the dominant spectral peak and builds
+        a one-octave band around it.
+    :type wavelength_min: float or None
+    :param wavelength_max: Longest wavelength (m) kept in the removed undulation.
+        ``None`` means no upper bound (remove everything at/above
+        *wavelength_min*), matching a plain high-pass on the data.
+    :type wavelength_max: float or None
+    :param detrend: Remove a linear trend before the FFT.  Default ``True``.
+    :type detrend: bool
+    :param taper: Tukey taper fraction in ``[0, 1)`` applied to the reconstructed
+        model to roll off the ends.  ``0.0`` disables it.
+    :type taper: float
+    :param min_valid: Minimum number of finite samples required.  Default ``8``.
+    :type min_valid: int
+    :returns: Tuple ``(model, meta)`` —
+
+        - **model** — 1-D undulation to subtract, same length as *profile*.
+        - **meta** — dict with ``band`` ``(wavelength_min, wavelength_max)``,
+          ``wavelength_peak`` (auto mode), ``freqs``, ``amp_raw``, ``amp_kept``,
+          and ``profile_filled``.
+    :rtype: tuple[np.ndarray, dict]
+    :raises ValueError: If fewer than *min_valid* finite samples are available,
+        or *taper* is outside ``[0, 1)``.
+    """
+    if not 0.0 <= taper < 1.0:
+        raise ValueError("taper must be in [0, 1)")
+
+    profile = np.asarray(profile, dtype=float)
+    n = profile.size
+    valid = np.isfinite(profile)
+    if valid.sum() < min_valid:
+        raise ValueError(
+            f"Too few finite samples in profile ({int(valid.sum())} < {min_valid})."
+        )
+
+    # 1. Fill NaNs — linear interpolation inside, nearest at the ends.
+    idx = np.arange(n)
+    filled = np.interp(idx, idx[valid], profile[valid])
+
+    # 2. Detrend (discarded — a linear trend is not jitter).
+    if detrend:
+        slope, intercept = np.polyfit(idx, filled, 1)
+        detrended = filled - (slope * idx + intercept)
+    else:
+        detrended = filled - filled.mean()
+
+    # 3. FFT and per-component wavelengths.
+    spectrum = np.fft.fft(detrended)
+    freqs = np.fft.fftfreq(n, d=spacing)
+    with np.errstate(divide="ignore"):
+        wavelength = np.where(freqs != 0.0, 1.0 / np.abs(freqs), np.inf)
+
+    # 4. Resolve the band (auto-detect the dominant peak if wavelength_min is None).
+    wavelength_peak = None
+    if wavelength_min is None:
+        # Consider only resolvable, non-DC wavelengths up to half the profile span.
+        span = n * spacing
+        candidate = (freqs > 0.0) & (wavelength <= span / 2.0)
+        if not candidate.any():
+            raise ValueError("Cannot auto-detect a jitter wavelength; set wavelength_min.")
+        peak = np.argmax(np.where(candidate, np.abs(spectrum), -np.inf))
+        wavelength_peak = float(wavelength[peak])
+        wl_min = wavelength_peak / np.sqrt(2.0)
+        wl_max = wavelength_peak * np.sqrt(2.0)
+    else:
+        if wavelength_min <= 0:
+            raise ValueError("wavelength_min must be > 0")
+        wl_min = float(wavelength_min)
+        wl_max = np.inf if wavelength_max is None else float(wavelength_max)
+        if wl_max <= wl_min:
+            raise ValueError("wavelength_max must be > wavelength_min")
+
+    # 5. Keep only the undulation band (never the DC component).
+    keep = (wavelength >= wl_min) & (wavelength <= wl_max)
+    keep[0] = False  # drop DC — centring is handled by MedianCentering
+    model = np.real(np.fft.ifft(spectrum * keep))
+
+    # 6. Optional edge taper — roll the model off at the ends.
+    if taper > 0.0:
+        model = model * tukey(n, alpha=taper)
+
+    meta = {
+        "band": (wl_min, None if np.isinf(wl_max) else wl_max),
+        "wavelength_peak": wavelength_peak,
+        "freqs": freqs,
+        "amp_raw": np.abs(spectrum),
+        "amp_kept": np.abs(spectrum * keep),
+        "profile_filled": filled,
+    }
+    return model, meta
