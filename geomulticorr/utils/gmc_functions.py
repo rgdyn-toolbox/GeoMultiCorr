@@ -49,6 +49,8 @@ from geomulticorr.corrections.corrections import (
     RampCorrection,
     TopoCorrection,
     DirectionalBiasCorrection,
+    AlongTrackDestriping,
+    AcrossTrackDestriping,
 )
 
 def outlier_filter(disp_array: np.array,
@@ -659,6 +661,103 @@ def plot_ramp_correction(
     return fig
 
 
+def plot_destriping_correction(
+    step,
+    xDisp_before: gu.Raster,
+    xDisp_after: gu.Raster,
+    yDisp_before: gu.Raster,
+    yDisp_after: gu.Raster,
+    fig_name: str | None = None,
+    figsize: tuple[float, float] = (16, 11),
+    cmap_ew: str = 'PuOr',
+    cmap_ns: str = 'PiYG',
+    cmap_bias: str = 'RdBu_r',
+) -> plt.Figure:
+    """Control figure for an Along-/Across-track destriping step.
+
+    The removed undulation is the surface that was subtracted (before − after).
+    A full-width bottom panel shows the 1-D stripe profile stored in
+    ``step.meta`` (``profile_raw`` vs the fitted ``profile_model``), annotated
+    with the removed wavelength band and the before/after residual std.
+
+    Layout
+    ------
+    a) EW before  |  b) EW undulation  |  c) EW after
+    d) NS before  |  e) NS undulation  |  f) NS after
+    g) 1-D stripe profile (raw vs model) along the profile axis (spans all columns)
+    """
+    import numpy.ma as ma
+
+    fig, axs = plt.subplot_mosaic(
+        [['a)', 'b)', 'c)'],
+         ['d)', 'e)', 'f)'],
+         ['g)', 'g)', 'g)']],
+        figsize=figsize,
+    )
+    meta = getattr(step, "meta", {}) or {}
+    band = meta.get("band")
+    title = "Destriping correction"
+    if band is not None:
+        lo, hi = band
+        title += f" — band = {lo:.0f}–{'∞' if hi is None else f'{hi:.0f}'} m"
+    if fig_name:
+        title = f"{fig_name} — {title}"
+    fig.suptitle(title)
+
+    # Removed undulation = what was subtracted (before − after)
+    x_bias_data = ma.array(
+        xDisp_before.data.data - xDisp_after.data.data,
+        mask=np.ma.getmaskarray(xDisp_before.data),
+    )
+    y_bias_data = ma.array(
+        yDisp_before.data.data - yDisp_after.data.data,
+        mask=np.ma.getmaskarray(yDisp_before.data),
+    )
+    x_bias = xDisp_before.copy(new_array=x_bias_data)
+    y_bias = yDisp_before.copy(new_array=y_bias_data)
+
+    vlim_x  = get_rounded_limits(xDisp_before, round_to=1, symmetric=True)
+    vlim_y  = get_rounded_limits(yDisp_before, round_to=1, symmetric=True)
+    vlim_bx = get_rounded_limits(x_bias,       round_to=1, symmetric=True)
+    vlim_by = get_rounded_limits(y_bias,       round_to=1, symmetric=True)
+
+    xDisp_before.plot(ax=axs['a)'], cmap=cmap_ew,   vmin=-vlim_x,  vmax=vlim_x,  title="EW before")
+    x_bias.plot(      ax=axs['b)'], cmap=cmap_bias,  vmin=-vlim_bx, vmax=vlim_bx, title="EW undulation")
+    xDisp_after.plot( ax=axs['c)'], cmap=cmap_ew,   vmin=-vlim_x,  vmax=vlim_x,  title="EW after")
+
+    yDisp_before.plot(ax=axs['d)'], cmap=cmap_ns,   vmin=-vlim_y,  vmax=vlim_y,  title="NS before")
+    y_bias.plot(      ax=axs['e)'], cmap=cmap_bias,  vmin=-vlim_by, vmax=vlim_by, title="NS undulation")
+    yDisp_after.plot( ax=axs['f)'], cmap=cmap_ns,   vmin=-vlim_y,  vmax=vlim_y,  title="NS after")
+
+    # 1-D stripe profile (raw vs fitted model) from the step metadata
+    profile_raw = meta.get("profile_raw")
+    profile_model = meta.get("profile_model")
+    if profile_raw is not None:
+        spacing = meta.get("spacing", 1.0)
+        coord = np.arange(len(profile_raw)) * spacing
+        axs['g)'].plot(coord, profile_raw, lw=0.8, color="orange", label="stable-ground profile")
+        if profile_model is not None:
+            axs['g)'].plot(coord, profile_model, lw=2, color="green", label="fitted undulation")
+            axs['g)'].plot(coord, profile_raw - profile_model, lw=0.8, color="tab:blue",
+                           label="after")
+        axs['g)'].axhline(0, color="k", ls="--", lw=0.5)
+        axs['g)'].set_xlabel("Profile-axis coordinate (m)")
+        axs['g)'].set_ylabel("Displacement (m)")
+        sub = []
+        if meta.get("std_before") is not None and meta.get("std_after") is not None:
+            sub.append(f"std {meta['std_before']:.3f} → {meta['std_after']:.3f} m")
+        axs['g)'].set_title("1-D stripe profile" + (f"  ({'; '.join(sub)})" if sub else ""))
+        axs['g)'].legend()
+        axs['g)'].grid(alpha=0.3)
+    else:
+        axs['g)'].axis("off")
+        axs['g)'].text(0.5, 0.5, "No profile metadata available",
+                       ha="center", va="center", transform=axs['g)'].transAxes)
+
+    fig.tight_layout()
+    return fig
+
+
 def plot_correction_result(
     step,
     xDisp_before: gu.Raster,
@@ -672,10 +771,15 @@ def plot_correction_result(
 
     - ``RampCorrection`` / ``TopoCorrection`` → :func:`plot_ramp_correction`
     - ``DirectionalBiasCorrection`` → :func:`plot_directional_bias_correction`
+    - ``AlongTrackDestriping`` / ``AcrossTrackDestriping`` → :func:`plot_destriping_correction`
     - All other steps → :func:`plot_median_centering`
     """
     if isinstance(step, DirectionalBiasCorrection):
         return plot_directional_bias_correction(
+            step, xDisp_before, xDisp_after, yDisp_before, yDisp_after, fig_name=fig_name
+        )
+    if isinstance(step, (AlongTrackDestriping, AcrossTrackDestriping)):
+        return plot_destriping_correction(
             step, xDisp_before, xDisp_after, yDisp_before, yDisp_after, fig_name=fig_name
         )
     if isinstance(step, (RampCorrection, TopoCorrection)):
