@@ -16,6 +16,7 @@ from geomulticorr.corrections.fit import (
     rotate_coords,
     fit_directional_profile,
     estimate_directional_angle,
+    fit_fourier_stripe_profile,
 )
 
 def _seam_field(angle_deg, nr=120, nc=180, res=3.0, noise=0.3, seed=0):
@@ -411,3 +412,71 @@ class TestEstimateDirectionalAngle:
         est = estimate_directional_angle(xx, yy, field, mask, n_bins=100)
         assert -90.0 < est <= 90.0
         assert est == pytest.approx(-10.0, abs=2.0)
+
+
+def _jitter_profile(wavelength=300.0, spacing=4.0, n=512, amp=0.8, noise=0.05, seed=0):
+    """1-D profile: linear trend + a sinusoidal jitter of *wavelength* + noise."""
+    rng = np.random.default_rng(seed)
+    x = np.arange(n) * spacing
+    jitter = amp * np.sin(2 * np.pi * x / wavelength)
+    profile = 0.001 * x + jitter + rng.normal(0, noise, n)
+    return x, jitter, profile
+
+
+class TestFitFourierStripeProfile:
+    """Tests for fit_fourier_stripe_profile()."""
+
+    def test_explicit_band_removes_jitter(self):
+        """A band around the jitter wavelength recovers and removes it."""
+        spacing = 4.0
+        x, jitter, profile = _jitter_profile(wavelength=300.0, spacing=spacing)
+        model, meta = fit_fourier_stripe_profile(
+            profile, spacing, wavelength_min=200.0, wavelength_max=450.0
+        )
+        # model matches the injected jitter; residual drops to the noise floor
+        assert np.corrcoef(model, jitter)[0, 1] > 0.95
+        detrended = profile - 0.001 * x
+        assert np.std(detrended - model) < 0.3 * np.std(detrended)
+        assert model.shape == profile.shape
+
+    def test_auto_detects_peak_wavelength(self):
+        """wavelength_min=None recovers the dominant wavelength within a bin."""
+        spacing = 4.0
+        _, _, profile = _jitter_profile(wavelength=300.0, spacing=spacing)
+        model, meta = fit_fourier_stripe_profile(profile, spacing, wavelength_min=None)
+        assert meta["wavelength_peak"] == pytest.approx(300.0, rel=0.1)
+
+    def test_nan_gaps_handled_without_blowup(self):
+        """Interior NaNs are interpolated; the model stays bounded."""
+        spacing = 4.0
+        _, _, profile = _jitter_profile()
+        profile[50:70] = np.nan
+        model, _ = fit_fourier_stripe_profile(profile, spacing, wavelength_min=200.0)
+        assert np.all(np.isfinite(model))
+        assert np.abs(model).max() < 5.0
+
+    def test_taper_rolls_off_edges(self):
+        """A Tukey taper attenuates the model at the ends."""
+        spacing = 4.0
+        _, _, profile = _jitter_profile()
+        model, _ = fit_fourier_stripe_profile(
+            profile, spacing, wavelength_min=200.0, taper=0.2
+        )
+        # ends are strongly attenuated relative to the centre
+        centre = np.abs(model[len(model) // 2])
+        assert np.abs(model[0]) < 0.2 * centre
+        assert np.abs(model[-1]) < 0.2 * centre
+
+    def test_too_few_valid_raises(self):
+        with pytest.raises(ValueError, match="Too few finite samples"):
+            fit_fourier_stripe_profile(np.full(5, np.nan), 4.0, wavelength_min=200.0)
+
+    def test_invalid_taper_raises(self):
+        _, _, profile = _jitter_profile()
+        with pytest.raises(ValueError, match="taper"):
+            fit_fourier_stripe_profile(profile, 4.0, wavelength_min=200.0, taper=1.5)
+
+    def test_invalid_band_raises(self):
+        _, _, profile = _jitter_profile()
+        with pytest.raises(ValueError, match="wavelength_max"):
+            fit_fourier_stripe_profile(profile, 4.0, wavelength_min=400.0, wavelength_max=100.0)

@@ -555,23 +555,11 @@ class TestDirectionalBiasCorrection:
         assert isinstance(pipeline, CorrectionPipeline)
         assert len(pipeline.steps) == 2
 
-class TestStubs:
-    """Tests for unimplemented correction stubs."""
+class TestDestripingConstruction:
+    """Construction-time invariants for the destriping corrections."""
 
-    def test_along_track_raises(self, ramp_raster):
-        """AlongTrackDestriping.fit() → NotImplementedError."""
-        corr = AlongTrackDestriping()
-        with pytest.raises(NotImplementedError, match="AlongTrackDestriping is not yet implemented"):
-            corr.fit(ramp_raster)
-
-    def test_across_track_raises(self, ramp_raster):
-        """AcrossTrackDestriping.fit() → NotImplementedError."""
-        corr = AcrossTrackDestriping()
-        with pytest.raises(NotImplementedError, match="AcrossTrackDestriping is not yet implemented"):
-            corr.fit(ramp_raster)
-
-    def test_stubs_have_empty_meta(self):
-        """Stubs have empty meta dict."""
+    def test_empty_meta_before_fit(self):
+        """meta is empty until fit() is called."""
         assert AlongTrackDestriping().meta == {}
         assert AcrossTrackDestriping().meta == {}
 
@@ -617,3 +605,69 @@ class TestMakeCorrections:
         xc, yc = make_corrections(mixed_raster, mixed_raster, pipeline, dem=dem_raster)
         assert hasattr(xc, "data")
         assert hasattr(yc, "data")
+
+
+def _stripe_mock_raster(axis=0, wavelength_px=40, nr=120, nc=80, amp=0.8, noise=0.08, seed=0):
+    """MockRaster with a sinusoidal stripe varying along *axis* (0=rows, 1=cols)."""
+    from .conftest import MockRaster
+    rng = np.random.default_rng(seed)
+    row, col = np.mgrid[0:nr, 0:nc]
+    coord = row if axis == 0 else col
+    field = amp * np.sin(2 * np.pi * coord / wavelength_px) + rng.normal(0, noise, (nr, nc))
+    return MockRaster(data=ma.array(field, mask=False))
+
+
+class TestDestriping:
+    """Tests for AlongTrackDestriping / AcrossTrackDestriping (Fourier)."""
+
+    def test_invalid_taper_raises(self):
+        with pytest.raises(ValueError, match="taper"):
+            AlongTrackDestriping(taper=1.0)
+
+    def test_invalid_band_raises(self):
+        with pytest.raises(ValueError, match="wavelength_max"):
+            AlongTrackDestriping(wavelength_min=400.0, wavelength_max=100.0)
+
+    def test_apply_before_fit_raises(self):
+        with pytest.raises(RuntimeError):
+            AlongTrackDestriping(wavelength_min=100.0).apply(_stripe_mock_raster())
+
+    def test_along_track_reduces_std(self):
+        """Row-varying stripe → AlongTrackDestriping cuts the residual std."""
+        raster = _stripe_mock_raster(axis=0, wavelength_px=40)  # res=10 → wl=400 m
+        corr = AlongTrackDestriping(wavelength_min=None)
+        out = corr.fit_and_apply(raster)
+        assert corr.meta["std_after"] < 0.5 * corr.meta["std_before"]
+        assert out.data.shape == raster.data.shape
+
+    def test_across_track_reduces_std(self):
+        """Column-varying stripe → AcrossTrackDestriping cuts the residual std."""
+        raster = _stripe_mock_raster(axis=1, wavelength_px=40)
+        corr = AcrossTrackDestriping(wavelength_min=None)
+        corr.fit(raster)
+        assert corr.meta["std_after"] < 0.5 * corr.meta["std_before"]
+
+    def test_profile_axis_differs(self):
+        """The two classes collapse orthogonal axes."""
+        assert AlongTrackDestriping._profile_axis == 0
+        assert AcrossTrackDestriping._profile_axis == 1
+
+    def test_fit_uses_stable_mask(self):
+        """Moving-area pixels are excluded from the fitted profile."""
+        raster = _stripe_mock_raster(axis=0)
+        stable = np.ones(raster.data.shape, dtype=bool)
+        stable[:, :10] = False  # exclude a strip of columns
+        corr = AlongTrackDestriping(wavelength_min=None).fit(raster, stable_mask=stable)
+        assert corr.meta["n_stable_px"] == int(stable.sum())
+
+    def test_meta_contains_profile(self):
+        raster = _stripe_mock_raster(axis=0)
+        corr = AlongTrackDestriping(wavelength_min=200.0).fit(raster)
+        for key in ("profile_raw", "profile_model", "band", "std_before",
+                    "std_after", "freqs", "amp_raw", "amp_kept"):
+            assert key in corr.meta
+
+    def test_composable_into_pipeline(self):
+        pipeline = MedianCentering() + AlongTrackDestriping() + AcrossTrackDestriping()
+        assert isinstance(pipeline, CorrectionPipeline)
+        assert len(pipeline.steps) == 3
