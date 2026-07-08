@@ -68,6 +68,7 @@ from geomulticorr.utils.hpc_tools import (
     cluster_base_env,
     oarsub_submit,
     run_local,
+    validate_cluster,
 )
 
 _rich_console = _RichConsole(highlight=False)
@@ -491,6 +492,7 @@ class TIOInversion:
         self._image_dates: list[str] | None = None
         self._raster_width:  int | None = None
         self._raster_height: int | None = None
+        self.cluster: str | None = None
 
     # ── repr ──────────────────────────────────────────────────────────────────
 
@@ -1478,6 +1480,8 @@ class TIOInversion:
                                     cores=16,
                                     walltime="06:00:00") # HPC
         """
+        validate_cluster(cluster)
+
         invers_pixel_bin = self.invers_pixel_omp_bin
         lect_depl_bin    = self.lect_depl_cumule_lin_bin
 
@@ -1497,6 +1501,11 @@ class TIOInversion:
             self._make_executable(p)
             mode = "local" if cluster is None else cluster
             logger.info(f"Launch script written [{mode}]: {p.name}")
+
+        # Remember which cluster profile the scripts on disk were written
+        # for, so launch() can catch a mode mismatch instead of failing at
+        # `oarsub` time with a script that has the wrong (or no) header.
+        self.cluster = "local" if cluster is None else cluster
 
     # ── Orchestration ─────────────────────────────────────────────────────────
 
@@ -1681,6 +1690,8 @@ class TIOInversion:
             )
             inv.launch(mode="local")
         """
+        validate_cluster(cluster)
+
         logger.info(f"TIO ── preparing '{self.inversion_name}' "
                     f"({len(self.pairs)} pairs, {len(self.image_dates)} images)")
 
@@ -1756,17 +1767,24 @@ class TIOInversion:
         self.write_launch_script(cluster=cluster, nodes=nodes, cores=cores, walltime=walltime)
         logger.info(f"TIO input files written to inverse_EW/ and inverse_NS/")
 
-        launch_info = f"Call inv.launch(mode='local')" if cluster is None else f"Call inv.launch(mode='hpc')"
-        logger.info(f"TIO ── ready. {launch_info}.")
+        mode = "local" if cluster is None else cluster
+        logger.info(f"TIO ── ready. Call inv.launch(mode='{mode}').")
 
-    def launch(self, direction: str = "both", mode: str = "hpc") -> None:
+    def launch(self, direction: str = "both", mode: str | None = "local") -> None:
         """Run or submit the TIO inversion jobs.
 
-        In ``'local'`` mode both ``invers_pixel_omp`` and
-        ``lect_depl_cumule_lin`` are executed directly on the current machine
-        via :func:`~geomulticorr.utils.hpc_tools.run_local`.  In ``'hpc'``
-        mode the written bash launch script is submitted via
-        :func:`~geomulticorr.utils.hpc_tools.oarsub_submit`.
+        *mode* mirrors the ``cluster`` values used by :meth:`prepare` /
+        :meth:`write_launch_script` — ``None``/``'local'`` runs
+        ``invers_pixel_omp`` and ``lect_depl_cumule_lin`` directly on the
+        current machine via :func:`~geomulticorr.utils.hpc_tools.run_local`;
+        ``'gricad'`` or ``'isterre'`` submits the launch script written for
+        that cluster via :func:`~geomulticorr.utils.hpc_tools.oarsub_submit`.
+
+        The launch script's OAR header is baked in at
+        :meth:`write_launch_script` time, not at launch time, so *mode* must
+        match the cluster the scripts were last written for — otherwise a
+        ``ValueError`` is raised instead of silently submitting a script with
+        a missing/mismatched header.
 
         Call :meth:`post_process` after the inversion completes to convert
         TOT binary outputs to GeoTIFF.
@@ -1774,18 +1792,22 @@ class TIOInversion:
         :param direction: Which inversion direction to run — ``'EW'``,
             ``'NS'``, or ``'both'`` (default).
         :type direction: str
-        :param mode: Execution mode — ``'local'`` runs binaries directly;
-            ``'hpc'`` submits via OAR.
-        :type mode: str
+        :param mode: Execution target — ``None``/``'local'`` runs binaries
+            directly; ``'gricad'``/``'isterre'`` submits via OAR.
+        :type mode: str or None
 
         Example
         -------
         .. code-block:: python
 
             inv.launch(mode="local")           # run locally
-            inv.launch(mode="hpc")             # submit to cluster
+            inv.launch(mode="isterre")         # submit to the ISTerre cluster
+            inv.launch(mode="gricad")          # submit to the GRICAD cluster
             inv.launch(direction="EW")         # only EW direction
         """
+        validate_cluster(mode)
+        mode = "local" if mode is None else mode
+
         targets = self._DIRECTIONS if direction == "both" else (direction.upper(),)
 
         if mode == "local":
@@ -1804,10 +1826,17 @@ class TIOInversion:
                     cwd=inv_dir,
                 )
         else:
+            if self.cluster != mode:
+                raise ValueError(
+                    f"launch(mode={mode!r}) requested, but the launch scripts on "
+                    f"disk were written for cluster={self.cluster!r}. Call "
+                    f"prepare(cluster={mode!r}) or write_launch_script(cluster={mode!r}) "
+                    f"first so the OAR header matches the target cluster."
+                )
             for d in targets:
                 inv_dir = self.inversion_dir / f"inverse_{d}"
                 script  = inv_dir / f"launch_TIO_inv_{d}.sh"
-                logger.info(f"TIO ── submitting {script.name}")
+                logger.info(f"TIO ── submitting {script.name} [{mode}]")
                 oarsub_submit(script, cwd=inv_dir)
 
     def post_process(self, direction: str = "both", overwrite: bool = False) -> None:
