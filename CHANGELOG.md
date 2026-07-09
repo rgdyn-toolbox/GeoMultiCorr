@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.3] — 2026-07-09
+
+### Features
+- combine weights using spatial method (NMAD and CC); UnitTest for weights method (2212b56)
+
 ## [0.2.2] — 2026-07-08
 
 ### Features
