@@ -35,8 +35,12 @@ from geomulticorr.utils.hpc_tools import (
     run_local,
 )
 from geomulticorr.utils.gmc_functions import (
+    plot_show_raw_results,
+    plot_show_corrected_results,
     plot_median_centering,
     plot_ramp_correction,
+    plot_topo_correction,
+    plot_slope_correction,
     plot_correction_result,
     plot_directional_bias_correction,
     plot_destriping_correction,

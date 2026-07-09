@@ -3123,13 +3123,29 @@ class Session:
                         cp_y = copy.deepcopy(correction_pipeline)
                         steps_x = cp_x.steps if isinstance(cp_x, CorrectionPipeline) else [cp_x]
                         steps_y = cp_y.steps if isinstance(cp_y, CorrectionPipeline) else [cp_y]
-                        for step_x, step_y in zip(steps_x, steps_y):
+                        for idx, (step_x, step_y) in enumerate(zip(steps_x, steps_y)):
                             step_name = type(step_x).__name__
+                            before_x, before_y = x_corr, y_corr
                             step_x.fit(x_corr, stable_mask=x_stable, **pair_kwargs)
                             x_corr = step_x.apply(x_corr)
                             step_y.fit(y_corr, stable_mask=y_stable, **pair_kwargs)
                             y_corr = step_y.apply(y_corr)
                             gmc_stats.save_corrected_stats(pair, x_corr, y_corr, step_name)
+
+                            # Per-step before/after control figure (correct template
+                            # per correction type; both EW/NS steps feed the panels)
+                            if save_plot:
+                                try:
+                                    from geomulticorr.utils.gmc_functions import plot_correction_result
+                                    fig = plot_correction_result(
+                                        step_x, step_y, before_x, x_corr, before_y, y_corr,
+                                        fig_name=pair.pa_key, **pair_kwargs,
+                                    )
+                                    plot_path = pair.pa_path / f"{pair.pa_key}_{idx:02d}_{step_name}_disp.jpg"
+                                    fig.savefig(str(plot_path), dpi=150, format="JPEG", bbox_inches="tight")
+                                    plt.close(fig)
+                                except Exception as plot_exc:
+                                    logger.warning(f"Could not save control plot for {step_name}: {plot_exc}")
 
                             if step_name == "MedianCentering":
                                 rec["median"] = "[green]ok[/green]"
@@ -3146,20 +3162,20 @@ class Session:
                         rec["ramp_topo"] = "[green]" + "+".join(ramp_topo_names) + "[/green]"
                     rec["stats"] = "[green]ok[/green]" if pair.pa_stats_path.exists() else "[red]missing[/red]"
 
-                    # Optional before/after control plot
+                    # Optional corrected-map dashboard (final state + stable areas)
                     if save_plot:
                         try:
-                            from geomulticorr.utils.gmc_functions import plot_correction_result
-                            fig = plot_correction_result(
-                                None, x_raw, x_corr, y_raw, y_corr,
+                            from geomulticorr.utils.gmc_functions import plot_show_corrected_results
+                            fig = plot_show_corrected_results(
+                                x_corr, y_corr, pair_kwargs.get("cc"),
+                                x_stable=x_stable, y_stable=y_stable,
                                 fig_name=pair.pa_key,
-                                **pair_kwargs,
                             )
                             plot_path = pair.pa_path / f"{pair.pa_key}_corrections_disp.jpg"
                             fig.savefig(str(plot_path), dpi=150, format="JPEG", bbox_inches="tight")
                             plt.close(fig)
                         except Exception as plot_exc:
-                            logger.warning(f"Could not save control plot: {plot_exc}")
+                            logger.warning(f"Could not save corrected dashboard: {plot_exc}")
 
                     x_corr.save(str(ew_corr))
                     y_corr.save(str(ns_corr))
