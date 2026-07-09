@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.4] — 2026-07-09
+
+### Improvements
+- separate control plots for each correction method; update: session.py for saving control plots (6b2fe66)
+
 ## [0.2.3] — 2026-07-09
 
 ### Features
