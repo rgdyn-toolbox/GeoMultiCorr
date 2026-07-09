@@ -229,6 +229,52 @@ def combine_weights(
     return max(0.0, min(1.0, w))
 
 
+def combine_weights_spatial(
+    w_nmad: float,
+    w_cc: float,
+    method: str = "geomean",
+    alpha: float = 0.5,
+    beta: float = 0.5,
+) -> float:
+    """Combine NMAD + CC sub-weights only (no temporal term) into ``[0, 1]``.
+
+    Sibling of :func:`combine_weights` for the ``'quality_spatial'`` mode. A
+    non-finite sub-weight is treated as **neutral** (``1.0``).
+
+    :param w_nmad: NMAD sub-weight (higher = lower NMAD = better).
+    :param w_cc: CC-quality sub-weight.
+    :param method: ``"geomean"`` (square root of the product), ``"wmean"``
+        (weighted arithmetic mean with *alpha*/*beta*, renormalised to sum 1),
+        or ``"product"`` (plain product).
+    :type method: str
+    :param alpha: Weight of *w_nmad* for ``"wmean"``.
+    :param beta: Weight of *w_cc* for ``"wmean"``.
+    :returns: Combined weight clamped to ``[0, 1]``.
+    :rtype: float
+    :raises ValueError: If *method* is not recognised.
+    """
+    n = 1.0 if not np.isfinite(w_nmad) else float(w_nmad)
+    c = 1.0 if not np.isfinite(w_cc) else float(w_cc)
+
+    if method == "geomean":
+        w = (max(n, 0.0) * max(c, 0.0)) ** 0.5
+    elif method == "product":
+        w = n * c
+    elif method == "wmean":
+        total = alpha + beta
+        if total <= 0.0:
+            a = b = 0.5
+        else:
+            a, b = alpha / total, beta / total
+        w = a * n + b * c
+    else:
+        raise ValueError(
+            f"Unknown combine method '{method}'. "
+            "Valid options: 'geomean', 'wmean', 'product'."
+        )
+    return max(0.0, min(1.0, w))
+
+
 def _find_tio_executable(bin_name: str, tio_bin_dir: Path | None = None) -> str:
     """Return the full path to a TIO executable.
 
@@ -919,8 +965,9 @@ class TIOInversion:
         ``'sigmoid'``, ``'parametric'`` — see :meth:`write_liste_couple` for the
         formulae; behaviour is unchanged.
 
-        New quality mode ``'quality'`` combines corrected **NMAD**, **CC-quality**
-        (``cc_quality_gte_050``) and **Δt** into a single weight:
+        Quality modes ``'quality'`` and ``'quality_spatial'`` combine corrected
+        **NMAD** and **CC-quality** (``cc_quality_gte_050``). The ``'quality'``
+        mode also includes a **Δt** temporal term:
 
         * ``w_nmad`` = :func:`normalise_invert` of the NMAD selected by
           *direction* — ``ew_nmad`` (``"EW"``), ``ns_nmad`` (``"NS"``), or the
@@ -928,11 +975,14 @@ class TIOInversion:
           (lowest NMAD → 1.0),
         * ``w_cc``   = ``cc_quality_gte_050 ** cc_gamma``,
         * ``w_dt``   = :func:`normalise_dt` of ``pa_dt_days`` (short Δt → 1.0,
-          reversed by *invert*),
+          reversed by *invert*) — **only for** ``'quality'``; ``'quality_spatial'``
+          ignores temporal baseline entirely.
 
-        combined by :func:`combine_weights` using *combine* (``'geomean'``,
-        ``'wmean'`` with *alpha*/*beta*/*gamma*, or ``'product'``). Pairs missing
-        a component contribute it as neutral (1.0).
+        For ``'quality'``: combined by :func:`combine_weights` using *combine*
+        (``'geomean'``, ``'wmean'`` with *alpha*/*beta*/*gamma*, or ``'product'``).
+        For ``'quality_spatial'``: combined by :func:`combine_weights_spatial`
+        using *combine* (``'geomean'``, ``'wmean'`` with *alpha*/*beta*, or
+        ``'product'``). Pairs missing a component contribute it as neutral (1.0).
 
         :param weight_mode: Weighting strategy (see above).
         :param slope: ``'parametric'`` power exponent.
@@ -956,7 +1006,7 @@ class TIOInversion:
         """
         n = len(self.pairs)
 
-        if weight_mode == "quality":
+        if weight_mode in ("quality", "quality_spatial"):
             ew_nmads, ns_nmads, ccs, dts = self._pair_quality_metrics()
             if direction == "EW":
                 nmads = ew_nmads
@@ -969,10 +1019,17 @@ class TIOInversion:
                     for e, s in zip(ew_nmads, ns_nmads)
                 ]
             w_nmad = normalise_invert(nmads)
-            w_dt = normalise_dt(dts, invert=invert)
             w_cc = [
                 (c ** cc_gamma) if math.isfinite(c) else float("nan") for c in ccs
             ]
+
+            if weight_mode == "quality_spatial":
+                return [
+                    combine_weights_spatial(w_nmad[i], w_cc[i], combine, alpha, beta)
+                    for i in range(n)
+                ]
+
+            w_dt = normalise_dt(dts, invert=invert)
             return [
                 combine_weights(w_nmad[i], w_cc[i], w_dt[i], combine, alpha, beta, gamma)
                 for i in range(n)
@@ -1096,6 +1153,9 @@ class TIOInversion:
             * ``'quality'`` — combines corrected NMAD, CC-quality and Δt (see
               :meth:`compute_pair_weights`); tuned by *combine*, *alpha*,
               *beta*, *gamma*, *cc_gamma*.
+            * ``'quality_spatial'`` — combines corrected NMAD and CC-quality only,
+              ignoring temporal baseline — useful when long-Δt pairs have genuinely
+              good data quality; tuned by *combine*, *alpha*, *beta*, *cc_gamma*.
 
         :type weight_mode: str
         :param slope: Power exponent for ``'parametric'`` mode.
@@ -1211,7 +1271,8 @@ class TIOInversion:
         """
         import geomulticorr.stats.stats as gmc_stats
 
-        mode_label = weight_mode if weight_mode != "quality" else f"quality:{combine}"
+        mode_label = (f"{weight_mode}:{combine}" if weight_mode in ("quality", "quality_spatial")
+                      else weight_mode)
         for pair, ew, ns in zip(self.pairs, w_ew, w_ns):
             try:
                 gmc_stats.save_pair_weight(
@@ -1236,6 +1297,7 @@ class TIOInversion:
         "sigmoid": {"sharpness", "w_min", "invert"},
         "parametric": {"slope", "min_weight"},
         "quality": {"combine", "cc_gamma", "invert"},
+        "quality_spatial": {"combine", "cc_gamma"},
     }
 
     def plot_weights(self, modes: list[str] | None = None, direction: str = "max",
@@ -1325,7 +1387,7 @@ class TIOInversion:
         # ── controls ──
         c_mode = widgets.Dropdown(
             options=["uniform", "temporal", "relative_temporal", "sigmoid",
-                     "parametric", "quality"],
+                     "parametric", "quality", "quality_spatial"],
             value=weight_mode, description="mode")
         c_dir = widgets.Dropdown(options=["both", "EW", "NS"],
                                  value=defaults.get("direction", "both"),
@@ -1363,6 +1425,9 @@ class TIOInversion:
             # α/β/γ only matter for the weighted-mean combine of quality mode
             if c_mode.value == "quality" and c_combine.value == "wmean":
                 relevant |= {"alpha", "beta", "gamma"}
+            # α/β only matter for the weighted-mean combine of quality_spatial mode
+            if c_mode.value == "quality_spatial" and c_combine.value == "wmean":
+                relevant |= {"alpha", "beta"}
             for name, w in tunables.items():
                 w.layout.display = None if name in relevant else "none"
 

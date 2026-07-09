@@ -12,6 +12,7 @@ import geomulticorr.inversion.tio_inversion as tio
 from geomulticorr.inversion.tio_inversion import (
     TIOInversion,
     combine_weights,
+    combine_weights_spatial,
     normalise_dt,
     normalise_invert,
 )
@@ -99,6 +100,39 @@ class TestCombineWeights:
             combine_weights(1.0, 1.0, 1.0, method="nope")
 
 
+class TestCombineWeightsSpatial:
+    """Tests for combine_weights_spatial() — two-term combination (NMAD + CC only)."""
+
+    def test_geomean(self):
+        assert combine_weights_spatial(0.8, 0.6, method="geomean") == pytest.approx(
+            (0.8 * 0.6) ** 0.5
+        )
+
+    def test_product(self):
+        assert combine_weights_spatial(0.8, 0.6, method="product") == pytest.approx(0.48)
+
+    def test_wmean_equal_weights(self):
+        assert combine_weights_spatial(0.8, 0.6, method="wmean") == pytest.approx(0.7)
+
+    def test_wmean_renormalises(self):
+        # weights (2,0) -> only nmad term counts
+        assert combine_weights_spatial(0.4, 0.9, method="wmean",
+                                       alpha=2, beta=0) == pytest.approx(0.4)
+
+    def test_nan_component_is_neutral(self):
+        # missing cc -> treated as 1.0
+        assert combine_weights_spatial(0.5, float("nan"), method="product") == pytest.approx(0.5)
+
+    def test_result_clamped_unit(self):
+        for m in ("geomean", "wmean", "product"):
+            w = combine_weights_spatial(1.0, 1.0, method=m)
+            assert 0.0 <= w <= 1.0
+
+    def test_unknown_method_raises(self):
+        with pytest.raises(ValueError, match="Unknown combine method"):
+            combine_weights_spatial(1.0, 1.0, method="nope")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -182,6 +216,28 @@ class TestComputePairWeights:
         # the two directions genuinely differ
         assert w_ew != w_ns
 
+    def test_quality_spatial_ignores_dt(self, monkeypatch):
+        """Quality_spatial gives equal weight to pairs with identical NMAD/CC but different Δt."""
+        # Two pairs: identical NMAD and CC, but very different temporal baselines.
+        # quality mode should suppress the long-Δt pair; quality_spatial should treat them equally.
+        short_dt = _make_pair("short", 30)     # short baseline
+        long_dt = _make_pair("long", 300)      # long baseline
+        table = {
+            "short": _stats2(0.2, 0.2, 0.8),  # identical NMAD/CC
+            "long": _stats2(0.2, 0.2, 0.8),
+        }
+        monkeypatch.setattr(tio, "load_pair_stats", lambda p: table[p.pa_key])
+        inv = self._inv([short_dt, long_dt])
+
+        # quality mode: long Δt pair gets suppressed weight
+        w_quality = inv.compute_pair_weights("quality", combine="geomean")
+        assert w_quality[0] > w_quality[1], "quality should suppress long-Δt pair"
+
+        # quality_spatial mode: identical NMAD/CC → equal weights
+        w_spatial = inv.compute_pair_weights("quality_spatial", combine="geomean")
+        assert w_spatial[0] == pytest.approx(w_spatial[1], rel=1e-6), \
+            "quality_spatial should give equal weight despite different Δt"
+
     def test_recorded_mode_resolution(self, monkeypatch, tmp_path):
         """The label passed to the DB sync reflects what produced the weights."""
         pairs = [
@@ -234,7 +290,7 @@ class TestComputePairWeights:
         monkeypatch.setattr(tio, "load_pair_stats", lambda p: _stats(0.3, 0.6))
         inv = self._inv(pairs)
         for mode in ("uniform", "temporal", "relative_temporal", "sigmoid",
-                     "parametric", "quality"):
+                     "parametric", "quality", "quality_spatial"):
             w = inv.compute_pair_weights(mode)
             assert len(w) == 2
             assert all(0.0 <= x <= 1.0 for x in w), f"{mode} produced out-of-range weight"
