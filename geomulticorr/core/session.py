@@ -1002,56 +1002,6 @@ class Session:
         self._thumbs = updated
         return updated
 
-    # * Works properly
-    def update_pairs(self) -> gpd.GeoDataFrame:
-        """Update pairs in the geodatabase.
-
-        Raises:
-            ValueError: If no 'geometry' column is found in pairs DataFrame.
-
-        Returns:
-            gpd.GeoDataFrame: pz.pairs with updated pairs.
-        
-        # ! TODO: Introduce pairing strategy. To do in pzone.
-        # TODO: Implement unittests.
-        """
-        # Comment code coresponds to Thibaut code.
-        # Copy the geodatabase before the transaction
-        # assert self.copy_geodb() why?
-
-        # For each processing zone we
-        # updated = []
-        # for pz in self.get_pzones():
-        #     pairs = pz.get_pairs_overview()
-        #     [updated.append(pa) for pa in pairs.iloc()]
-
-        # # Push it into the geodatabase
-        # updated = gpd.GeoDataFrame(updated).set_crs(epsg=self.epsg)
-        # updated.to_file(self.path_geodb, layer="Pairs")
-
-        # # Update instance
-        # self._pairs = updated
-        updated_frames = []
-        for pz in self.get_pzones():
-            logger.info(f"Updating pairs for PZone: '{pz.pz_name}'")
-            pairs = pz.get_valid_pairs_overview()
-            if not pairs.empty:
-                updated_frames.append(pairs)
-        
-        if updated_frames:
-            updated = pd.concat(updated_frames, ignore_index=True)
-            if "geometry" not in updated.columns:
-                raise ValueError("No 'geometry' column found in pairs DataFrame.")
-            updated = gpd.GeoDataFrame(updated, geometry="geometry", crs=self.epsg)
-        else:
-            updated = gpd.GeoDataFrame(geometry=[], crs=self.epsg)
-        
-        # updated = (gpd.GeoDataFrame(pd.concat(updated_frames, ignore_index=True))
-        #    .set_crs(epsg=self.epsg)) if updated_frames else gpd.GeoDataFrame(crs=self.epsg)
-        updated.to_file(self.path_geodb, layer="Pairs")
-        self._pairs = updated
-        return updated
-
     def _sync_pairs_status(self, pairs: list) -> None:
         """Sync pa_status in the geodatabase for the given pairs from filesystem state.
 
@@ -1085,7 +1035,7 @@ class Session:
 
         These columns are a **derived cache**: they are not part of
         :meth:`~geomulticorr.core.pair.Pair.to_pdserie` and are dropped when the
-        Pairs layer is rebuilt (:meth:`update_pairs_with_strategy`) — re-run the
+        Pairs layer is rebuilt (:meth:`update_pairs`) — re-run the
         sync afterwards.
 
         Args:
@@ -1215,27 +1165,33 @@ class Session:
             {}, "weight", pairs=pairs, criterias=criterias, extra_cols=extra_cols,
         )
 
-    def update_pairs_with_strategy(
+    def update_pairs(
         self,
         strategy: str = "consecutive",
         max_step: int | None = None,
         max_dt_days: int | str | None = None,
+        min_dt_days: int | str | None = None,
         sensor_filter: str | None = None,
+        pz_name: str = "",
         append: bool = False,
     ) -> gpd.GeoDataFrame:
         """Build pairs for all pzones using the specified strategy and persist to geodatabase.
 
         Args:
-            strategy: ``"consecutive"``, ``"step"``, or ``"redundancy"``.
+            strategy: ``"consecutive"``, ``"step"``, ``"redundancy"``, or
+                ``"forward-backward"`` (explicit step-1 pairs in both directions).
             max_step: Maximum index offset between paired thumbs (required for
                 ``"step"`` and ``"redundancy"``).
             max_dt_days: Optional upper bound on the date gap. Accepts an integer
                 number of days or a duration string: ``'30D'``, ``'6M'``, ``'1Y'``,
                 ``'2W'``. Months and years use fixed approximations (30 d/month,
                 365 d/year), which is appropriate given the 1-day image resolution.
+            min_dt_days: Optional lower bound on the date gap. Same formats as
+                ``max_dt_days``. Pairs shorter than this are dropped.
             sensor_filter: Optional sensor name substring to restrict thumbs
                 (e.g. ``"spot"``, ``"planetscope"``). Pairs are built only from
                 thumbs whose path contains this string.
+            pz_name: Restrict to a single pzone (default ``""`` = all pzones).
             append: If ``True``, new pairs are concatenated with the existing
                 ``Pairs`` layer (duplicates resolved by ``pa_path``). If ``False``
                 (default), the layer is fully replaced.
@@ -1244,10 +1200,13 @@ class Session:
             GeoDataFrame of all pairs written to the ``Pairs`` layer.
         """
         max_dt_days = _parse_dt_days(max_dt_days)
+        min_dt_days = _parse_dt_days(min_dt_days)
         updated_frames = []
-        for pz in self.get_pzones():
+        for pz in self.get_pzones(pz_name):
             logger.info(f"Updating pairs for PZone: '{pz.pz_name}'")
-            pairs_gdf = pz.get_valid_pairs_with_strategy_overview(strategy, max_step, max_dt_days, sensor_filter=sensor_filter)
+            pairs_gdf = pz.get_valid_pairs_with_strategy_overview(
+                strategy, max_step, max_dt_days, min_dt_days=min_dt_days, sensor_filter=sensor_filter
+            )
             if not pairs_gdf.empty:
                 updated_frames.append(pairs_gdf)
 
@@ -1913,6 +1872,200 @@ class Session:
 
         fig.tight_layout()
         return fig, ax
+
+    # ── Pairing-strategy exploration ────────────────────────────────────────────
+
+    #: Controls that actually affect each pairing strategy (drives the explorer's
+    #: show/hide logic). ``strategy`` and the Δt/sensor/pzone filters are always shown.
+    _STRATEGY_CONTROLS: dict[str, set[str]] = {
+        "consecutive": set(),
+        "step": {"max_step"},
+        "redundancy": {"max_step"},
+        "forward-backward": set(),
+    }
+
+    def explore_pairs_strategy(self, strategy: str = "consecutive", pz_name: str = "",
+                               **defaults):
+        """Interactive Plotly + ipywidgets tool to preview pairing strategies.
+
+        Renders a live scatter of **Δt vs pair midpoint date**, one point per
+        candidate pair, split into two traces by direction (forward circles +
+        backward diamonds). Dropdowns/sliders recompute the candidate pairs on
+        every change *without* touching the geodatabase, so different strategies
+        can be compared before committing with :meth:`update_pairs`.
+
+        Follows the same fast pattern as
+        :meth:`~geomulticorr.inversion.tio_inversion.TIOInversion.explore_weights`:
+        the (expensive) ``Thumb`` objects are read **once** at setup, then every
+        control change only re-runs pure integer/date arithmetic — no ``Thumb``
+        or ``Pair`` object is reconstructed inside the interactive loop.
+
+        The tuned parameters are stored on ``self._last_pairs_params`` so they can
+        be committed directly::
+
+            session.explore_pairs_strategy()                 # tune interactively
+            session.update_pairs(**session._last_pairs_params)
+
+        Requires plotly and ipywidgets (Jupyter). Returns the assembled
+        ``ipywidgets.VBox`` (also displays inline in a notebook).
+
+        :param strategy: Initial strategy selected in the dropdown.
+        :param pz_name: Restrict to a single pzone (default: all pzones).
+        :param defaults: Initial values for any control (``max_step``,
+            ``max_dt_days``, ``min_dt_days``, ``sensor_filter``).
+        :returns: An ``ipywidgets.VBox`` containing the controls and figure.
+        """
+        import ipywidgets as widgets
+        import plotly.graph_objects as go
+
+        # --- decimal-year helper (shared convention with plot_pairs_network) ----
+        def _to_dec(ts: pd.Timestamp) -> float:
+            yr = ts.year
+            return yr + (ts - pd.Timestamp(yr, 1, 1)) / pd.Timedelta(days=365.25)
+
+        # --- setup: read Thumb objects ONCE, cache sorted-by-date per pzone -----
+        pzones = self.get_pzones(pz_name)
+        thumbs_by_pz: dict[str, list] = {}
+        for pz in pzones:
+            ths = sorted(pz.get_valid_thumbs(), key=lambda t: t.th_date_datetime)
+            thumbs_by_pz[pz.pz_name] = ths
+        pz_options = ["<all>"] + list(thumbs_by_pz.keys())
+
+        def _compute():
+            """Pure recompute — no I/O, no Thumb/Pair construction."""
+            strat = c_strategy.value
+            max_step = int(c_step.value) if strat in ("step", "redundancy") else None
+            max_dt = c_maxdt.value or None
+            min_dt = c_mindt.value or None
+            sfilter = (c_sensor.value or "").strip()
+            sel_pz = c_pz.value
+
+            rows: list[dict] = []
+            for pzn, ths in thumbs_by_pz.items():
+                if sel_pz != "<all>" and pzn != sel_pz:
+                    continue
+                # sensor filter = substring match on the thumb path (same semantics
+                # as get_valid_thumbs' sensor_filter), applied here without re-I/O.
+                sel = [t for t in ths if (not sfilter or sfilter.lower() in t.th_path.lower())]
+                n = len(sel)
+                for i, j in gmc_pzone._strategy_pair_indices(n, strat, max_step):
+                    dt_days = abs((sel[j].th_date_datetime - sel[i].th_date_datetime).days)
+                    if max_dt is not None and dt_days > max_dt:
+                        continue
+                    if min_dt is not None and dt_days < min_dt:
+                        continue
+                    mid = sel[i].th_date_datetime + (sel[j].th_date_datetime - sel[i].th_date_datetime) / 2
+                    direction = "forward" if i < j else "backward"
+                    rows.append(dict(
+                        mid_dec=_to_dec(mid), dt_days=dt_days, direction=direction,
+                        pz=pzn, date_i=sel[i].th_date, date_j=sel[j].th_date,
+                        sensor_i=sel[i].th_sensor, sensor_j=sel[j].th_sensor,
+                    ))
+            return rows
+
+        def _split(rows, direction):
+            sub = [r for r in rows if r["direction"] == direction]
+            x = [r["mid_dec"] for r in sub]
+            y = [r["dt_days"] for r in sub]
+            cd = [[r["pz"], r["date_i"], r["date_j"], r["sensor_i"], r["sensor_j"]] for r in sub]
+            return x, y, cd
+
+        # ── controls ──
+        c_strategy = widgets.Dropdown(
+            options=["consecutive", "step", "redundancy", "forward-backward"],
+            value=strategy, description="strategy")
+        c_step = widgets.IntSlider(value=int(defaults.get("max_step", 2)), min=1, max=10,
+                                   step=1, description="max_step")
+        c_maxdt = widgets.IntText(value=int(defaults.get("max_dt_days", 0) or 0),
+                                  description="max_dt (d)")
+        c_mindt = widgets.IntText(value=int(defaults.get("min_dt_days", 0) or 0),
+                                  description="min_dt (d)")
+        c_sensor = widgets.Text(value=str(defaults.get("sensor_filter", "") or ""),
+                                description="sensor")
+        c_pz = widgets.Dropdown(options=pz_options, value="<all>", description="pzone")
+
+        def _apply_visibility():
+            relevant = self._STRATEGY_CONTROLS.get(c_strategy.value, set())
+            c_step.layout.display = None if "max_step" in relevant else "none"
+
+        def _stash():
+            self._last_pairs_params = dict(
+                strategy=c_strategy.value,
+                max_step=int(c_step.value) if c_strategy.value in ("step", "redundancy") else None,
+                max_dt_days=c_maxdt.value or None,
+                min_dt_days=c_mindt.value or None,
+                sensor_filter=(c_sensor.value or "").strip() or None,
+                pz_name="" if c_pz.value == "<all>" else c_pz.value,
+            )
+
+        rows = _compute()
+        _stash()
+        fx, fy, fcd = _split(rows, "forward")
+        bx, by, bcd = _split(rows, "backward")
+
+        _hover = ("pzone=%{customdata[0]}<br>Δt=%{y:.0f} d"
+                  "<br>%{customdata[1]} (%{customdata[3]})"
+                  " → %{customdata[2]} (%{customdata[4]})<extra></extra>")
+
+        fig = go.FigureWidget(
+            data=[
+                go.Scatter(x=fx, y=fy, mode="markers", name="forward", customdata=fcd,
+                           opacity=0.75, marker=dict(size=9, symbol="circle", color="#1f77b4"),
+                           hovertemplate="dir=forward<br>" + _hover),
+                go.Scatter(x=bx, y=by, mode="markers", name="backward", customdata=bcd,
+                           opacity=0.75, marker=dict(size=9, symbol="diamond", color="#ff7f0e"),
+                           hovertemplate="dir=backward<br>" + _hover),
+            ]
+        )
+        fig.update_layout(
+            xaxis_title="Pair midpoint date (decimal year)",
+            yaxis_title="Temporal baseline Δt (days)",
+            template="plotly_white", height=460,
+        )
+
+        summary = widgets.HTML()
+
+        def _render_summary(rows):
+            n = len(rows)
+            if n == 0:
+                summary.value = "<b>0 pairs</b>"
+                return
+            dts = [r["dt_days"] for r in rows]
+            sensors: dict[str, int] = {}
+            for r in rows:
+                for s in (r["sensor_i"], r["sensor_j"]):
+                    sensors[s] = sensors.get(s, 0) + 1
+            sens_txt = ", ".join(f"{s}: {c}" for s, c in sorted(sensors.items()))
+            summary.value = (
+                f"<b>{n} pairs</b> &nbsp;|&nbsp; "
+                f"Δt min/mean/max = {min(dts)} / {sum(dts) / n:.0f} / {max(dts)} d "
+                f"&nbsp;|&nbsp; sensor endpoints: {sens_txt}"
+            )
+
+        def _update(_change=None):
+            _apply_visibility()
+            rows = _compute()
+            _stash()
+            fx, fy, fcd = _split(rows, "forward")
+            bx, by, bcd = _split(rows, "backward")
+            with fig.batch_update():
+                fig.data[0].x, fig.data[0].y, fig.data[0].customdata = fx, fy, fcd
+                fig.data[1].x, fig.data[1].y, fig.data[1].customdata = bx, by, bcd
+                fig.layout.title.text = (
+                    f"Pairing preview — {len(rows)} pairs [{c_strategy.value}]"
+                )
+            _render_summary(rows)
+
+        for c in (c_strategy, c_step, c_maxdt, c_mindt, c_sensor, c_pz):
+            c.observe(_update, names="value")
+
+        _apply_visibility()
+        fig.layout.title.text = f"Pairing preview — {len(rows)} pairs [{c_strategy.value}]"
+        _render_summary(rows)
+
+        row1 = widgets.HBox([c_strategy, c_step, c_pz])
+        row2 = widgets.HBox([c_maxdt, c_mindt, c_sensor])
+        return widgets.VBox([row1, row2, fig, summary])
 
     @staticmethod
     def _compute_canonical_grid(

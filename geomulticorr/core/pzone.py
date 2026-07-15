@@ -15,6 +15,55 @@ from sklearn import cluster
 import geomulticorr.core.thumb as gmc_thumb
 from geomulticorr._logging import logger
 
+
+def _strategy_pair_indices(n: int, strategy: str, max_step: int | None = None) -> list[tuple[int, int]]:
+    """Return (i, j) index pairs for a pairing strategy over n sorted items.
+
+    Pure integer logic — no I/O — so it can be reused by both the real pairing
+    method (:meth:`Pzone.get_pairs_with_strategy`) and the interactive
+    pairing-strategy explorer without reopening any raster.
+
+    Args:
+        n: Number of sorted thumbs to pair.
+        strategy: One of ``"consecutive"``, ``"step"``, ``"redundancy"``,
+            ``"forward-backward"``.
+        max_step: Required for ``"step"`` and ``"redundancy"``; maximum index
+            distance between paired thumbs.
+
+    Returns:
+        List of ``(i, j)`` index tuples.
+    """
+    if strategy == "consecutive":
+        return [(i, i + 1) for i in range(n - 1)]
+    elif strategy == "step":
+        if max_step is None:
+            raise ValueError("'step' strategy requires max_step")
+        return [
+            (i, j)
+            for i in range(n)
+            for j in range(i + 1, min(i + max_step + 1, n))
+        ]
+    elif strategy == "redundancy":
+        if max_step is None:
+            raise ValueError("'redundancy' strategy requires max_step")
+        seen: set[tuple[int, int]] = set()
+        out: list[tuple[int, int]] = []
+        for i in range(n):
+            for offset in range(1, max_step + 1):
+                for a, b in [(i, i + offset), (i + offset, i)]:
+                    if 0 <= a < n and 0 <= b < n and (a, b) not in seen:
+                        out.append((a, b))
+                        seen.add((a, b))
+        return out
+    elif strategy == "forward-backward":
+        return [(i, i + 1) for i in range(n - 1)] + [(i + 1, i) for i in range(n - 1)]
+    else:
+        raise ValueError(
+            f"Unknown strategy '{strategy}'. "
+            "Valid options: 'consecutive', 'step', 'redundancy', 'forward-backward'."
+        )
+
+
 class Pzone:
 
     def __init__(self, target_pz_name, session):
@@ -62,16 +111,20 @@ class Pzone:
         strategy: str = "consecutive",
         max_step: int | None = None,
         max_dt_days: int | None = None,
+        min_dt_days: int | None = None,
         sensor_filter: str | None = None,
     ) -> list:
         """Return Pair objects for valid thumbs using the specified pairing strategy.
 
         Args:
-            strategy: One of ``"consecutive"``, ``"step"``, ``"redundancy"``.
+            strategy: One of ``"consecutive"``, ``"step"``, ``"redundancy"``,
+                ``"forward-backward"``.
             max_step: Required for ``"step"`` and ``"redundancy"``. Maximum index
                 distance between paired thumbs.
             max_dt_days: Optional upper bound on the absolute date difference
                 (in days). Pairs exceeding this are dropped.
+            min_dt_days: Optional lower bound on the absolute date difference
+                (in days). Pairs below this are dropped.
             sensor_filter: Optional sensor name substring to restrict thumbs
                 (e.g. ``"spot"``, ``"planetscope"``).
 
@@ -80,36 +133,7 @@ class Pzone:
         """
         thumbs = sorted(self.get_valid_thumbs(sensor_filter=sensor_filter), key=lambda t: t.th_date_datetime)
         n = len(thumbs)
-        pairs_idx = []
-
-        if strategy == "consecutive":
-            pairs_idx = [(i, i + 1) for i in range(n - 1)]
-
-        elif strategy == "step":
-            if max_step is None:
-                raise ValueError("'step' strategy requires max_step")
-            pairs_idx = [
-                (i, j)
-                for i in range(n)
-                for j in range(i + 1, min(i + max_step + 1, n))
-            ]
-
-        elif strategy == "redundancy":
-            if max_step is None:
-                raise ValueError("'redundancy' strategy requires max_step")
-            seen = set()
-            for i in range(n):
-                for offset in range(1, max_step + 1):
-                    for a, b in [(i, i + offset), (i + offset, i)]:
-                        if 0 <= a < n and 0 <= b < n and (a, b) not in seen:
-                            pairs_idx.append((a, b))
-                            seen.add((a, b))
-
-        else:
-            raise ValueError(
-                f"Unknown strategy '{strategy}'. "
-                "Valid options: 'consecutive', 'step', 'redundancy'."
-            )
+        pairs_idx = _strategy_pair_indices(n, strategy, max_step)
 
         pairs = []
         for i, j in pairs_idx:
@@ -119,6 +143,8 @@ class Pzone:
                 continue
             if max_dt_days is not None and pair.pa_dt_days > max_dt_days:
                 continue
+            if min_dt_days is not None and pair.pa_dt_days < min_dt_days:
+                continue
             pairs.append(pair)
         return pairs
 
@@ -127,9 +153,12 @@ class Pzone:
         strategy: str = "consecutive",
         max_step: int | None = None,
         max_dt_days: int | None = None,
+        min_dt_days: int | None = None,
         sensor_filter: str | None = None,
     ) -> gpd.GeoDataFrame:
-        pairs = self.get_pairs_with_strategy(strategy, max_step, max_dt_days, sensor_filter=sensor_filter)
+        pairs = self.get_pairs_with_strategy(
+            strategy, max_step, max_dt_days, min_dt_days=min_dt_days, sensor_filter=sensor_filter
+        )
         return gpd.GeoDataFrame([p.to_pdserie() for p in pairs])
 
 
@@ -295,28 +324,3 @@ class Pzone:
             gpd_polygonized_raster.to_file(str(Path(self.session.path_raster_data, self.pz_name, f"{self.pz_name}_moving-areas_round-0.gpkg")), layer=f"{self.pz_name}_moving-areas_round-0_features-sup-{min_surf}")
         else:
             gpd_polygonized_raster.to_file(str(Path(self.session.path_raster_data, self.pz_name, f"{self.pz_name}_moving-areas_round-0.gpkg")), layer=f"{self.pz_name}_moving-areas_round-0")
-    
-    # ! To be implemented in pzone.
-    def update_pairs_with_strategy(self,
-                                   strategy: str = "consecutive",
-                                   fixed_step: int = 3) -> gpd.GeoDataFrame:
-        updated_frames = []
-        for pz in self.get_pzones():
-            logger.info(f"Updating pairs for PZone: '{pz.pz_name}'")
-            pairs = pz.get_pairs_with_strategy(strategy, fixed_step)         # GeoDataFrame
-            if not pairs.empty:
-                updated_frames.append(pairs)
-        
-        if updated_frames:
-            updated = pd.concat(updated_frames, ignore_index=True)
-            if "geometry" not in updated.columns:
-                raise ValueError("No 'geometry' column found in pairs DataFrame.")
-            updated = gpd.GeoDataFrame(updated, geometry="geometry", crs=self.epsg)
-        else:
-            updated = gpd.GeoDataFrame(geometry=[], crs=self.epsg)
-        
-        # updated = (gpd.GeoDataFrame(pd.concat(updated_frames, ignore_index=True))
-        #    .set_crs(epsg=self.epsg)) if updated_frames else gpd.GeoDataFrame(crs=self.epsg)
-        updated.to_file(self.path_geodb, layer="Pairs")
-        self._pairs = updated
-        return updated
