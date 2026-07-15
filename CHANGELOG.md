@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.5] — 2026-07-15
+
+### Features
+- `explore_pairs_strategy()` interactively with Plottly; update: session.py and pzone.py for pair indexing and update interactively (8639c1c)
+
 ## [0.2.4] — 2026-07-09
 
 ### Improvements
