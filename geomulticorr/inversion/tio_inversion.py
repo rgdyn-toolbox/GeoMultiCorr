@@ -52,15 +52,15 @@ from datetime import datetime
 import numpy as np
 import rasterio
 import geoutils as gu
-from rich.console import Console as _RichConsole, Group as _RichGroup
+from rich.console import Group as _RichGroup
 from rich.live import Live as _RichLive
 from rich.progress import (
     Progress, TextColumn, BarColumn,
     MofNCompleteColumn, TimeElapsedColumn,
 )
-from rich.table import Table
 from rich.text import Text as _RichText
 
+from geomulticorr.core.console import _rich_console, print_tio_export_summary
 from geomulticorr.stats import load_pair_stats
 from geomulticorr._logging import logger
 from geomulticorr.utils.hpc_tools import (
@@ -70,8 +70,6 @@ from geomulticorr.utils.hpc_tools import (
     run_local,
     validate_cluster,
 )
-
-_rich_console = _RichConsole(highlight=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1802,13 +1800,7 @@ class TIOInversion:
                 progress.advance(task)
                 live.refresh()
 
-        if print_summary:
-            table = Table(title="TIO prepare — pair export summary", show_lines=False)
-            table.add_column("Pair", style="cyan", no_wrap=True)
-            table.add_column("Status")
-            for key, status in summary_rows:
-                table.add_row(key, status)
-            _rich_console.print(table)
+        print_tio_export_summary(summary_rows, print_summary=print_summary)
 
         self.write_liste_image()
         self.write_liste_image_inv()

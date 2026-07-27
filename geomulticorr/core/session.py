@@ -60,13 +60,12 @@ from shapely.geometry.base import BaseGeometry
 from shapely.geometry import shape
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from alive_progress import alive_bar
-from rich.console import Console as _RichConsole, Group as _RichGroup
+from rich.console import Group as _RichGroup
 from rich.live import Live as _RichLive
 from rich.progress import (
     Progress, TextColumn, BarColumn,
     MofNCompleteColumn, TimeElapsedColumn, TimeRemainingColumn,
 )
-from rich.table import Table
 from rich.text import Text as _RichText
 
 # Interactive tools
@@ -83,6 +82,18 @@ import geomulticorr.core.xzone as gmc_xzone
 import geomulticorr.stats.stats as gmc_stats
 import geomulticorr.correlation.supported_sensors as gmc_sensors
 
+from geomulticorr.core.console import (
+    _rich_console,
+    print_register_thumbs_summary,
+    print_sieve_bulk_summary,
+    print_prepare_correlation_summary,
+    print_launch_correlation_summary,
+    print_sync_after_cluster_summary,
+    print_reset_outputs_summary,
+    print_extract_displacements_summary,
+    print_apply_corrections_summary,
+)
+
 from geomulticorr._logging import logger
 from geomulticorr._typing import (
     DTypeLike,
@@ -95,7 +106,6 @@ from geomulticorr._typing import (
 file_location = pathlib.Path(__file__)
 package_root = file_location.parent.parent  # geomulticorr/core/ -> geomulticorr/
 
-_rich_console = _RichConsole(highlight=False)
 resources_location = package_root / "resources"
 
 project_template_location = resources_location / "project_template"
@@ -966,13 +976,7 @@ class Session:
             self.update_thumbs()
 
         if print_summary and summary_rows:
-            table = Table(title=f"register_existing_thumbs — pzone '{pz_name}'", show_lines=False)
-            table.add_column("Source", style="default", no_wrap=True)
-            table.add_column("Thumb", style="cyan", no_wrap=True)
-            table.add_column("Status", style="default")
-            for row in summary_rows:
-                table.add_row(row["src"], row["thumb"], row["status"])
-            _rich_console.print(table)
+            print_register_thumbs_summary(summary_rows, pz_name, print_summary=print_summary)
 
         logger.success(
             f"Registered {len(written)} thumb(s) into pzone '{pz_name}'"
@@ -1917,6 +1921,7 @@ class Session:
         """
         import ipywidgets as widgets
         import plotly.graph_objects as go
+        from IPython.display import display as _ipy_display
 
         # --- decimal-year helper (shared convention with plot_pairs_network) ----
         def _to_dec(ts: pd.Timestamp) -> float:
@@ -2007,21 +2012,33 @@ class Session:
                   "<br>%{customdata[1]} (%{customdata[3]})"
                   " → %{customdata[2]} (%{customdata[4]})<extra></extra>")
 
-        fig = go.FigureWidget(
-            data=[
-                go.Scatter(x=fx, y=fy, mode="markers", name="forward", customdata=fcd,
-                           opacity=0.75, marker=dict(size=9, symbol="circle", color="#1f77b4"),
-                           hovertemplate="dir=forward<br>" + _hover),
-                go.Scatter(x=bx, y=by, mode="markers", name="backward", customdata=bcd,
-                           opacity=0.75, marker=dict(size=9, symbol="diamond", color="#ff7f0e"),
-                           hovertemplate="dir=backward<br>" + _hover),
-            ]
-        )
-        fig.update_layout(
-            xaxis_title="Pair midpoint date (decimal year)",
-            yaxis_title="Temporal baseline Δt (days)",
-            template="plotly_white", height=460,
-        )
+        # A plain ``go.Figure`` redrawn inside an ``Output`` is used instead of a
+        # ``go.FigureWidget``: since plotly 6 the latter is an *anywidget*, whose
+        # front-end JS is not bundled with the VSCode Jupyter extension and often
+        # fails to load ("No version of module anywidget is registered"). Core
+        # ipywidgets + the built-in plotly renderer work everywhere, offline.
+        plot_out = widgets.Output()
+
+        def _draw(fx, fy, fcd, bx, by, bcd, n_rows):
+            fig = go.Figure(
+                data=[
+                    go.Scatter(x=fx, y=fy, mode="markers", name="forward", customdata=fcd,
+                               opacity=0.75, marker=dict(size=9, symbol="circle", color="#1f77b4"),
+                               hovertemplate="dir=forward<br>" + _hover),
+                    go.Scatter(x=bx, y=by, mode="markers", name="backward", customdata=bcd,
+                               opacity=0.75, marker=dict(size=9, symbol="diamond", color="#ff7f0e"),
+                               hovertemplate="dir=backward<br>" + _hover),
+                ]
+            )
+            fig.update_layout(
+                title=f"Pairing preview — {n_rows} pairs [{c_strategy.value}]",
+                xaxis_title="Pair midpoint date (decimal year)",
+                yaxis_title="Temporal baseline Δt (days)",
+                template="plotly_white", height=460,
+            )
+            with plot_out:
+                plot_out.clear_output(wait=True)
+                _ipy_display(fig)
 
         summary = widgets.HTML()
 
@@ -2048,24 +2065,19 @@ class Session:
             _stash()
             fx, fy, fcd = _split(rows, "forward")
             bx, by, bcd = _split(rows, "backward")
-            with fig.batch_update():
-                fig.data[0].x, fig.data[0].y, fig.data[0].customdata = fx, fy, fcd
-                fig.data[1].x, fig.data[1].y, fig.data[1].customdata = bx, by, bcd
-                fig.layout.title.text = (
-                    f"Pairing preview — {len(rows)} pairs [{c_strategy.value}]"
-                )
+            _draw(fx, fy, fcd, bx, by, bcd, len(rows))
             _render_summary(rows)
 
         for c in (c_strategy, c_step, c_maxdt, c_mindt, c_sensor, c_pz):
             c.observe(_update, names="value")
 
         _apply_visibility()
-        fig.layout.title.text = f"Pairing preview — {len(rows)} pairs [{c_strategy.value}]"
+        _draw(fx, fy, fcd, bx, by, bcd, len(rows))
         _render_summary(rows)
 
         row1 = widgets.HBox([c_strategy, c_step, c_pz])
         row2 = widgets.HBox([c_maxdt, c_mindt, c_sensor])
-        return widgets.VBox([row1, row2, fig, summary])
+        return widgets.VBox([row1, row2, plot_out, summary])
 
     @staticmethod
     def _compute_canonical_grid(
@@ -2414,15 +2426,7 @@ class Session:
             written[pz["pz_name"]] = pz_written
 
         if print_summary and _summary_rows:
-            table = Table(title="sieve_bulk — processed thumbs", show_lines=False)
-            table.add_column("Thumb",   style="cyan", no_wrap=True)
-            table.add_column("Sensor",  style="default")
-            table.add_column("Res (m)", style="default", justify="right")
-            table.add_column("Status",  style="default")
-            for row in _summary_rows:
-                table.add_row(row["name"], row["sensor"], str(target_resolution), row["status"])
-            if print_summary:
-                _rich_console.print(table)
+            print_sieve_bulk_summary(_summary_rows, target_resolution, print_summary=print_summary)
 
         return written
     
@@ -2589,16 +2593,7 @@ class Session:
                 progress.advance(task)
                 live.refresh()
 
-        table = Table(title="prepare_pairs_correlation — summary", show_lines=False)
-        table.add_column("Pair",         style="cyan", no_wrap=True)
-        table.add_column("Directory",    style="dim")
-        table.add_column("Symlink",      style="dim")
-        table.add_column("Corr. params", style="dim")
-        table.add_column("Job Script",   style="dim")
-        for rec in summary_rows:
-            table.add_row(rec["pair"], rec["directory"], rec["symlink"], rec["params"], rec["script"])
-        if print_summary:
-            _rich_console.print(table)
+        print_prepare_correlation_summary(summary_rows, print_summary=print_summary)
 
         return bash_scripts
 
@@ -2745,13 +2740,7 @@ class Session:
                 live.refresh()
 
         # Summary table
-        table = Table(title="launch_pairs_correlation — summary", show_lines=False)
-        table.add_column("Pair", style="cyan", no_wrap=True)
-        table.add_column("Status")
-        for rec in summary_rows:
-            table.add_row(rec["pair"], rec["status"])
-        if print_summary:
-            _rich_console.print(table)
+        print_launch_correlation_summary(summary_rows, print_summary=print_summary)
 
         # Sync pa_status back to the geodatabase for local runs.
         # For cluster (oarsub) jobs the processes are async — call
@@ -2833,15 +2822,7 @@ class Session:
 
         self._sync_pairs_status(pairs)
 
-        table = Table(title="sync_pairs_after_cluster — summary", show_lines=False)
-        table.add_column("Pair", style="cyan", no_wrap=True)
-        table.add_column("Correlated OK")
-        table.add_column("Files deleted", justify="right")
-        table.add_column("DB status", style="dim")
-        for rec in summary_rows:
-            table.add_row(rec["pair"], rec["correlated"], rec["deleted"], rec["db_status"])
-        if print_summary:
-            _rich_console.print(table)
+        print_sync_after_cluster_summary(summary_rows, print_summary=print_summary)
 
     def reset_pairs_outputs(
         self,
@@ -2922,15 +2903,7 @@ class Session:
         if not dry_run:
             self._sync_pairs_status(pairs)
 
-        table = Table(title="reset_pairs_outputs — summary", show_lines=False)
-        table.add_column("Pair", style="cyan", no_wrap=True)
-        table.add_column("Status before", style="dim")
-        table.add_column("Files deleted", justify="right")
-        table.add_column("Status after")
-        for rec in summary_rows:
-            table.add_row(rec["pair"], rec["status_before"], rec["deleted"], rec["status_after"])
-        if print_summary:
-            _rich_console.print(table)
+        print_reset_outputs_summary(summary_rows, print_summary=print_summary)
 
         return deleted_all
 
@@ -3074,22 +3047,9 @@ class Session:
                 progress.advance(task)
                 live.refresh()
 
-        table = Table(title="extract_pairs_raw_displacements — summary", show_lines=False)
-        table.add_column("Pair", style="cyan", no_wrap=True)
-        table.add_column("EW", justify="center")
-        table.add_column("NS", justify="center")
-        table.add_column("CC", justify="center")
-        table.add_column("Raw plot", justify="center")
-        table.add_column("Stats", justify="center")
-        if target_resolution is not None:
-            table.add_column("Resampling", justify="center", style="dim")
-        for rec in summary_rows:
-            row_data = [rec["pair"], rec["ew"], rec["ns"], rec["cc"], rec["plot"], rec["stats"]]
-            if target_resolution is not None:
-                row_data.append(f"{resampling} @ {target_resolution} m")
-            table.add_row(*row_data)
-        if print_summary:
-            _rich_console.print(table)
+        print_extract_displacements_summary(
+            summary_rows, target_resolution, resampling, print_summary=print_summary
+        )
 
         if sync_geodb:
             done = [p for p in pairs if results.get(p.pa_key) is not None]
@@ -3345,20 +3305,7 @@ class Session:
                 progress.advance(task)
                 live.refresh()
 
-        table = Table(title="apply_pairs_corrections — summary", show_lines=False)
-        table.add_column("Pair",        style="cyan", no_wrap=True)
-        table.add_column("Median corr", justify="center")
-        table.add_column("Ramp/Topo",   justify="center")
-        table.add_column("Stats",       justify="center")
-        table.add_column("EW corr",     justify="center")
-        table.add_column("NS corr",     justify="center")
-        for rec in summary_rows:
-            table.add_row(
-                rec["pair"], rec["median"], rec["ramp_topo"],
-                rec["stats"], rec["ew_corr"], rec["ns_corr"],
-            )
-        if print_summary:
-            _rich_console.print(table)
+        print_apply_corrections_summary(summary_rows, print_summary=print_summary)
 
         if sync_geodb and correction_pipeline is not None:
             from geomulticorr.corrections.corrections import CorrectionPipeline
