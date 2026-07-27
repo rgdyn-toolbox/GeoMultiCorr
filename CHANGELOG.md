@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.6] — 2026-07-27
+
+### Features
+- separate module for print control tables (53b3959)
+
 ## [0.2.5] — 2026-07-15
 
 ### Features
