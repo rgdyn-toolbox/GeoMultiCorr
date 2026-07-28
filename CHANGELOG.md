@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.0] — 2026-07-28
+
+### Features
+- pair figure export to html/png/jpg/pdf/svg with deterministic names. Self-contained interactive html via plotly plus publication-quality raster and vector output via the matplotlib twins — no kaleido dependency. File names are a pure function of the parameters ({pzone}_{view}_{strategy}[_maxstep{n}] [_dt{min}-{max}]), so re-running a sweep refreshes files instead of accumulating copies. (6d54850)
+- multi-view pairing-strategy explorer (chord, network, dt histogram). Plot-kind dropdown with four views over one cached candidate frame, so switching view never re-pairs. Chord places dates proportionally to time with a colour ring, year ticks and optional arrowheads; network mirrors backward pairs below the timeline. Every repeated element is batched into one artist: ~1040 ms -> ~50 ms per redraw at 460 pairs. Also replaces the deprecated matplotlib cm.get_cmap, removed in 3.11. interactive=False returns (frame, fig) for scripts and batch jobs: no ipywidgets import, no display required. BREAKING CHANGE: plot_pairs_chord keeps its signature but produces a different figure (time-proportional angles, colour ring, no colorbar — code reading fig.axes[1] will break). plot_pairs_network mirrors backward pairs by default; pass mirror_direction=False for the previous layout. figure_network's color_by default moved from "direction" to "dt". (fc5883e)
+- shared pair-layout geometry and canonical pairs-frame contract. Pure-numpy layout maths (decimal year, circular time scale, Bezier sampling, chord/arc polylines, colour-ring mesh, arrowhead tangents, signed arc heights) plus a single pairs-frame contract built either from candidate index pairs or from committed pairs, so a preview and a commit render identically. Consolidates three duplicated decimal-year implementations. (d3b1152)
+
+### Other
+- bump: 0.2.7 → 0.3.0 (20e3d50)
+
 ## [0.2.7] — 2026-07-27
 
 ### Improvements
