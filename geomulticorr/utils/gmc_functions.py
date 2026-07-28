@@ -38,9 +38,12 @@ import subprocess
 import geoutils as gu
 import rasterstats
 
+import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-from matplotlib.patches import Ellipse
+import matplotlib.patches as mpl_patches
+from matplotlib.collections import LineCollection
+from matplotlib.patches import Circle, Ellipse
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.stats import linregress
 
@@ -55,6 +58,19 @@ from geomulticorr.corrections.corrections import (
     AcrossTrackDestriping,
 )
 from geomulticorr.corrections.fit import compute_slope
+from geomulticorr.utils._pairs_frame import date_summary, unique_couples, unique_dates
+from geomulticorr.utils._pairs_geometry import (
+    CircularTimeScale,
+    arc_heights,
+    arc_ylim,
+    chord_polylines,
+    color_ring_mesh,
+    polar_to_xy,
+    polyline_point_and_tangent,
+    timeline_arc_polylines,
+    year_label_placement,
+    year_tick_segments,
+)
 
 def outlier_filter(disp_array: np.array,
                    disp_threshold: tuple[int, float] = (-10, 10)) -> np.array:
@@ -1554,3 +1570,676 @@ def sample_raster(points_fn: gpd.GeoDataFrame | str | pathlib.Path,
     #END if
     return points_df
 #END def
+
+# ══════════════════════════════════════════════════════════════════════════════ #
+#                          Pair-network figures                                  #
+# ══════════════════════════════════════════════════════════════════════════════ #
+# Both drawers consume a *pairs frame* (see geomulticorr.utils._pairs_frame) and
+# compute their coordinates through geomulticorr.utils._pairs_geometry, which the
+# interactive plotly views share — so the static and interactive figures draw
+# provably identical curves.
+#
+# Performance note: every repeated element is batched into a SINGLE artist
+# (one LineCollection for all links, one pcolormesh for the colour ring).  The
+# naive per-element version costs ~1 s per redraw at a few hundred pairs; batched
+# it is ~20 ms, which is what makes these usable inside an interactive loop.
+
+#: Colours for the forward/backward split, shared with the plotly views.
+_DIRECTION_COLORS: dict[str, str] = {"forward": "#1f77b4", "backward": "#ff7f0e"}
+
+
+def _pairs_color_groups(frame: pd.DataFrame, color_by: str) -> tuple[dict, dict, str]:
+    """Resolve *color_by* into per-pair colours, per-date node colours and a legend.
+
+    Returns ``(groups, node_color, legend_title)`` where ``groups`` maps a label to
+    a boolean row mask + colour.  ``"dt"`` returns an empty ``groups`` dict — that
+    mode is drawn as one continuous-valued LineCollection instead.
+    """
+    if color_by == "sensor":
+        sensors = sorted(set(frame["sensor_i"]) | set(frame["sensor_j"]))
+        palette = matplotlib.colormaps["tab10"].resampled(max(len(sensors), 1))
+        colors = {s: palette(i) for i, s in enumerate(sensors)}
+        groups = {s: (frame["sensor_i"] == s, colors[s]) for s in sensors}
+        node_color = {"__by_sensor__": colors}
+        return groups, node_color, "Sensor"
+
+    if color_by == "pzone":
+        pzones = sorted(frame["pz"].unique())
+        palette = matplotlib.colormaps["Set2"].resampled(max(len(pzones), 1))
+        colors = {pz: palette(i) for i, pz in enumerate(pzones)}
+        return {pz: (frame["pz"] == pz, colors[pz]) for pz in pzones}, {}, "Pzone"
+
+    if color_by == "direction":
+        return (
+            {
+                d: (frame["direction"] == d, c)
+                for d, c in _DIRECTION_COLORS.items()
+                if (frame["direction"] == d).any()
+            },
+            {},
+            "Direction",
+        )
+
+    if color_by == "dt":
+        return {}, {}, "Time delta (years)"
+
+    raise ValueError(
+        f"Unknown color_by '{color_by}'. Valid options: 'sensor', 'pzone', 'direction', 'dt'."
+    )
+
+
+def _draw_pairs_network_on_ax(
+    ax,
+    frame: pd.DataFrame,
+    *,
+    color_by: str = "sensor",
+    cmap_dt: str = "plasma_r",
+    linewidth: float = 1.5,
+    alpha: float = 0.75,
+    n_bezier_points: int = 24,
+    node_size: float = 60,
+    max_xticks: int = 25,
+    mirror_direction: bool = True,
+    dedupe: bool = False,
+) -> dict:
+    """Draw a temporal pair network (timeline + Bézier arcs) into *ax*.
+
+    Each acquisition date is a node on a horizontal timeline; each pair is an arc
+    whose height grows with the temporal baseline, so short pairs sit low and
+    long pairs arch higher.  With *mirror_direction* the plot is two-sided:
+    forward pairs arch above the timeline and backward pairs below it, so each
+    pair's direction is readable from geometry alone.
+
+    :param ax: Target matplotlib Axes.
+    :param frame: A pairs frame (see :mod:`geomulticorr.utils._pairs_frame`).
+    :param color_by: ``"sensor"`` | ``"pzone"`` | ``"direction"`` | ``"dt"``.
+    :param cmap_dt: Colormap used when ``color_by="dt"``.
+    :param linewidth: Arc line width.
+    :param alpha: Arc opacity.
+    :param n_bezier_points: Samples per arc; raise for print-quality curves.
+    :param node_size: Marker size of the date nodes.
+    :param max_xticks: Label at most this many dates on the x axis, thinning at a
+        regular stride beyond it (every date still gets a node).  Long archives
+        otherwise produce an unreadable smear of overlapping labels.
+    :param mirror_direction: Draw backward pairs below the axis.  ``False``
+        restores the one-sided layout exactly.
+    :param dedupe: Drop duplicate unordered couples (``redundancy`` /
+        ``forward-backward`` emit each couple twice).  Defaults to ``False`` so
+        the arc density matches the number of pairs actually built.
+    :returns: ``{"n_pairs", "n_dates", "mappable", "legend_handles", "legend_title"}``.
+    """
+    if dedupe:
+        frame = unique_couples(frame)
+
+    dates = unique_dates(frame)
+    if len(frame) == 0 or len(dates) == 0:
+        raise ValueError("Cannot draw a pair network from an empty pairs frame.")
+
+    x1 = frame["dec_i"].to_numpy()
+    x2 = frame["dec_j"].to_numpy()
+    backward = (frame["direction"] == "backward").to_numpy()
+    height = arc_heights(frame["dt_years"].to_numpy(), backward=backward,
+                         mirror=mirror_direction)
+    curves = timeline_arc_polylines(x1, x2, height, n_points=n_bezier_points)
+
+    mappable = None
+    legend_handles: list = []
+    groups, node_color, legend_title = _pairs_color_groups(frame, color_by)
+
+    if color_by == "dt":
+        # One artist, continuous colour — matplotlib can do here what plotly cannot.
+        dt_vals = frame["dt_years"].to_numpy()
+        norm = mcolors.Normalize(vmin=dt_vals.min(), vmax=dt_vals.max())
+        lc = LineCollection(curves, cmap=cmap_dt, norm=norm, linewidths=linewidth, alpha=alpha)
+        lc.set_array(dt_vals)
+        ax.add_collection(lc)
+        mappable = lc
+    else:
+        for label, (mask, color) in groups.items():
+            sel = curves[mask.to_numpy()]
+            if len(sel) == 0:
+                continue
+            ax.add_collection(
+                LineCollection(sel, colors=[color], linewidths=linewidth, alpha=alpha)
+            )
+            legend_handles.append(mpl_patches.Patch(color=color, label=label))
+
+    # --- timeline and date nodes -------------------------------------------------
+    ax.axhline(0, color="black", lw=0.8, zorder=1)
+    node_dec = np.array(
+        [d.year + (d - pd.Timestamp(d.year, 1, 1)) / pd.Timedelta(days=365.25) for d in dates]
+    )
+    if color_by == "sensor" and node_color:
+        summary = date_summary(frame)
+        sensor_colors = node_color["__by_sensor__"]
+        node_c = [sensor_colors.get(s, "grey") for s in summary["sensor"]]
+    else:
+        node_c = "black"
+    ax.scatter(node_dec, np.zeros_like(node_dec), c=node_c, s=node_size, zorder=3,
+               edgecolors="black", linewidths=0.5)
+
+    # --- axes formatting ---------------------------------------------------------
+    x_pad = (node_dec.max() - node_dec.min()) * 0.03 if len(node_dec) > 1 else 0.1
+    ax.set_xlim(node_dec.min() - x_pad, node_dec.max() + x_pad)
+    ax.set_ylim(*arc_ylim(height))
+    stride = max(1, int(np.ceil(len(node_dec) / max(max_xticks, 1))))
+    ax.set_xticks(node_dec[::stride])
+    ax.set_xticklabels(dates.strftime("%Y-%m-%d")[::stride], rotation=45, ha="right",
+                       fontsize=8)
+    # No y ticks: arc height is a non-linear proxy for Δt (a cubic with both
+    # control points at h peaks at 0.75 h), so a numeric axis would misinform.
+    ax.set_yticks([])
+    ax.set_ylabel("")
+    for spine in ("left", "right", "top", "bottom"):
+        ax.spines[spine].set_visible(False)
+
+    if mirror_direction:
+        if (~backward).any():
+            ax.text(0.004, 0.985, "▲ above: forward (i → j)", transform=ax.transAxes,
+                    ha="left", va="top", fontsize=8,
+                    color=_DIRECTION_COLORS["forward"])
+        if backward.any():
+            ax.text(0.004, 0.015, "▼ below: backward (j → i)", transform=ax.transAxes,
+                    ha="left", va="bottom", fontsize=8,
+                    color=_DIRECTION_COLORS["backward"])
+
+    return {
+        "n_pairs": len(frame),
+        "n_dates": len(dates),
+        "mappable": mappable,
+        "legend_handles": legend_handles,
+        "legend_title": legend_title,
+        "mirrored": bool(mirror_direction and backward.any()),
+    }
+
+
+def plot_pairs_network(
+    frame: pd.DataFrame,
+    figsize: tuple[float, float] = (14, 5),
+    color_by: str = "sensor",
+    fig_name: str | None = None,
+    ax=None,
+    **style,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot image pairs as a temporal network diagram.
+
+    :param frame: A pairs frame (see :mod:`geomulticorr.utils._pairs_frame`).
+    :param figsize: Figure size in inches (ignored when *ax* is given).
+    :param color_by: ``"sensor"`` | ``"pzone"`` | ``"direction"`` | ``"dt"``.
+    :param fig_name: Optional title; a pair/date count title is used when omitted.
+    :param ax: Draw into an existing Axes instead of creating a figure.
+    :param style: Forwarded to :func:`_draw_pairs_network_on_ax` (``linewidth``,
+        ``alpha``, ``n_bezier_points``, ``node_size``, ``cmap_dt``, ``dedupe``).
+    :returns: ``(fig, ax)``.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    info = _draw_pairs_network_on_ax(ax, frame, color_by=color_by, **style)
+
+    n_pairs, n_dates = info["n_pairs"], info["n_dates"]
+    ax.set_title(
+        fig_name
+        or f"Pair network — {n_pairs} pair{'s' if n_pairs != 1 else ''} "
+           f"({n_dates} acquisition dates)",
+        fontsize=10,
+    )
+
+    if info["mappable"] is not None:
+        fig.colorbar(info["mappable"], ax=ax, orientation="vertical",
+                     label=info["legend_title"], fraction=0.03, pad=0.02)
+    elif info["legend_handles"]:
+        ax.legend(handles=info["legend_handles"], title=info["legend_title"],
+                  loc="upper left", fontsize=8, title_fontsize=9)
+
+    fig.tight_layout()
+    return fig, ax
+
+
+def _draw_pairs_chord_on_ax(
+    ax,
+    frame: pd.DataFrame,
+    *,
+    cmap: str = "jet",
+    n_color_segments: int = 720,
+    outer_radius: float = 1.0,
+    ring_width: float = 0.045,
+    link_radius: float | None = None,
+    label_radius: float = 1.02,
+    show_year_ticks: bool = True,
+    year_tick_length: float = 0.075,
+    year_tick_linewidth: float = 1.4,
+    year_tick_color: str = "black",
+    show_year_labels: bool = True,
+    year_label_fontsize: float = 9,
+    year_label_color: str = "black",
+    link_color: str = "black",
+    link_linewidth: float = 0.6,
+    link_alpha: float = 0.35,
+    link_curvature: float = 0.85,
+    border_color: str = "black",
+    border_linewidth: float = 1.0,
+    show_arrows: bool = False,
+    arrow_position: float = 0.5,
+    arrow_size: float = 0.05,
+    arrow_width: float = 0.005,
+    arrow_color: str | None = None,
+    arrow_alpha: float | None = None,
+    show_date_nodes: bool = False,
+    node_size: float = 18,
+    xylim: float = 1.30,
+    n_bezier_points: int = 24,
+    dedupe: bool = True,
+) -> dict:
+    """Draw a circular chord diagram of the pair network into *ax*.
+
+    Dates are placed on the circle **proportionally to time** (Jan 1 at the top,
+    clockwise), so seasonal clustering and gaps in the archive are visible at a
+    glance — unlike an equal-angle layout, which hides irregular sampling.  The
+    colour ring encodes position within the covered period.
+
+    :param ax: Target matplotlib Axes (should be ``aspect="equal"``).
+    :param frame: A pairs frame (see :mod:`geomulticorr.utils._pairs_frame`).
+    :param cmap: Colormap of the time ring.
+    :param n_color_segments: Ring resolution — drawn as one ``pcolormesh``, so
+        raising it costs almost nothing.
+    :param outer_radius, ring_width: Ring geometry.
+    :param link_radius: Radius of the chord endpoints; defaults to the ring
+        mid-radius.
+    :param label_radius: Radius of the year labels.
+    :param show_year_ticks, year_tick_*: The ``|`` marks at Jan 1 of each year.
+    :param show_year_labels, year_label_*: Year text around the ring.
+    :param link_color, link_linewidth, link_alpha: Chord styling.
+    :param link_curvature: 0 → chords hug the rim, 1 → antipodal chords pass
+        through the centre.
+    :param border_color, border_linewidth: The two ring outlines.
+    :param show_arrows: Draw an arrowhead per chord pointing from the left image
+        to the right image of the pair.  Off by default — past roughly 150 chords
+        the heads crowd each other.
+    :param arrow_position: Where along each chord the head sits, ``0``–``1``.
+        Mid-chord by default: chord *endpoints* coincide with the acquisition
+        angles, so end-placed heads from many pairs would pile up on a few points.
+    :param arrow_size: Arrow length in data units (the ring has radius 1).
+    :param arrow_width, arrow_color, arrow_alpha: Arrow styling; the colour and
+        opacity default to a stronger version of the chord's own.
+    :param show_date_nodes, node_size: Optional markers at each acquisition date.
+    :param xylim: Axis half-extent, leaving room for the labels.
+    :param n_bezier_points: Samples per chord.
+    :param dedupe: Drop duplicate unordered couples — ``True`` by default because
+        overplotting the same chord twice doubles its effective opacity.
+    :returns: ``{"n_pairs", "n_dates", "scale", "mappable", "legend_handles",
+        "legend_title"}``.
+    """
+    if dedupe:
+        frame = unique_couples(frame)
+
+    dates = unique_dates(frame)
+    if len(frame) == 0 or len(dates) < 2:
+        raise ValueError("A chord diagram needs at least two distinct acquisition dates.")
+
+    scale = CircularTimeScale.from_dates(dates)
+    inner_radius = outer_radius - ring_width
+    if link_radius is None:
+        link_radius = inner_radius + ring_width / 2
+
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    # --- colour ring: ONE artist (vs n_color_segments wedges) --------------------
+    ring_x, ring_y, ring_frac = color_ring_mesh(
+        n_color_segments, outer_radius=outer_radius, ring_width=ring_width
+    )
+    mesh = ax.pcolormesh(ring_x, ring_y, ring_frac[None, :], cmap=cmap,
+                         shading="flat", zorder=0, rasterized=True)
+
+    for radius in (outer_radius, inner_radius):
+        ax.add_patch(Circle((0, 0), radius, fill=False, edgecolor=border_color,
+                            linewidth=border_linewidth, zorder=4))
+
+    # --- chords: ONE artist ------------------------------------------------------
+    theta_i = scale.angle(frame["t_i"])
+    theta_j = scale.angle(frame["t_j"])
+    curves = chord_polylines(theta_i, theta_j, link_radius=link_radius,
+                             curvature=link_curvature, n_points=n_bezier_points)
+    ax.add_collection(
+        LineCollection(curves, colors=[link_color], linewidths=link_linewidth,
+                       alpha=link_alpha, zorder=1)
+    )
+
+    # --- arrowheads: ONE artist (quiver takes per-point directions natively) ----
+    if show_arrows:
+        tips, tangents = polyline_point_and_tangent(curves, position=arrow_position)
+        ax.quiver(
+            tips[:, 0], tips[:, 1], tangents[:, 0], tangents[:, 1],
+            angles="xy", scale_units="xy", scale=1.0 / arrow_size,
+            width=arrow_width, headwidth=4.0, headlength=5.0, headaxislength=5.0,
+            pivot="mid", color=arrow_color or link_color,
+            alpha=arrow_alpha if arrow_alpha is not None else min(link_alpha * 2, 1.0),
+            zorder=2,
+        )
+
+    if show_date_nodes:
+        node_x, node_y = polar_to_xy(link_radius, scale.angle(dates))
+        ax.scatter(node_x, node_y, s=node_size, c=scale.fraction(dates), cmap=cmap,
+                   vmin=0, vmax=1, edgecolors="black", linewidths=0.4, zorder=5)
+
+    # --- year ticks: ONE artist --------------------------------------------------
+    if show_year_ticks:
+        ax.add_collection(
+            LineCollection(
+                year_tick_segments(scale, outer_radius=outer_radius,
+                                   ring_width=ring_width, tick_length=year_tick_length),
+                colors=[year_tick_color], linewidths=year_tick_linewidth,
+                capstyle="butt", zorder=5,
+            )
+        )
+
+    if show_year_labels:
+        lx, ly, rot, ha = year_label_placement(scale, label_radius=label_radius)
+        for x, y, r, a, year in zip(lx, ly, rot, ha, scale.years):
+            ax.text(x, y, str(int(year)), rotation=r, rotation_mode="anchor",
+                    ha=a, va="center", fontsize=year_label_fontsize,
+                    color=year_label_color)
+
+    ax.set_xlim(-xylim, xylim)
+    ax.set_ylim(-xylim, xylim)
+
+    return {
+        "n_pairs": len(frame),
+        "n_dates": len(dates),
+        "scale": scale,
+        "mappable": mesh,
+        "legend_handles": [],
+        "legend_title": "Position in period",
+    }
+
+
+def plot_pairs_chord(
+    frame: pd.DataFrame,
+    figsize: tuple[float, float] = (10, 10),
+    fig_name: str | None = None,
+    ax=None,
+    **style,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot image pairs as a time-proportional chord diagram.
+
+    :param frame: A pairs frame (see :mod:`geomulticorr.utils._pairs_frame`).
+    :param figsize: Figure size in inches (ignored when *ax* is given).
+    :param fig_name: Optional title; a pair/date count title is used when omitted.
+    :param ax: Draw into an existing Axes instead of creating a figure.
+    :param style: Forwarded to :func:`_draw_pairs_chord_on_ax` — see there for the
+        full list of geometry and styling parameters.
+    :returns: ``(fig, ax)``.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize, subplot_kw={"aspect": "equal"})
+    else:
+        fig = ax.get_figure()
+
+    info = _draw_pairs_chord_on_ax(ax, frame, **style)
+
+    n_pairs, n_dates = info["n_pairs"], info["n_dates"]
+    ax.set_title(
+        fig_name
+        or f"Pair network (chord diagram) — {n_pairs} pair{'s' if n_pairs != 1 else ''} "
+           f"({n_dates} acquisition dates)",
+        fontsize=11, pad=20,
+    )
+
+    fig.tight_layout()
+    return fig, ax
+
+
+def _draw_pairs_baseline_on_ax(
+    ax,
+    frame: pd.DataFrame,
+    *,
+    color_by: str = "direction",
+    marker_size: float = 45,
+    alpha: float = 0.75,
+    cmap_dt: str = "plasma_r",
+    dedupe: bool = False,
+) -> dict:
+    """Draw temporal baseline vs pair midpoint date into *ax*.
+
+    The publication twin of
+    :func:`geomulticorr.utils._pairs_plotly.figure_baseline` — same split into
+    forward circles and backward diamonds, same colours.
+
+    :param ax: Target matplotlib Axes.
+    :param frame: A pairs frame (see :mod:`geomulticorr.utils._pairs_frame`).
+    :param color_by: ``"direction"`` | ``"sensor"`` | ``"pzone"`` | ``"dt"``.
+    :param marker_size: Scatter marker area.
+    :param alpha: Marker opacity.
+    :param cmap_dt: Colormap used when ``color_by="dt"``.
+    :param dedupe: Drop duplicate unordered couples before plotting.
+    :returns: ``{"n_pairs", "n_dates", "mappable", "legend_handles", "legend_title"}``.
+    """
+    if dedupe:
+        frame = unique_couples(frame)
+    if len(frame) == 0:
+        raise ValueError("Cannot draw a baseline plot from an empty pairs frame.")
+
+    mappable = None
+    legend_handles: list = []
+    legend_title = color_by.capitalize()
+
+    if color_by == "dt":
+        sc = ax.scatter(frame["mid_dec"], frame["dt_days"], c=frame["dt_years"],
+                        cmap=cmap_dt, s=marker_size, alpha=alpha,
+                        edgecolors="black", linewidths=0.3)
+        mappable = sc
+        legend_title = "Time delta (years)"
+    elif color_by == "direction":
+        # Backward first and larger: a bidirectional couple puts both markers on
+        # exactly the same (midpoint, Δt), so the smaller forward circle must land
+        # on top or one direction would be invisible.
+        for name, marker, scale in (("backward", "D", 1.6), ("forward", "o", 1.0)):
+            sub = frame[frame["direction"] == name]
+            if len(sub) == 0:
+                continue
+            ax.scatter(sub["mid_dec"], sub["dt_days"], marker=marker,
+                       color=_DIRECTION_COLORS[name], s=marker_size * scale,
+                       alpha=alpha, edgecolors="black", linewidths=0.3, label=name)
+            legend_handles.append(
+                mpl_patches.Patch(color=_DIRECTION_COLORS[name], label=name)
+            )
+        legend_handles.reverse()
+    else:
+        groups, _, legend_title = _pairs_color_groups(frame, color_by)
+        for label, (mask, color) in groups.items():
+            sub = frame.loc[mask]
+            if len(sub) == 0:
+                continue
+            ax.scatter(sub["mid_dec"], sub["dt_days"], color=color, s=marker_size,
+                       alpha=alpha, edgecolors="black", linewidths=0.3, label=label)
+            legend_handles.append(mpl_patches.Patch(color=color, label=label))
+
+    ax.set_xlabel("Pair midpoint date (decimal year)")
+    ax.set_ylabel("Temporal baseline Δt (days)")
+    ax.grid(True, alpha=0.25, linestyle=":")
+    ax.set_axisbelow(True)
+
+    return {
+        "n_pairs": len(frame),
+        "n_dates": len(unique_dates(frame)),
+        "mappable": mappable,
+        "legend_handles": legend_handles,
+        "legend_title": legend_title,
+    }
+
+
+def plot_pairs_baseline(
+    frame: pd.DataFrame,
+    figsize: tuple[float, float] = (10, 5),
+    color_by: str = "direction",
+    fig_name: str | None = None,
+    ax=None,
+    **style,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot temporal baseline against pair midpoint date.
+
+    :param frame: A pairs frame (see :mod:`geomulticorr.utils._pairs_frame`).
+    :param figsize: Figure size in inches (ignored when *ax* is given).
+    :param color_by: ``"direction"`` | ``"sensor"`` | ``"pzone"`` | ``"dt"``.
+    :param fig_name: Optional title; a pair/date count title is used when omitted.
+    :param ax: Draw into an existing Axes instead of creating a figure.
+    :param style: Forwarded to :func:`_draw_pairs_baseline_on_ax`.
+    :returns: ``(fig, ax)``.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    info = _draw_pairs_baseline_on_ax(ax, frame, color_by=color_by, **style)
+
+    n_pairs, n_dates = info["n_pairs"], info["n_dates"]
+    ax.set_title(
+        fig_name
+        or f"Temporal baselines — {n_pairs} pair{'s' if n_pairs != 1 else ''} "
+           f"({n_dates} acquisition dates)",
+        fontsize=10,
+    )
+    if info["mappable"] is not None:
+        fig.colorbar(info["mappable"], ax=ax, orientation="vertical",
+                     label=info["legend_title"], fraction=0.03, pad=0.02)
+    elif info["legend_handles"]:
+        ax.legend(handles=info["legend_handles"], title=info["legend_title"],
+                  loc="upper left", fontsize=8, title_fontsize=9)
+
+    fig.tight_layout()
+    return fig, ax
+
+
+def _draw_pairs_dt_hist_on_ax(
+    ax,
+    frame: pd.DataFrame,
+    *,
+    nbins: int = 40,
+    split_direction: bool = True,
+    show_stats: bool = True,
+    alpha: float = 0.7,
+    dedupe: bool = False,
+) -> dict:
+    """Draw the distribution of temporal baselines into *ax*.
+
+    The publication twin of
+    :func:`geomulticorr.utils._pairs_plotly.figure_dt_hist`.
+
+    :param ax: Target matplotlib Axes.
+    :param frame: A pairs frame (see :mod:`geomulticorr.utils._pairs_frame`).
+    :param nbins: Number of histogram bins.
+    :param split_direction: Overlay forward and backward separately.
+    :param show_stats: Draw dashed median and dotted mean guides.
+    :param alpha: Bar opacity.
+    :param dedupe: Drop duplicate unordered couples before binning.
+    :returns: ``{"n_pairs", "n_dates", "mappable", "legend_handles", "legend_title"}``.
+    """
+    if dedupe:
+        frame = unique_couples(frame)
+    if len(frame) == 0:
+        raise ValueError("Cannot draw a Δt histogram from an empty pairs frame.")
+
+    dt = frame["dt_days"].to_numpy()
+    bins = np.histogram_bin_edges(dt, bins=nbins)
+    legend_handles: list = []
+
+    present = [
+        name for name in ("forward", "backward")
+        if (frame["direction"] == name).any()
+    ] if split_direction else []
+
+    if len(present) > 1:
+        # Grouped, not overlaid: matplotlib draws successive hist() calls opaquely
+        # over each other, and for bidirectional strategies the two distributions
+        # are identical by construction — so an overlay would hide one entirely.
+        ax.hist(
+            [dt[(frame["direction"] == name).to_numpy()] for name in present],
+            bins=bins, color=[_DIRECTION_COLORS[n] for n in present],
+            alpha=alpha, label=present,
+        )
+        legend_handles = [
+            mpl_patches.Patch(color=_DIRECTION_COLORS[n], label=n) for n in present
+        ]
+    elif present:
+        ax.hist(dt, bins=bins, color=_DIRECTION_COLORS[present[0]], alpha=alpha,
+                label=present[0])
+        legend_handles = [
+            mpl_patches.Patch(color=_DIRECTION_COLORS[present[0]], label=present[0])
+        ]
+    else:
+        ax.hist(dt, bins=bins, color="grey", alpha=alpha, label="all pairs")
+
+    if show_stats:
+        stats = ((np.median(dt), "median", "--", 0.99), (dt.mean(), "mean", ":", 0.91))
+        for value, label, ls, y in stats:
+            ax.axvline(value, color="black", lw=1.2, linestyle=ls)
+            ax.annotate(f"{label} {value:.0f} d", xy=(value, y),
+                        xycoords=("data", "axes fraction"), xytext=(3, 0),
+                        textcoords="offset points", ha="left", va="top", fontsize=8)
+
+    ax.set_xlabel("Temporal baseline Δt (days)")
+    ax.set_ylabel("Number of pairs")
+    ax.grid(True, alpha=0.25, linestyle=":", axis="y")
+    ax.set_axisbelow(True)
+
+    return {
+        "n_pairs": len(frame),
+        "n_dates": len(unique_dates(frame)),
+        "mappable": None,
+        "legend_handles": legend_handles,
+        "legend_title": "Direction",
+    }
+
+
+def plot_pairs_dt_hist(
+    frame: pd.DataFrame,
+    figsize: tuple[float, float] = (8, 5),
+    fig_name: str | None = None,
+    ax=None,
+    **style,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot the distribution of temporal baselines.
+
+    :param frame: A pairs frame (see :mod:`geomulticorr.utils._pairs_frame`).
+    :param figsize: Figure size in inches (ignored when *ax* is given).
+    :param fig_name: Optional title; a pair/date count title is used when omitted.
+    :param ax: Draw into an existing Axes instead of creating a figure.
+    :param style: Forwarded to :func:`_draw_pairs_dt_hist_on_ax` (``nbins``,
+        ``split_direction``, ``show_stats``, ``alpha``, ``dedupe``).
+    :returns: ``(fig, ax)``.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    info = _draw_pairs_dt_hist_on_ax(ax, frame, **style)
+
+    n_pairs, n_dates = info["n_pairs"], info["n_dates"]
+    ax.set_title(
+        fig_name
+        or f"Temporal baseline distribution — {n_pairs} pair{'s' if n_pairs != 1 else ''} "
+           f"({n_dates} acquisition dates)",
+        fontsize=10,
+    )
+    if info["legend_handles"]:
+        ax.legend(handles=info["legend_handles"], title=info["legend_title"],
+                  loc="upper right", fontsize=8, title_fontsize=9)
+
+    fig.tight_layout()
+    return fig, ax
+
+
+#: View key → publication-quality matplotlib builder.  Mirrors
+#: :data:`geomulticorr.utils._pairs_plotly.VIEW_BUILDERS` key for key, so a
+#: caller can render the same view through either backend.
+PAIRS_MPL_BUILDERS: dict = {
+    "baseline": plot_pairs_baseline,
+    "chord": plot_pairs_chord,
+    "network": plot_pairs_network,
+    "dt_hist": plot_pairs_dt_hist,
+}

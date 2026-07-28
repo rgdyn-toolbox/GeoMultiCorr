@@ -47,4 +47,8 @@ from geomulticorr.utils.gmc_functions import (
     plot_disp_vs_elev_raw,
     plot_disp_vs_elev_bins,
     plot_disp_vs_elev_hexbin,
+    plot_pairs_network,
+    plot_pairs_chord,
+    plot_pairs_baseline,
+    plot_pairs_dt_hist,
 )

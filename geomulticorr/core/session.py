@@ -341,6 +341,8 @@ class Session:
         self.path_raster_data = target_root_path / f"raster_data_{self.project_name}"
         self.path_img_correlation_outs = target_root_path / f"img_correlation_outs_{self.project_name}"
         self.path_tio_inversion_outs = target_root_path / f"tio_inversion_outs_{self.project_name}"
+        # Created lazily on first save, like the two output dirs above.
+        self.path_figures = target_root_path / f"figures_{self.project_name}"
         self.path_geodb = target_root_path / f"GMC_geodatabase_{self.project_name}.gpkg"
         self.path_qgis_project = target_root_path / f"GMC_mapset_{self.project_name}.qgz"
         self.epsg = epsg_code
@@ -1615,267 +1617,180 @@ class Session:
                 return None
         return get_gdf
 
+    def _pairs_frame(self, criterias: str | list[str] = "") -> pd.DataFrame:
+        """Read committed pairs from the geodatabase as a canonical *pairs frame*.
+
+        Shared entry point for every pair figure — see
+        :mod:`geomulticorr.utils._pairs_frame` for the column contract.
+
+        :param criterias: Passed to :meth:`get_pairs_overview` to filter pairs.
+        :returns: A pairs frame.
+        :raises ValueError: If no pair matches *criterias*.
+        """
+        from geomulticorr.utils._pairs_frame import pairs_frame_from_overview
+
+        pairs_gdf = self.get_pairs_overview(criterias)
+        if pairs_gdf.empty:
+            raise ValueError("No pairs found. Build pairs first with update_pairs().")
+
+        # Sensor fallback for geodatabases written before pa_left_sensor/pa_right_sensor
+        # existed; ignored (and not read) when the columns are present.
+        date_sensor: dict[str, str] = {}
+        if not {"pa_left_sensor", "pa_right_sensor"} <= set(pairs_gdf.columns):
+            thumbs_gdf = self.get_thumbs_overview()
+            if not thumbs_gdf.empty:
+                date_sensor = dict(zip(thumbs_gdf["th_date"], thumbs_gdf["th_sensor"]))
+
+        return pairs_frame_from_overview(pairs_gdf, date_sensor=date_sensor or None)
+
     def plot_pairs_network(
         self,
         criterias: str | list[str] = "",
         figsize: tuple[int, int] = (14, 5),
         color_by: str = "sensor",
         ax=None,
+        **style,
     ) -> tuple:
         """Plot built image pairs as a temporal network diagram.
 
         Each acquisition date is a node on a horizontal timeline; each pair is
         a Bézier arc connecting its two dates.  Arc height is proportional to
-        the time-delta (pa_dt_years), so short pairs sit low and long pairs
-        arch higher.
+        the time-delta, so short pairs sit low and long pairs arch higher.
 
         Args:
             criterias: passed to get_pairs_overview() to filter pairs.
             figsize: matplotlib figure size (ignored when *ax* is provided).
-            color_by: "sensor" | "pzone" | "dt" — controls arc/node colour.
+            color_by: "sensor" | "pzone" | "direction" | "dt" — arc/node colour.
             ax: existing matplotlib Axes to draw into; a new figure is created
                 when None.
+            style: extra styling forwarded to
+                :func:`~geomulticorr.utils.gmc_functions.plot_pairs_network`
+                (``linewidth``, ``alpha``, ``n_bezier_points``, ``node_size``,
+                ``max_xticks``, ``cmap_dt``, ``dedupe``, ``fig_name``).
 
         Returns:
             (fig, ax) tuple.
         """
-        import matplotlib.pyplot as plt
-        import matplotlib.patches as mpatches
-        import matplotlib.cm as cm
-        import matplotlib.colors as mcolors
-        from matplotlib.path import Path as MplPath
+        from geomulticorr.utils import gmc_functions as gmc_fn
 
-        pairs_gdf = self.get_pairs_overview(criterias)
-        if pairs_gdf.empty:
-            raise ValueError("No pairs found. Build pairs first with update_pairs().")
-
-        thumbs_gdf = self.get_thumbs_overview()
-
-        # --- decimal-year helper ------------------------------------------------
-        def _to_dec(date_str: str) -> float:
-            dt = pd.Timestamp(date_str)
-            yr = dt.year
-            return yr + (dt - pd.Timestamp(yr, 1, 1)) / pd.Timedelta(days=365.25)
-
-        # --- date → sensor mapping (from thumbs) --------------------------------
-        date_sensor: dict[str, str] = {}
-        if not thumbs_gdf.empty:
-            for row in thumbs_gdf.itertuples(index=False):
-                date_sensor[row.th_date] = row.th_sensor
-
-        # --- unique sorted dates ------------------------------------------------
-        left_dates = pairs_gdf["pa_left_date"].tolist()
-        right_dates = pairs_gdf["pa_right_date"].tolist()
-        all_date_strs = sorted(set(left_dates + right_dates))
-        date_x: dict[str, float] = {d: _to_dec(d) for d in all_date_strs}
-
-        # --- colour palette for the chosen dimension ----------------------------
-        if color_by == "sensor":
-            sensors = sorted({date_sensor.get(d, "unknown") for d in all_date_strs})
-            palette = cm.get_cmap("tab10", max(len(sensors), 1))
-            sensor_color = {s: palette(i) for i, s in enumerate(sensors)}
-            def arc_color(row):
-                return sensor_color.get(date_sensor.get(row.pa_left_date, "unknown"), "grey")
-            def node_color(date_str):
-                return sensor_color.get(date_sensor.get(date_str, "unknown"), "grey")
-            legend_handles = [
-                mpatches.Patch(color=sensor_color[s], label=s) for s in sensors
-            ]
-
-        elif color_by == "pzone":
-            pzones = sorted(pairs_gdf["pa_pz_name"].unique())
-            palette = cm.get_cmap("Set2", max(len(pzones), 1))
-            pzone_color = {pz: palette(i) for i, pz in enumerate(pzones)}
-            def arc_color(row):
-                return pzone_color.get(row.pa_pz_name, "grey")
-            def node_color(date_str):
-                return "black"
-            legend_handles = [
-                mpatches.Patch(color=pzone_color[pz], label=pz) for pz in pzones
-            ]
-
-        else:  # "dt"
-            dt_vals = pairs_gdf["pa_dt_years"].astype(float)
-            dt_min, dt_max = dt_vals.min(), dt_vals.max()
-            norm = mcolors.Normalize(vmin=dt_min, vmax=dt_max)
-            cmap = cm.get_cmap("plasma_r")
-            def arc_color(row):
-                return cmap(norm(float(row.pa_dt_years)))
-            def node_color(date_str):
-                return "black"
-            sm = cm.ScalarMappable(cmap=cmap, norm=norm)
-            legend_handles = [sm]
-
-        # --- figure setup -------------------------------------------------------
-        if ax is None:
-            fig, ax = plt.subplots(figsize=figsize)
-        else:
-            fig = ax.get_figure()
-
-        # --- Bézier arc helper --------------------------------------------------
-        def _draw_arc(x1: float, x2: float, height: float, color, lw: float = 1.5, alpha: float = 0.75):
-            verts = [(x1, 0.0), (x1, height), (x2, height), (x2, 0.0)]
-            codes = [MplPath.MOVETO, MplPath.CURVE4, MplPath.CURVE4, MplPath.CURVE4]
-            patch = mpatches.PathPatch(
-                MplPath(verts, codes),
-                facecolor="none", edgecolor=color, lw=lw, alpha=alpha,
-            )
-            ax.add_patch(patch)
-
-        # --- draw each pair as an arc -------------------------------------------
-        for row in pairs_gdf.itertuples(index=False):
-            x1 = date_x[row.pa_left_date]
-            x2 = date_x[row.pa_right_date]
-            if x1 == x2:
-                continue
-            height = max(float(row.pa_dt_years) * 0.5, 0.05)
-            _draw_arc(x1, x2, height, arc_color(row))
-
-        # --- timeline and date nodes --------------------------------------------
-        x_vals = list(date_x.values())
-        ax.axhline(0, color="black", lw=0.8, zorder=1)
-        for date_str, x in date_x.items():
-            ax.scatter(x, 0, color=node_color(date_str), s=60, zorder=3,
-                       edgecolors="black", linewidths=0.5)
-
-        # --- axes formatting ----------------------------------------------------
-        x_pad = (max(x_vals) - min(x_vals)) * 0.03 if len(x_vals) > 1 else 0.1
-        ax.set_xlim(min(x_vals) - x_pad, max(x_vals) + x_pad)
-        ax.set_ylim(-0.05, None)
-
-        ax.set_xticks(list(date_x.values()))
-        ax.set_xticklabels(list(date_x.keys()), rotation=45, ha="right", fontsize=8)
-        ax.set_yticks([])
-        ax.set_ylabel("")
-        for spine in ("left", "right", "top", "bottom"):
-            ax.spines[spine].set_visible(False)
-
-        n_pairs = len(pairs_gdf)
-        ax.set_title(
-            f"Pair network — {n_pairs} pair{'s' if n_pairs != 1 else ''} "
-            f"({len(all_date_strs)} acquisition dates)",
-            fontsize=10,
+        return gmc_fn.plot_pairs_network(
+            self._pairs_frame(criterias), figsize=figsize, color_by=color_by,
+            ax=ax, **style,
         )
-
-        if color_by == "dt":
-            fig.colorbar(legend_handles[0], ax=ax, orientation="vertical",
-                         label="Time delta (years)", fraction=0.03, pad=0.02)
-        else:
-            ax.legend(handles=legend_handles, title=color_by.capitalize(),
-                      loc="upper left", fontsize=8, title_fontsize=9)
-
-        fig.tight_layout()
-        return fig, ax
 
     def plot_pairs_chord(
         self,
         criterias: str | list[str] = "",
         figsize: tuple[int, int] = (10, 10),
+        **style,
     ) -> tuple:
-        """Plot built image pairs as a chord diagram.
+        """Plot built image pairs as a time-proportional chord diagram.
 
-        Dates are arranged in a circle, each pair is a chord (line) connecting
-        its two dates. Date nodes are coloured by viridis (temporal progression),
-        and chord lines are black.
+        Dates sit on a circle **proportionally to time** — Jan 1 at the top,
+        running clockwise — so seasonal clustering and gaps in the archive are
+        immediately visible.  The colour ring encodes position within the covered
+        period, ``|`` ticks mark each Jan 1, and every pair is a Bézier chord
+        whose bow depth grows with its temporal baseline.
 
         Args:
             criterias: passed to get_pairs_overview() to filter pairs.
             figsize: matplotlib figure size.
+            style: geometry and styling options forwarded to
+                :func:`~geomulticorr.utils.gmc_functions.plot_pairs_chord` —
+                ``cmap``, ``n_color_segments``, ``outer_radius``, ``ring_width``,
+                ``link_radius``, ``label_radius``, ``show_year_ticks``,
+                ``year_tick_length`` / ``_linewidth`` / ``_color``,
+                ``show_year_labels``, ``year_label_fontsize`` / ``_color``,
+                ``link_color`` / ``_linewidth`` / ``_alpha`` / ``_curvature``,
+                ``border_color`` / ``_linewidth``, ``show_date_nodes``,
+                ``node_size``, ``xylim``, ``n_bezier_points``, ``dedupe``,
+                ``fig_name``, ``ax``.
 
         Returns:
             (fig, ax) tuple.
+
+        Note:
+            Duplicate unordered couples are dropped by default (``dedupe=True``):
+            the ``redundancy`` and ``forward-backward`` strategies emit each
+            couple twice, which would otherwise overplot every chord and double
+            its apparent opacity.
         """
-        import matplotlib.pyplot as plt
-        import matplotlib.cm as cm
-        import matplotlib.colors as mcolors
-        import numpy as np
+        from geomulticorr.utils import gmc_functions as gmc_fn
 
-        pairs_gdf = self.get_pairs_overview(criterias)
-        if pairs_gdf.empty:
-            raise ValueError("No pairs found. Build pairs first with update_pairs().")
-
-        # --- decimal-year helper ------------------------------------------------
-        def _to_dec(date_str: str) -> float:
-            dt = pd.Timestamp(date_str)
-            yr = dt.year
-            return yr + (dt - pd.Timestamp(yr, 1, 1)) / pd.Timedelta(days=365.25)
-
-        # --- unique sorted dates ------------------------------------------------
-        left_dates = pairs_gdf["pa_left_date"].tolist()
-        right_dates = pairs_gdf["pa_right_date"].tolist()
-        all_date_strs = sorted(set(left_dates + right_dates))
-        n_dates = len(all_date_strs)
-
-        if n_dates < 2:
-            raise ValueError("Need at least 2 dates to draw a chord diagram.")
-
-        # --- place dates on circle (full 360°) ----------------------------------
-        angles = np.linspace(0, 2 * np.pi, n_dates, endpoint=False)
-        date_angle: dict[str, float] = {d: angles[i] for i, d in enumerate(all_date_strs)}
-        date_xy: dict[str, tuple] = {
-            d: (np.cos(date_angle[d]), np.sin(date_angle[d]))
-            for d in all_date_strs
-        }
-
-        # --- colour dates by viridis (decimal year) ----------------------------
-        dec_years = np.array([_to_dec(d) for d in all_date_strs])
-        norm = mcolors.Normalize(vmin=dec_years.min(), vmax=dec_years.max())
-        cmap = cm.get_cmap("viridis")
-
-        # --- figure setup -------------------------------------------------------
-        fig, ax = plt.subplots(figsize=figsize, subplot_kw=dict(aspect="equal"))
-
-        # --- draw chords (pair lines) in black ----------------------------------
-        for row in pairs_gdf.itertuples(index=False):
-            x1, y1 = date_xy[row.pa_left_date]
-            x2, y2 = date_xy[row.pa_right_date]
-            ax.plot([x1, x2], [y1, y2], color="black", lw=0.8, alpha=0.6, zorder=1)
-
-        # --- draw date nodes on circle, coloured by viridis --------------------
-        for date_str, (x, y) in date_xy.items():
-            dec_yr = _to_dec(date_str)
-            color = cmap(norm(dec_yr))
-            ax.scatter(x, y, s=100, color=color, edgecolors="black", linewidths=0.8,
-                       zorder=3, alpha=0.9)
-
-        # --- labels around the circle (rotated) ---------------------------------
-        for date_str, (x, y) in date_xy.items():
-            angle_deg = date_angle[date_str] * 180 / np.pi
-            # Adjust label position to be slightly outside the circle
-            offset = 1.15
-            label_x = offset * x
-            label_y = offset * y
-            # Rotate text to align radially
-            ha = "center"
-            if 90 < angle_deg < 270:
-                angle_deg += 180  # flip for readability
-                ha = "center"
-            ax.text(label_x, label_y, date_str, fontsize=7, ha=ha, va="center",
-                    rotation_mode="anchor", rotation=angle_deg)
-
-        # --- clean up axes ------------------------------------------------------
-        ax.set_xlim(-1.5, 1.5)
-        ax.set_ylim(-1.5, 1.5)
-        ax.set_xticks([])
-        ax.set_yticks([])
-        for spine in ax.spines.values():
-            spine.set_visible(False)
-
-        n_pairs = len(pairs_gdf)
-        ax.set_title(
-            f"Pair network (chord diagram) — {n_pairs} pair{'s' if n_pairs != 1 else ''} "
-            f"({n_dates} acquisition dates)",
-            fontsize=11, pad=20,
+        return gmc_fn.plot_pairs_chord(
+            self._pairs_frame(criterias), figsize=figsize, **style,
         )
 
-        # --- colorbar for viridis (time progression) ---------------------------
-        sm = cm.ScalarMappable(cmap=cmap, norm=norm)
-        sm.set_array([])
-        cbar = fig.colorbar(sm, ax=ax, orientation="vertical", fraction=0.03, pad=0.02)
-        cbar.set_label("Acquisition year", fontsize=9)
+    def save_pairs_figure(
+        self,
+        view: str = "baseline",
+        *,
+        criterias: str | list[str] = "",
+        frame: pd.DataFrame | None = None,
+        formats: str | list[str] | tuple[str, ...] = ("html", "png"),
+        stem: str | None = None,
+        subdir: str = "pairs",
+        title: str = "",
+        dpi: int = 300,
+        figsize: tuple[float, float] | None = None,
+        plotlyjs: bool | str = True,
+        overwrite: bool = True,
+        **view_kwargs,
+    ) -> dict:
+        """Save a pair figure into ``figures_<project>/<subdir>/``.
 
-        fig.tight_layout()
-        return fig, ax
+        Writes the chosen view twice: a self-contained interactive ``.html``
+        (plotly — opens with no network access) and a publication-quality
+        ``.png`` / ``.jpg`` / ``.pdf`` / ``.svg`` (matplotlib).  No ``kaleido``
+        needed.
+
+        Args:
+            view: "baseline" | "chord" | "network" | "dt_hist".
+            criterias: passed to get_pairs_overview() when *frame* is None.
+            frame: pairs to draw. None reads the **committed** pairs from the
+                geodatabase; :meth:`explore_pairs_strategy` passes its in-memory
+                candidate frame, which is never written to disk and so could not
+                be re-read.
+            formats: any of "html", "png", "jpg", "pdf", "svg".
+            stem: file stem; when omitted a deterministic one is built from the
+                pzone, view, strategy, max_step and Δt window — so re-running
+                refreshes the same files instead of piling up copies.
+            overwrite: replace a file of the same name (default). False appends
+                _01, _02… instead.
+            subdir: subdirectory under figures_<project>/.
+            title: figure title, applied to both backends.
+            dpi: raster resolution for the matplotlib output.
+            figsize: matplotlib figure size; a per-view default is used otherwise.
+            plotlyjs: True inlines plotly.js (offline-capable, ~3 MB); "cdn"
+                gives a small file that needs a network connection to render.
+            view_kwargs: view options (``dedupe``, ``show_arrows``, ``color_by``,
+                ``mirror_direction``, ``nbins``…), filtered per backend.
+
+        Returns:
+            ``{format: Path}`` for every file written.
+        """
+        from geomulticorr.utils._pairs_export import pairs_figure_stem, save_pairs_figure
+
+        if frame is None:
+            frame = self._pairs_frame(criterias)
+
+        out_dir = pathlib.Path(
+            getattr(self, "path_figures", self.path_root / f"figures_{self.project_name}")
+        ) / subdir
+
+        if stem is None:
+            # _last_pairs_params holds exactly the six keys pairs_figure_stem takes
+            # (and that update_pairs accepts) — see the note in _stash().
+            params = getattr(self, "_last_pairs_params", None) or {"strategy": "committed"}
+            stem = pairs_figure_stem(view, **params)
+
+        paths = save_pairs_figure(
+            frame, out_dir, view=view, formats=formats, stem=stem, title=title,
+            dpi=dpi, figsize=figsize, plotlyjs=plotlyjs, view_kwargs=view_kwargs,
+            overwrite=overwrite,
+        )
+        logger.success(f"Saved {view} figure to {out_dir} ({', '.join(paths)}).")
+        return paths
 
     # ── Pairing-strategy exploration ────────────────────────────────────────────
 
@@ -1888,21 +1803,59 @@ class Session:
         "forward-backward": set(),
     }
 
+    #: Controls each explorer view uses.  Independent of ``_STRATEGY_CONTROLS`` —
+    #: the two sets are unioned to decide what is visible.
+    _VIEW_CONTROLS: dict[str, set[str]] = {
+        "baseline": set(),
+        "chord": {"dedupe", "arrows"},
+        "network": {"color_by", "dedupe", "mirror"},
+        "dt_hist": {"bins"},
+    }
+
+    #: Sensible ``dedupe`` per view, applied when the view changes.  Chord wants
+    #: couples merged (overplotting doubles a chord's apparent opacity); network
+    #: wants them kept, otherwise mirroring has no backward arcs to show.
+    _VIEW_DEDUPE_DEFAULT: dict[str, bool] = {"chord": True, "network": False}
+
+    #: What one drawn element means in each view, for the summary line.
+    _DRAWN_NOUN: dict[str, str] = {
+        "baseline": "points drawn",
+        "chord": "chords drawn",
+        "network": "arcs drawn",
+        "dt_hist": "pairs binned",
+    }
+
+    #: Keyword arguments ``explore_pairs_strategy`` accepts through ``**defaults``.
+    #: Anything else is a typo and raises, rather than being silently ignored.
+    _EXPLORER_DEFAULTS: set[str] = {
+        "max_step", "max_dt_days", "min_dt_days", "sensor_filter",
+    }
+
     def explore_pairs_strategy(self, strategy: str = "consecutive", pz_name: str = "",
+                               view: str = "baseline", interactive: bool = True,
+                               savefig: bool = True,
+                               formats: str | list[str] | tuple[str, ...] = ("html", "png"),
                                **defaults):
         """Interactive Plotly + ipywidgets tool to preview pairing strategies.
 
-        Renders a live scatter of **Δt vs pair midpoint date**, one point per
-        candidate pair, split into two traces by direction (forward circles +
-        backward diamonds). Dropdowns/sliders recompute the candidate pairs on
-        every change *without* touching the geodatabase, so different strategies
-        can be compared before committing with :meth:`update_pairs`.
+        Recomputes the candidate pairs on every control change *without* touching
+        the geodatabase, so strategies can be compared before committing them with
+        :meth:`update_pairs`.  Four views of the same candidate set are available
+        from the ``plot`` dropdown:
+
+        ==============  ==============================================================
+        ``baseline``    Δt vs pair midpoint date — coverage and baseline spread.
+        ``chord``       Time-proportional circle — seasonal clustering, redundancy.
+        ``network``     Timeline with one arc per pair — who connects to whom.
+        ``dt_hist``     Distribution of temporal baselines.
+        ==============  ==============================================================
 
         Follows the same fast pattern as
         :meth:`~geomulticorr.inversion.tio_inversion.TIOInversion.explore_weights`:
         the (expensive) ``Thumb`` objects are read **once** at setup, then every
         control change only re-runs pure integer/date arithmetic — no ``Thumb``
-        or ``Pair`` object is reconstructed inside the interactive loop.
+        or ``Pair`` object is reconstructed inside the interactive loop.  Switching
+        view does not even recompute the pairs; the frame is cached.
 
         The tuned parameters are stored on ``self._last_pairs_params`` so they can
         be committed directly::
@@ -1910,23 +1863,71 @@ class Session:
             session.explore_pairs_strategy()                 # tune interactively
             session.update_pairs(**session._last_pairs_params)
 
+        The **Save figure** button writes whatever is on screen — including the
+        candidate pairs, which never reach the geodatabase — into
+        ``figures_<project>/pairs/`` as an offline-capable ``.html`` plus the
+        publication-quality formats ticked in the list.  See
+        :meth:`save_pairs_figure` for the scripted equivalent.
+
         Requires plotly and ipywidgets (Jupyter). Returns the assembled
         ``ipywidgets.VBox`` (also displays inline in a notebook).
 
-        :param strategy: Initial strategy selected in the dropdown.
-        :param pz_name: Restrict to a single pzone (default: all pzones).
-        :param defaults: Initial values for any control (``max_step``,
-            ``max_dt_days``, ``min_dt_days``, ``sensor_filter``).
-        :returns: An ``ipywidgets.VBox`` containing the controls and figure.
-        """
-        import ipywidgets as widgets
-        import plotly.graph_objects as go
-        from IPython.display import display as _ipy_display
+        **Non-interactive mode** — pass ``interactive=False`` to skip the widgets
+        entirely and just get the results for the arguments given::
 
-        # --- decimal-year helper (shared convention with plot_pairs_network) ----
-        def _to_dec(ts: pd.Timestamp) -> float:
-            yr = ts.year
-            return yr + (ts - pd.Timestamp(yr, 1, 1)) / pd.Timedelta(days=365.25)
+            frame, fig = session.explore_pairs_strategy(
+                strategy="redundancy", max_step=17, view="chord", interactive=False)
+            session.update_pairs(**session._last_pairs_params)   # same commit step
+
+        ``frame`` is the candidate pairs table, ``fig`` the plotly figure for
+        *view* — built but never displayed, so it can be shown, saved with
+        ``fig.write_html(…)`` or ignored.  This path imports no ipywidgets and
+        needs no display, which makes it the one to use from a script or a batch
+        job.  ``self._last_pairs_params`` is stashed exactly as in the interactive
+        mode.
+
+        By default it also **writes the figure** to ``figures_<project>/pairs/``
+        under a deterministic name built from the pzone, view, strategy,
+        ``max_step`` and Δt window — so a sweep produces one predictable file set
+        and re-running refreshes it rather than piling up copies.  Pass
+        ``savefig=False`` to skip.
+
+        :param strategy: Pairing strategy (initial dropdown value when interactive).
+        :param pz_name: Restrict to a single pzone (default: all pzones).
+        :param view: Plot kind — ``"baseline"``, ``"chord"``, ``"network"`` or
+            ``"dt_hist"``.
+        :param interactive: ``True`` (default) builds the widget; ``False`` returns
+            ``(frame, fig)`` for the arguments given, with no UI.
+        :param savefig: Non-interactive mode only — write the figure to disk.
+            Ignored when *interactive* (the widget has a **Save figure** button).
+        :param formats: Formats written when *savefig*; any of
+            ``"html"``, ``"png"``, ``"jpg"``, ``"pdf"``, ``"svg"``.
+        :param defaults: ``max_step``, ``max_dt_days``, ``min_dt_days``,
+            ``sensor_filter`` — initial control values when interactive, the actual
+            parameters when not.  ``max_step`` defaults to 2 in both modes and is
+            clamped to the largest useful value for the data.
+        :returns: An ``ipywidgets.VBox`` when *interactive*, else
+            ``(frame, fig)``.
+        """
+        from geomulticorr.utils import _pairs_plotly as gmc_plotly
+        from geomulticorr.utils._pairs_frame import (
+            empty_pairs_frame,
+            format_pairs_summary,
+            pairs_frame_from_indices,
+            pairs_stats,
+            unique_couples,
+        )
+
+        if view not in gmc_plotly.VIEW_BUILDERS:
+            raise ValueError(
+                f"Unknown view '{view}'. Valid options: {sorted(gmc_plotly.VIEW_BUILDERS)}."
+            )
+        unknown = set(defaults) - self._EXPLORER_DEFAULTS
+        if unknown:
+            raise TypeError(
+                f"Unexpected argument(s) {sorted(unknown)}. "
+                f"Valid options: {sorted(self._EXPLORER_DEFAULTS)}."
+            )
 
         # --- setup: read Thumb objects ONCE, cache sorted-by-date per pzone -----
         pzones = self.get_pzones(pz_name)
@@ -1936,51 +1937,164 @@ class Session:
             thumbs_by_pz[pz.pz_name] = ths
         pz_options = ["<all>"] + list(thumbs_by_pz.keys())
 
-        def _compute():
-            """Pure recompute — no I/O, no Thumb/Pair construction."""
-            strat = c_strategy.value
-            max_step = int(c_step.value) if strat in ("step", "redundancy") else None
-            max_dt = c_maxdt.value or None
-            min_dt = c_mindt.value or None
-            sfilter = (c_sensor.value or "").strip()
-            sel_pz = c_pz.value
+        def _selected_thumbs(sel_pz: str, sfilter: str) -> list[tuple[str, list]]:
+            """``(pzone name, thumbs)`` per pzone under the current filters.
 
-            rows: list[dict] = []
+            The sensor filter is a substring match on the thumb path — the same
+            semantics as ``get_valid_thumbs(sensor_filter=…)``, applied here to the
+            list read once at setup so no raster is reopened.
+            """
+            out = []
             for pzn, ths in thumbs_by_pz.items():
                 if sel_pz != "<all>" and pzn != sel_pz:
                     continue
-                # sensor filter = substring match on the thumb path (same semantics
-                # as get_valid_thumbs' sensor_filter), applied here without re-I/O.
-                sel = [t for t in ths if (not sfilter or sfilter.lower() in t.th_path.lower())]
-                n = len(sel)
-                for i, j in gmc_pzone._strategy_pair_indices(n, strat, max_step):
-                    dt_days = abs((sel[j].th_date_datetime - sel[i].th_date_datetime).days)
-                    if max_dt is not None and dt_days > max_dt:
-                        continue
-                    if min_dt is not None and dt_days < min_dt:
-                        continue
-                    mid = sel[i].th_date_datetime + (sel[j].th_date_datetime - sel[i].th_date_datetime) / 2
-                    direction = "forward" if i < j else "backward"
-                    rows.append(dict(
-                        mid_dec=_to_dec(mid), dt_days=dt_days, direction=direction,
-                        pz=pzn, date_i=sel[i].th_date, date_j=sel[j].th_date,
-                        sensor_i=sel[i].th_sensor, sensor_j=sel[j].th_sensor,
-                    ))
-            return rows
+                out.append(
+                    (pzn,
+                     [t for t in ths if (not sfilter or sfilter.lower() in t.th_path.lower())])
+                )
+            return out
 
-        def _split(rows, direction):
-            sub = [r for r in rows if r["direction"] == direction]
-            x = [r["mid_dec"] for r in sub]
-            y = [r["dt_days"] for r in sub]
-            cd = [[r["pz"], r["date_i"], r["date_j"], r["sensor_i"], r["sensor_j"]] for r in sub]
-            return x, y, cd
+        def _max_useful_step(sel_pz: str | None = None, sfilter: str | None = None) -> int:
+            """Largest ``max_step`` that still adds pairs for the current selection.
+
+            Pairing runs per pzone, so with ``"<all>"`` the bound comes from the
+            largest one.  Beyond ``n - 1`` every further step is a no-op — the
+            strategies clamp to the array bounds — so this is the honest ceiling
+            of the data, not an arbitrary guardrail.
+
+            :param sel_pz: Pzone selection; ``None`` reads the widget.
+            :param sfilter: Sensor substring; ``None`` reads the widget.
+            """
+            if sel_pz is None:
+                sel_pz = c_pz.value
+            if sfilter is None:
+                sfilter = (c_sensor.value or "").strip()
+            counts = [len(sel) for _, sel in _selected_thumbs(sel_pz, sfilter)]
+            return max(1, max(counts, default=1) - 1)
+
+        def _step_tooltip(ceiling: int) -> str:
+            return (
+                "Maximum index offset between paired acquisitions "
+                f"(≤ {ceiling} — pairs every acquisition with every other)"
+            )
+
+        def _build_frame(strat: str, max_step: int | None, max_dt: int | None,
+                         min_dt: int | None, sfilter: str, sel_pz: str) -> pd.DataFrame:
+            """Candidate pairs for an explicit parameter set.
+
+            Pure — no I/O, no ``Thumb``/``Pair`` construction — so it is equally
+            usable from the interactive loop and from a headless call.
+            """
+            frames: list[pd.DataFrame] = []
+            for pzn, sel in _selected_thumbs(sel_pz, sfilter):
+                idx_pairs = gmc_pzone._strategy_pair_indices(len(sel), strat, max_step)
+                frames.append(
+                    pairs_frame_from_indices(
+                        [t.th_date_datetime for t in sel], idx_pairs,
+                        sensors=[t.th_sensor for t in sel], pz=pzn,
+                    )
+                )
+
+            frame = pd.concat(frames, ignore_index=True) if frames else empty_pairs_frame()
+            if len(frame):  # Δt filters, vectorised
+                keep = np.ones(len(frame), dtype=bool)
+                if max_dt is not None:
+                    keep &= frame["dt_days"].to_numpy() <= max_dt
+                if min_dt is not None:
+                    keep &= frame["dt_days"].to_numpy() >= min_dt
+                frame = frame.loc[keep].reset_index(drop=True)
+            return frame
+
+        def _view_defaults(view_key: str) -> dict:
+            """Figure options for a view — the values the widgets also start from,
+            so both modes render the same figure for the same pairs."""
+            if view_key == "network":
+                return dict(color_by="dt", mirror_direction=True,
+                            dedupe=self._VIEW_DEDUPE_DEFAULT.get("network", False))
+            if view_key == "chord":
+                return dict(show_arrows=False,
+                            dedupe=self._VIEW_DEDUPE_DEFAULT.get("chord", True))
+            if view_key == "dt_hist":
+                return dict(nbins=40)
+            return {}
+
+        def _drawn_len(frame: pd.DataFrame, view_key: str, dedupe: bool) -> int:
+            """How many curves/points a view actually renders for *frame*."""
+            if view_key in ("chord", "network") and dedupe:
+                return len(unique_couples(frame))
+            return len(frame)
+
+        def _title_for(frame: pd.DataFrame, view_key: str, strat: str, dedupe: bool) -> str:
+            n_drawn, n_pairs = _drawn_len(frame, view_key, dedupe), len(frame)
+            noun = self._DRAWN_NOUN[view_key]
+            suffix = "" if n_drawn == n_pairs else f" of {n_pairs} pairs"
+            return f"Pairing preview — {n_drawn} {noun}{suffix} [{strat}]"
+
+        def _stash_params(strat: str, max_step: int | None, max_dt: int | None,
+                          min_dt: int | None, sfilter: str | None, pzn: str):
+            # NOTE: exactly the six keys update_pairs(**params) accepts — adding
+            # any view/style key here would raise TypeError at that call.
+            self._last_pairs_params = dict(
+                strategy=strat,
+                max_step=int(max_step) if strat in ("step", "redundancy") else None,
+                max_dt_days=max_dt or None,
+                min_dt_days=min_dt or None,
+                sensor_filter=(sfilter or "").strip() or None,
+                pz_name=pzn,
+            )
+
+        # ── headless path: results only, no widgets, no display ──
+        if not interactive:
+            sfilter = str(defaults.get("sensor_filter", "") or "").strip()
+            ceiling = _max_useful_step("<all>", sfilter)
+            max_step = min(max(int(defaults.get("max_step", 2) or 1), 1), ceiling)
+            max_dt = int(defaults.get("max_dt_days", 0) or 0) or None
+            min_dt = int(defaults.get("min_dt_days", 0) or 0) or None
+
+            frame = _build_frame(
+                strategy,
+                max_step if strategy in ("step", "redundancy") else None,
+                max_dt, min_dt, sfilter, "<all>",
+            )
+            _stash_params(strategy, max_step, max_dt, min_dt, sfilter, pz_name)
+
+            view_kwargs = _view_defaults(view)
+            title = _title_for(frame, view, strategy, view_kwargs.get("dedupe", False))
+            fig = gmc_plotly.VIEW_BUILDERS[view](frame, title=title, **view_kwargs)
+
+            if savefig and len(frame):
+                self.save_pairs_figure(
+                    view=view, frame=frame, formats=formats, title=title,
+                    **view_kwargs,
+                )
+            elif savefig:
+                logger.warning("No pairs to plot — nothing saved.")
+            return frame, fig
+
+        import ipywidgets as widgets
+        from IPython.display import display as _ipy_display
+
+        from geomulticorr.utils._pairs_export import FIGURE_FORMATS
 
         # ── controls ──
+        c_view = widgets.Dropdown(
+            options=[(label, key) for key, label in gmc_plotly.VIEW_LABELS.items()],
+            value=view, description="plot")
         c_strategy = widgets.Dropdown(
             options=["consecutive", "step", "redundancy", "forward-backward"],
             value=strategy, description="strategy")
-        c_step = widgets.IntSlider(value=int(defaults.get("max_step", 2)), min=1, max=10,
-                                   step=1, description="max_step")
+        # The ceiling is the data's, not an arbitrary constant: with n acquisitions
+        # every couple is already paired at max_step = n - 1, and anything beyond
+        # is a no-op.  It is re-fitted by _sync_step_range() when the pzone or
+        # sensor filter changes the number of acquisitions in play.
+        _step_ceiling = _max_useful_step(
+            "<all>", str(defaults.get("sensor_filter", "") or "").strip()
+        )
+        c_step = widgets.IntSlider(
+            value=min(max(int(defaults.get("max_step", 2)), 1), _step_ceiling),
+            min=1, max=_step_ceiling, step=1, description="max_step",
+            tooltip=_step_tooltip(_step_ceiling),
+        )
         c_maxdt = widgets.IntText(value=int(defaults.get("max_dt_days", 0) or 0),
                                   description="max_dt (d)")
         c_mindt = widgets.IntText(value=int(defaults.get("min_dt_days", 0) or 0),
@@ -1988,29 +2102,52 @@ class Session:
         c_sensor = widgets.Text(value=str(defaults.get("sensor_filter", "") or ""),
                                 description="sensor")
         c_pz = widgets.Dropdown(options=pz_options, value="<all>", description="pzone")
+        # view-specific controls (hidden unless the active view uses them)
+        c_colorby = widgets.Dropdown(options=["dt", "direction", "sensor", "pzone"],
+                                     value="dt", description="colour")
+        c_bins = widgets.IntSlider(value=40, min=10, max=100, step=5, description="bins")
+        # Same per-view default the dropdown applies on switch — without it,
+        # opening straight onto the network view would dedupe away every backward
+        # pair and make "mirror directions" look broken.
+        c_dedupe = widgets.Checkbox(value=self._VIEW_DEDUPE_DEFAULT.get(view, True),
+                                    description="dedupe couples", indent=False)
+        c_arrows = widgets.Checkbox(value=False, description="arrowheads", indent=False)
+        c_mirror = widgets.Checkbox(value=True, description="mirror directions",
+                                    indent=False)
+        # save row — the file name is derived from the pairing parameters, so the
+        # only choices left are which formats to write.
+        c_formats = widgets.SelectMultiple(options=list(FIGURE_FORMATS),
+                                           value=("html", "png"),
+                                           rows=len(FIGURE_FORMATS),
+                                           description="formats")
+        b_save = widgets.Button(description="Save figure", icon="save")
 
         def _apply_visibility():
-            relevant = self._STRATEGY_CONTROLS.get(c_strategy.value, set())
-            c_step.layout.display = None if "max_step" in relevant else "none"
+            """Show only the controls the current strategy *and* view actually use."""
+            relevant = (self._STRATEGY_CONTROLS.get(c_strategy.value, set())
+                        | self._VIEW_CONTROLS.get(c_view.value, set()))
+            for widget, key in ((c_step, "max_step"), (c_colorby, "color_by"),
+                                (c_bins, "bins"), (c_dedupe, "dedupe"),
+                                (c_arrows, "arrows"), (c_mirror, "mirror")):
+                widget.layout.display = None if key in relevant else "none"
 
-        def _stash():
-            self._last_pairs_params = dict(
-                strategy=c_strategy.value,
-                max_step=int(c_step.value) if c_strategy.value in ("step", "redundancy") else None,
-                max_dt_days=c_maxdt.value or None,
-                min_dt_days=c_mindt.value or None,
-                sensor_filter=(c_sensor.value or "").strip() or None,
-                pz_name="" if c_pz.value == "<all>" else c_pz.value,
+        def _compute() -> pd.DataFrame:
+            """Recompute from the current control values."""
+            strat = c_strategy.value
+            return _build_frame(
+                strat,
+                int(c_step.value) if strat in ("step", "redundancy") else None,
+                c_maxdt.value or None,
+                c_mindt.value or None,
+                (c_sensor.value or "").strip(),
+                c_pz.value,
             )
 
-        rows = _compute()
-        _stash()
-        fx, fy, fcd = _split(rows, "forward")
-        bx, by, bcd = _split(rows, "backward")
-
-        _hover = ("pzone=%{customdata[0]}<br>Δt=%{y:.0f} d"
-                  "<br>%{customdata[1]} (%{customdata[3]})"
-                  " → %{customdata[2]} (%{customdata[4]})<extra></extra>")
+        def _stash():
+            _stash_params(
+                c_strategy.value, c_step.value, c_maxdt.value, c_mindt.value,
+                c_sensor.value, "" if c_pz.value == "<all>" else c_pz.value,
+            )
 
         # A plain ``go.Figure`` redrawn inside an ``Output`` is used instead of a
         # ``go.FigureWidget``: since plotly 6 the latter is an *anywidget*, whose
@@ -2018,66 +2155,169 @@ class Session:
         # fails to load ("No version of module anywidget is registered"). Core
         # ipywidgets + the built-in plotly renderer work everywhere, offline.
         plot_out = widgets.Output()
+        summary = widgets.HTML()
+        status = widgets.HTML()
+        state: dict = {}
 
-        def _draw(fx, fy, fcd, bx, by, bcd, n_rows):
-            fig = go.Figure(
-                data=[
-                    go.Scatter(x=fx, y=fy, mode="markers", name="forward", customdata=fcd,
-                               opacity=0.75, marker=dict(size=9, symbol="circle", color="#1f77b4"),
-                               hovertemplate="dir=forward<br>" + _hover),
-                    go.Scatter(x=bx, y=by, mode="markers", name="backward", customdata=bcd,
-                               opacity=0.75, marker=dict(size=9, symbol="diamond", color="#ff7f0e"),
-                               hovertemplate="dir=backward<br>" + _hover),
-                ]
-            )
-            fig.update_layout(
-                title=f"Pairing preview — {n_rows} pairs [{c_strategy.value}]",
-                xaxis_title="Pair midpoint date (decimal year)",
-                yaxis_title="Temporal baseline Δt (days)",
-                template="plotly_white", height=460,
+        def _view_kwargs() -> dict:
+            """View options, shared by the figure on screen and the saved one."""
+            view_key = c_view.value
+            if view_key == "network":
+                return dict(color_by=c_colorby.value, dedupe=c_dedupe.value,
+                            mirror_direction=c_mirror.value)
+            if view_key == "chord":
+                return dict(dedupe=c_dedupe.value, show_arrows=c_arrows.value)
+            if view_key == "dt_hist":
+                return dict(nbins=int(c_bins.value))
+            return {}
+
+        def _drawn_frame() -> pd.DataFrame:
+            """The subset the current view actually renders (dedupe applied)."""
+            frame = state["frame"]
+            if c_view.value in ("chord", "network") and c_dedupe.value:
+                return unique_couples(frame)
+            return frame
+
+        def _n_drawn() -> int:
+            """How many curves/points the current view actually shows."""
+            return _drawn_len(state["frame"], c_view.value, c_dedupe.value)
+
+        def _sync_direction_state():
+            """Grey out "mirror directions" when there is nothing to mirror.
+
+            Two ways to end up with no backward pairs, both easy to mistake for a
+            broken checkbox:
+
+            * ``consecutive`` and ``step`` are **forward-only** strategies — they
+              emit only ``(i, j)`` with ``i < j``, so no arc can go below the axis;
+            * ``dedupe`` keeps the first of each couple, which is the forward one,
+              so ticking it on a bidirectional strategy removes every backward arc.
+            """
+            drawn = _drawn_frame()
+            has_backward = bool(len(drawn)) and (drawn["direction"] == "backward").any()
+            c_mirror.disabled = not has_backward
+            if has_backward:
+                c_mirror.tooltip = "Draw backward (j → i) pairs below the timeline"
+            elif c_view.value in ("chord", "network") and c_dedupe.value and len(
+                state["frame"]
+            ) and (state["frame"]["direction"] == "backward").any():
+                c_mirror.tooltip = (
+                    "Nothing to mirror: 'dedupe couples' merged each couple down to "
+                    "its forward pair. Untick it to see both directions."
+                )
+            else:
+                c_mirror.tooltip = (
+                    f"Nothing to mirror: '{c_strategy.value}' is forward-only, so "
+                    "there are no backward pairs. Use 'redundancy' or "
+                    "'forward-backward' to build them."
+                )
+
+        def _fig_title() -> str:
+            return _title_for(state["frame"], c_view.value, c_strategy.value,
+                              c_dedupe.value)
+
+        def _draw():
+            """Render the cached frame with the active view builder."""
+            fig = gmc_plotly.VIEW_BUILDERS[c_view.value](
+                state["frame"], title=_fig_title(), **_view_kwargs()
             )
             with plot_out:
                 plot_out.clear_output(wait=True)
                 _ipy_display(fig)
 
-        summary = widgets.HTML()
-
-        def _render_summary(rows):
-            n = len(rows)
-            if n == 0:
-                summary.value = "<b>0 pairs</b>"
-                return
-            dts = [r["dt_days"] for r in rows]
-            sensors: dict[str, int] = {}
-            for r in rows:
-                for s in (r["sensor_i"], r["sensor_j"]):
-                    sensors[s] = sensors.get(s, 0) + 1
-            sens_txt = ", ".join(f"{s}: {c}" for s, c in sorted(sensors.items()))
-            summary.value = (
-                f"<b>{n} pairs</b> &nbsp;|&nbsp; "
-                f"Δt min/mean/max = {min(dts)} / {sum(dts) / n:.0f} / {max(dts)} d "
-                f"&nbsp;|&nbsp; sensor endpoints: {sens_txt}"
+        def _render_summary():
+            summary.value = format_pairs_summary(
+                pairs_stats(state["frame"], strategy=c_strategy.value),
+                drawn=_n_drawn(), drawn_label=self._DRAWN_NOUN[c_view.value],
             )
 
-        def _update(_change=None):
+        def _redraw(change=None):
+            """View-only change — reuse the cached frame, never re-pair."""
+            if state.get("syncing"):
+                return
+            # switching view re-applies that view's sensible dedupe default
+            if change is not None and change.get("owner") is c_view:
+                want = self._VIEW_DEDUPE_DEFAULT.get(c_view.value)
+                if want is not None and c_dedupe.value != want:
+                    state["syncing"] = True
+                    try:
+                        c_dedupe.value = want
+                    finally:
+                        state["syncing"] = False
             _apply_visibility()
-            rows = _compute()
+            _sync_direction_state()
+            _draw()
+            _render_summary()
+
+        def _sync_step_range():
+            """Re-fit the max_step ceiling to the pzone/sensor selection.
+
+            Lowering ``max`` below ``value`` clamps the value *and* fires a change
+            event, so this runs behind the syncing guard to keep the clamp from
+            re-entering :func:`_update`.
+            """
+            ceiling = _max_useful_step()
+            if ceiling == c_step.max:
+                return
+            state["syncing"] = True
+            try:
+                # order matters: never let traitlets see value > max
+                if ceiling < c_step.max:
+                    c_step.value = min(c_step.value, ceiling)
+                    c_step.max = ceiling
+                else:
+                    c_step.max = ceiling
+                c_step.tooltip = _step_tooltip(ceiling)
+            finally:
+                state["syncing"] = False
+
+        def _update(_change=None):
+            """Pairing change — recompute the candidate pairs, then redraw."""
+            if state.get("syncing"):
+                return
+            _sync_step_range()
+            _apply_visibility()
+            state["frame"] = _compute()
             _stash()
-            fx, fy, fcd = _split(rows, "forward")
-            bx, by, bcd = _split(rows, "backward")
-            _draw(fx, fy, fcd, bx, by, bcd, len(rows))
-            _render_summary(rows)
+            _sync_direction_state()
+            _draw()
+            _render_summary()
+
+        def _on_save(_button):
+            # Never let this raise: an uncaught exception in a widget callback
+            # only reaches the kernel log, which VSCode usually hides.
+            b_save.disabled = True
+            status.value = "<i>saving…</i>"
+            try:
+                paths = self.save_pairs_figure(
+                    view=c_view.value, frame=state["frame"],
+                    formats=tuple(c_formats.value) or ("html",),
+                    title=_fig_title(), **_view_kwargs(),
+                )
+                names = " ".join(f"<code>{p.name}</code>" for p in paths.values())
+                folder = next(iter(paths.values())).parent
+                status.value = (f"<span style='color:#2a7'>✔ saved to</span> "
+                                f"<code>{folder}</code><br>{names}")
+            except Exception as exc:
+                logger.error(f"save_pairs_figure failed: {exc!r}")
+                status.value = (f"<span style='color:#c33'>✘ save failed — "
+                                f"{type(exc).__name__}: {exc}</span>")
+            finally:
+                b_save.disabled = False
 
         for c in (c_strategy, c_step, c_maxdt, c_mindt, c_sensor, c_pz):
             c.observe(_update, names="value")
+        for c in (c_view, c_colorby, c_bins, c_dedupe, c_arrows, c_mirror):
+            c.observe(_redraw, names="value")
+        b_save.on_click(_on_save)
 
-        _apply_visibility()
-        _draw(fx, fy, fcd, bx, by, bcd, len(rows))
-        _render_summary(rows)
+        _update()
 
-        row1 = widgets.HBox([c_strategy, c_step, c_pz])
+        row1 = widgets.HBox([c_view, c_strategy, c_step, c_pz])
         row2 = widgets.HBox([c_maxdt, c_mindt, c_sensor])
-        return widgets.VBox([row1, row2, plot_out, summary])
+        row3 = widgets.HBox([c_colorby, c_bins, c_dedupe, c_arrows, c_mirror])
+        row4 = widgets.HBox([c_formats, b_save])
+        return widgets.VBox([row1, row2, row3, plot_out, summary, status, row4])
 
     @staticmethod
     def _compute_canonical_grid(
