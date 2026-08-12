@@ -1,5 +1,5 @@
 from pathlib import Path
-from tqdm import tqdm 
+from tqdm import tqdm
 
 import itertools
 import rasterio
@@ -69,11 +69,16 @@ class Pzone:
     def __init__(self, target_pz_name, session):
         # Verifying the validity of the pzone name in relation to the session
         assert target_pz_name in session.pz_names, f'{target_pz_name} not existing in the Pzones layer'
-        assert Path(session.path_raster_data, target_pz_name).absolute().exists(), f'no raster data folder for {target_pz_name}'
+        pz_folder = session.pz_dir(target_pz_name)
+        assert pz_folder.absolute().exists(), f'no pzone folder for {target_pz_name}'
         # Writing attributes
         self.session = session
         self.pz_name = target_pz_name
-        self.pz_dem_path = Path(self.session.path_raster_data, self.pz_name, f"{self.pz_name}_dem.tif")
+        self.pz_dem_path = session.pz_dir(self.pz_name, "reference_dem") / f"{self.pz_name}_dem.tif"
+
+    def dir(self, kind: str | None = None) -> Path:
+        """Directory for `kind` inside this pzone (thin wrapper on session.pz_dir)."""
+        return self.session.pz_dir(self.pz_name, kind)
 
     def get_thumbs_overview(self, criterias=''):
         criterias = [criterias] + [self.pz_name]
@@ -308,12 +313,15 @@ class Pzone:
 
     def vectorize_multitemporal_moving_areas(self, epsg, min_surf = '', operator_size=30, n_clusters=2, mode='m'):
         mask = None
+        masks_dir = self.dir("masks")
+        raster_path = masks_dir / f"{self.pz_name}_moving-areas_round-0.tif"
+        gpkg_path = masks_dir / f"{self.pz_name}_moving-areas_round-0.gpkg"
         with rasterio.Env():
-            with rasterio.open(str(Path(self.session.path_raster_data, self.pz_name, f"{self.pz_name}_moving-areas_round-0.tif"))) as src:
+            with rasterio.open(str(raster_path)) as src:
                 image = src.read(1) # first band
                 results = (
                 {'properties': {'raster_val': v}, 'geometry': s}
-                for i, (s, v) 
+                for i, (s, v)
                 in enumerate(
                     shapes(image, mask=mask, transform=src.transform)))
         geoms = list(results)
@@ -321,6 +329,6 @@ class Pzone:
         gpd_polygonized_raster = gpd_polygonized_raster[gpd_polygonized_raster.raster_val == 1]
         if min_surf != '':
             gpd_polygonized_raster = gpd_polygonized_raster[gpd_polygonized_raster.area / 1000 > min_surf]
-            gpd_polygonized_raster.to_file(str(Path(self.session.path_raster_data, self.pz_name, f"{self.pz_name}_moving-areas_round-0.gpkg")), layer=f"{self.pz_name}_moving-areas_round-0_features-sup-{min_surf}")
+            gpd_polygonized_raster.to_file(str(gpkg_path), layer=f"{self.pz_name}_moving-areas_round-0_features-sup-{min_surf}")
         else:
-            gpd_polygonized_raster.to_file(str(Path(self.session.path_raster_data, self.pz_name, f"{self.pz_name}_moving-areas_round-0.gpkg")), layer=f"{self.pz_name}_moving-areas_round-0")
+            gpd_polygonized_raster.to_file(str(gpkg_path), layer=f"{self.pz_name}_moving-areas_round-0")
