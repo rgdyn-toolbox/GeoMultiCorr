@@ -88,8 +88,8 @@ LAUNCH = 32
 logging.addLevelName(LAUNCH, "LAUNCH")
 
 
-def _add_success_method(logger_class: type[logging.Logger]) -> None:
-    """Dynamically add custom logging level methods to the Logger class."""
+class GMCLogger(logging.Logger):
+    """GMC logger subclass with custom logging levels and methods."""
 
     def success(self, message: str, *args, **kwargs) -> None:
         if self.isEnabledFor(SUCCESS):
@@ -130,20 +130,6 @@ def _add_success_method(logger_class: type[logging.Logger]) -> None:
     def launch(self, message: str, *args, **kwargs) -> None:
         if self.isEnabledFor(LAUNCH):
             self._log(LAUNCH, message, args, **kwargs)
-
-    logger_class.success = success
-    logger_class.folder = folder
-    logger_class.settings = settings
-    logger_class.search = search
-    logger_class.file = file
-    logger_class.statistics = statistics
-    logger_class.timer = timer
-    logger_class.save = save
-    logger_class.list = list
-    logger_class.launch = launch
-
-
-_add_success_method(logging.Logger)
 
 
 class GMCFormatter(logging.Formatter):
@@ -210,8 +196,9 @@ class GMCFormatter(logging.Formatter):
         return f"{prefix} : {msg}"
 
 
-def _setup_logger() -> logging.Logger:
+def _setup_logger() -> GMCLogger:
     """Create and configure the GMC logger (called once at import time)."""
+    logging.setLoggerClass(GMCLogger)
     _logger = logging.getLogger("GMC")
     if not _logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
@@ -219,7 +206,7 @@ def _setup_logger() -> logging.Logger:
         _logger.addHandler(handler)
         _logger.setLevel(logging.INFO)
         _logger.propagate = False
-    return _logger
+    return _logger  # type: ignore[return-value]
 
 
-logger = _setup_logger()
+logger: GMCLogger = _setup_logger()
