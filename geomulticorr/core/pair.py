@@ -139,7 +139,7 @@ class Pair:
             right_key = f"{pz_name}_{right_date}_{right_sensor}.tif"
 
             # Reconstruct their path
-            thumbs_pzone_path = Path(session.path_raster_data, pz_name, "opticals")
+            thumbs_pzone_path = session.pz_dir(pz_name, "optical")
             left_path = Path(thumbs_pzone_path, left_key)
             right_path = Path(thumbs_pzone_path, right_key)
 
