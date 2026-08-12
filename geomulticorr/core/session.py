@@ -110,6 +110,25 @@ resources_location = package_root / "resources"
 
 project_template_location = resources_location / "project_template"
 
+# Pzone subdirectory kinds (new layout constants)
+PZ_KIND_OPTICAL = "optical"
+PZ_KIND_IMAGE_CORRELATION = "image_correlation"
+PZ_KIND_REFERENCE_DEM = "reference_dem"
+PZ_KIND_MASKS = "masks"
+PZ_KIND_VECTOR = "vector"
+PZ_KIND_INVERSION = "inversion"
+PZ_KIND_FIGURES = "figures"
+
+NEW_LAYOUT_PZ_SUBDIRS = (
+    PZ_KIND_OPTICAL,
+    PZ_KIND_IMAGE_CORRELATION,
+    PZ_KIND_REFERENCE_DEM,
+    PZ_KIND_MASKS,
+    PZ_KIND_VECTOR,
+    PZ_KIND_INVERSION,
+    PZ_KIND_FIGURES,
+)
+
 _DT_UNIT_TO_DAYS: dict[str, int] = {"D": 1, "W": 7, "M": 30, "Y": 365}
 
 # Metric maps for syncing per-pair stats JSON into the Pairs geodatabase layer.
@@ -154,30 +173,27 @@ def _parse_dt_days(value: int | str | None) -> int | None:
     return n * _DT_UNIT_TO_DAYS[unit]
 
 def is_conform_to_gmc_template(target_root_path: str | pathlib.Path) -> bool:
-    #! I dont know if this functions is useful. Check with Thibaut
-    """Check GeoMultiCorr structure.
-    Checks the 3 conditions to ensure that the 'target_root_path' leads to a folder conforming to the GeoMultiCorr project data architecture.
+    """Check GeoMultiCorr structure (both new and legacy layouts).
+
+    Checks that the target_root_path contains the two required project files:
+    GMC_mapset_{name}.qgz and GMC_geodatabase_{name}.gpkg. Accepts both the new
+    (pzone-direct) and legacy (raster_data_wrapper) layouts.
 
     Args:
-        target_root_path (str | pathlib.Path): Path where GeoMultiCorr project data will be stored.
+        target_root_path (str | pathlib.Path): Path to check for GeoMultiCorr project.
 
     Returns:
-        bool: True if the folder conforms to the GeoMultiCorr project data architecture. False otherwise.
+        bool: True if both required files exist. False otherwise.
     """
     target_root_path = pathlib.Path(target_root_path)
     target_name = target_root_path.name
 
-    # Firstly, there is a folder named raster_data_parent-folder-name
-    target_raster_data_expected_path = pathlib.Path(target_root_path, f"raster_data_{target_name}")
-    if not target_raster_data_expected_path.is_dir():
-        return False
-
-    # Secondly, there is a file "GMC_mapset_{target_name}.qgz"
+    # Check for the QGIS mapset file
     target_map_expected_path = pathlib.Path(target_root_path, f"GMC_mapset_{target_name}.qgz")
     if not target_map_expected_path.exists():
         return False
 
-    # Thirdly, there is a file GMC_geodatabase_{target_name}.gpkg
+    # Check for the geodatabase file
     target_geodb_expected_path = pathlib.Path(target_root_path, f"GMC_geodatabase_{target_name}.gpkg")
     if not target_geodb_expected_path.exists():
         return False
@@ -290,10 +306,6 @@ class Session:
                     new_gdb.rename(target_root_path / f"GMC_geodatabase_{project_name}.gpkg")
 
                 logger.info(f"Setting GMC folder structure")
-                # And we create en empty folder "raster_data_{project_name}"
-                if not (target_root_path / f"raster_data_{project_name}").exists():
-                    logger.folder(f"Creating 'raster_data_{project_name}' folder")
-                    (target_root_path / f"raster_data_{project_name}").mkdir(parents=True)
             elif is_conform_to_gmc_template(target_root_path):
                 logger.success("GMC project structure found")
                 pass
@@ -329,23 +341,24 @@ class Session:
             new_mapset.rename(target_root_path / f"GMC_mapset_{project_name}.qgz")
 
             logger.success(f"Setting GMC folder structure")
-            # And we create en empty folder "raster_data_{project_name}"
-            if not (target_root_path / f"raster_data_{project_name}").exists():
-                logger.folder(f"Creating 'raster_data_{project_name}' folder")
-                (target_root_path / f"raster_data_{project_name}").mkdir(parents=True)
         # END if
 
         # Load project data into the current session — runs for all code paths
         self.path_root = target_root_path
         self.project_name = target_root_path.name
-        self.path_raster_data = target_root_path / f"raster_data_{self.project_name}"
-        self.path_img_correlation_outs = target_root_path / f"img_correlation_outs_{self.project_name}"
-        self.path_tio_inversion_outs = target_root_path / f"tio_inversion_outs_{self.project_name}"
-        # Created lazily on first save, like the two output dirs above.
-        self.path_figures = target_root_path / f"figures_{self.project_name}"
         self.path_geodb = target_root_path / f"GMC_geodatabase_{self.project_name}.gpkg"
         self.path_qgis_project = target_root_path / f"GMC_mapset_{self.project_name}.qgz"
         self.epsg = epsg_code
+
+        # Detect layout: legacy if raster_data_<project_name> wrapper folder exists
+        self._legacy_layout = (target_root_path / f"raster_data_{self.project_name}").is_dir()
+
+        # Backward-compatibility path attributes (same for both layouts, computed here)
+        self.path_raster_data = target_root_path / f"raster_data_{self.project_name}"
+        self.path_img_correlation_outs = target_root_path / f"img_correlation_outs_{self.project_name}"
+        self.path_tio_inversion_outs = target_root_path / f"tio_inversion_outs_{self.project_name}"
+        # For new layout: figures live in project root; for legacy: figures_<project_name>
+        self.path_figures = target_root_path / (f"figures_{self.project_name}" if self._legacy_layout else "figures")
 
         # There is underscore before the attribute name because user have to access to this data from the getters to ensure that the data is up to date
         self._pzones = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Pzones").to_crs(epsg=epsg_code)
@@ -359,6 +372,54 @@ class Session:
         self.pz_names = list(self._pzones.pz_name.unique())
         logger.launch(f"Session '{self.project_name}' initialized.")
     #END def
+
+    def pz_dir(self, pz_name: str, kind: str | None = None) -> pathlib.Path:
+        """Directory for `kind` inside a pzone, resolved per this session's layout.
+
+        For the new layout, subdirectories live under pzone root:
+        - pz_dir(name, "optical") → path_root/name/optical
+        - pz_dir(name, None) → path_root/name
+
+        For the legacy layout, all subdirectories map to the old structure:
+        - pz_dir(name, "optical") → path_raster_data/name/opticals
+        - pz_dir(name, "image_correlation") → path_raster_data/name/image_correlation
+        - pz_dir(name, "reference_dem") → path_raster_data/name (DEM file in root)
+        - pz_dir(name, "masks") → path_raster_data/name (masks in root)
+        - pz_dir(name, "vector") → path_raster_data/name (vectors in root)
+        - pz_dir(name, "inversion") → path_raster_data/name (inversion_* subdirs in root)
+        - pz_dir(name, "figures") → path_figures (project-wide)
+        - pz_dir(name, None) → path_raster_data/name
+
+        Args:
+            pz_name: Processing zone name.
+            kind: Subdirectory kind (one of PZ_KIND_*); None returns the pzone root.
+
+        Returns:
+            Resolved pathlib.Path for the requested location.
+        """
+        if self._legacy_layout:
+            pz_root = self.path_raster_data / pz_name
+            if kind is None:
+                return pz_root
+            elif kind == PZ_KIND_OPTICAL:
+                return pz_root / "opticals"
+            elif kind == PZ_KIND_IMAGE_CORRELATION:
+                return pz_root / "image_correlation"
+            elif kind in (PZ_KIND_REFERENCE_DEM, PZ_KIND_MASKS, PZ_KIND_VECTOR, PZ_KIND_INVERSION):
+                return pz_root
+            elif kind == PZ_KIND_FIGURES:
+                return self.path_figures
+            else:
+                raise ValueError(f"Unknown pzone subdirectory kind: {kind}")
+        else:
+            pz_root = self.path_root / pz_name
+            if kind is None:
+                return pz_root
+            elif kind in NEW_LAYOUT_PZ_SUBDIRS:
+                return pz_root / kind
+            else:
+                raise ValueError(f"Unknown pzone subdirectory kind: {kind}")
+
     # * Works properly
     def find_qgis_binary(self,
                         qgis_binary_path: str | None = None) -> str:
@@ -705,10 +766,17 @@ class Session:
         self._pzones = gdf.to_crs(epsg=self.epsg)
         self.pz_names = list(self._pzones.pz_name.unique())
 
-        # Create raster data directory required by Pzone.__init__
-        pz_raster_dir = pathlib.Path(self.path_raster_data) / pz_name
-        pz_raster_dir.mkdir(parents=True, exist_ok=True)
-        logger.success(f"Pzone '{pz_name}' inserted.")
+        # Create pzone folder structure per layout
+        if self._legacy_layout:
+            pz_raster_dir = pathlib.Path(self.path_raster_data) / pz_name
+            pz_raster_dir.mkdir(parents=True, exist_ok=True)
+            logger.success(f"Pzone '{pz_name}' inserted (legacy layout).")
+        else:
+            pz_root = self.path_root / pz_name
+            pz_root.mkdir(parents=True, exist_ok=True)
+            for subdir_kind in NEW_LAYOUT_PZ_SUBDIRS:
+                (pz_root / subdir_kind).mkdir(parents=True, exist_ok=True)
+            logger.success(f"Pzone '{pz_name}' inserted with full 7-subfolder structure.")
 
         return gmc_pzone.Pzone(pz_name, self)
 
@@ -838,12 +906,18 @@ class Session:
         # assert self.copy_geodb()
 
         # Get 2 version of the Thumbs layer
-        opt_root = pathlib.Path(self.path_raster_data)
         old = self._thumbs
+        if self._legacy_layout:
+            opt_root = pathlib.Path(self.path_raster_data)
+            glob_pattern = "**/opticals/*.tif"
+        else:
+            opt_root = self.path_root
+            glob_pattern = "*/optical/*.tif"
+
         new = gpd.GeoDataFrame([gmc_thumb.Thumb(target_path).to_pdserie()
                                 for target_path in filter(lambda x:
                                                           gmc_thumb.THUMBNAME_PATTERN.match(x.name),
-                                                          list(opt_root.glob(pattern="**/opticals/*.tif")),)])
+                                                          list(opt_root.glob(pattern=glob_pattern)),)])
 
         # Comparison
         common = new.merge(old, on=["th_path"])
@@ -872,12 +946,11 @@ class Session:
         """Register already-cropped images as thumbs without re-cropping or resampling.
 
         Use this when your images are already cropped to the pzone AOI and share the
-        same grid/resolution. Each source image is copied (or moved) into
-        ``raster_data_<project>/<pz_name>/opticals/`` and renamed to the GMC thumb
-        convention ``<pz_name>_YYYY-MM-DD_<sensor>.tif``. The acquisition date and
-        sensor are auto-detected from the filename using the same detectors as
-        :meth:`map_georasters_bank` (``re_searcher`` + ``sensor_normalize`` for the
-        sensor, :func:`supported_sensors.extract_acquisition_date` for the date).
+        same grid/resolution. Each source image is copied (or moved) into the pzone's
+        optical folder and renamed to the GMC thumb convention ``<pz_name>_YYYY-MM-DD_<sensor>.tif``.
+        The acquisition date and sensor are auto-detected from the filename using the
+        same detectors as :meth:`map_georasters_bank` (``re_searcher`` + ``sensor_normalize``
+        for the sensor, :func:`supported_sensors.extract_acquisition_date` for the date).
 
         Unlike :meth:`sieve_bulk`, no windowed crop or reprojection is performed —
         pixels are passed through byte-for-byte.
@@ -896,7 +969,7 @@ class Session:
             print_summary: If True, print a Rich summary table. Defaults to True.
 
         Returns:
-            list[pathlib.Path]: Paths of the thumbs written into the opticals folder.
+            list[pathlib.Path]: Paths of the thumbs written into the optical folder.
 
         Raises:
             ValueError: If *pz_name* is unknown / contains ``_``, no images are found,
@@ -925,7 +998,7 @@ class Session:
         if not files:
             raise ValueError(f"No images found in sources (glob_pattern={glob_pattern!r}).")
 
-        dest_dir = pathlib.Path(self.path_raster_data) / pz_name / "opticals"
+        dest_dir = self.pz_dir(pz_name, PZ_KIND_OPTICAL)
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         sensor_pattern = gmc_sensors.sensors(gmc_sensors.supported_sensors)
@@ -1236,12 +1309,194 @@ class Session:
         return updated
 
     def copy_geodb(self) -> bool:
-        """Quickly create a copy of the project geopackage named backupath_geodb.gpkg
+        """Quickly create a copy of the project geopackage named GMC_geodatabase_backup.gpkg
         """
         backup_path = pathlib.Path(self.path_root, "GMC_geodatabase_backup.gpkg")
-        shutil.copytree(self.path_geodb, backup_path)
-        # os.system(f"cp -r {self.path_geodb} {backup_path}")
+        shutil.copy2(self.path_geodb, backup_path)
         return pathlib.Path(self.path_root, "GMC_geodatabase_backup.gpkg").exists()
+
+    def migrate_to_new_structure(self, dry_run: bool = False) -> dict:
+        """Migrate a legacy-layout project to the new Pzone-centric structure.
+
+        Converts folder hierarchy from ``raster_data_<project>/pz_name/{opticals,…}``
+        to ``pz_name/{optical,image_correlation,reference_dem,…}`` and updates
+        geodatabase path columns (th_path, pa_path, pa_disparity_f_path).
+
+        Call this only on legacy-layout sessions (raises RuntimeError otherwise).
+        It is a one-time, opt-in operation — once migrated, the session's
+        _legacy_layout flag is recomputed and may differ on next open.
+
+        Args:
+            dry_run: If True, return the move manifest without touching the
+                filesystem. Useful for preview before committing.
+
+        Returns:
+            Dict with keys:
+            - 'moved': list of (src, dest) tuples for files/folders moved
+            - 'skipped': list of paths that were not moved (unknown format)
+            - 'warnings': list of warning messages
+
+        Raises:
+            RuntimeError: If called on a new-layout session (self._legacy_layout is False).
+        """
+        if not self._legacy_layout:
+            raise RuntimeError(
+                "migrate_to_new_structure() is only for legacy-layout sessions. "
+                "This session is already in the new layout."
+            )
+
+        moved: list[tuple[pathlib.Path, pathlib.Path]] = []
+        skipped: list[pathlib.Path] = []
+        warnings: list[str] = []
+
+        logger.launch("Dry run: analyzing legacy structure..." if dry_run else "Migrating to new structure...")
+
+        # Step 1: Back up the geodatabase
+        if not dry_run:
+            if not self.copy_geodb():
+                warnings.append("Failed to back up geodatabase; proceeding anyway.")
+            else:
+                logger.success("Geodatabase backed up to GMC_geodatabase_backup.gpkg")
+
+        # Step 2: Build move manifest for each pzone
+        for pz_name in self.pz_names:
+            legacy_pz_root = self.path_raster_data / pz_name
+            new_pz_root = self.path_root / pz_name
+
+            if not legacy_pz_root.exists():
+                warnings.append(f"Legacy pzone folder not found: {legacy_pz_root}")
+                continue
+
+            # Create new pzone root (if not already there)
+            if not dry_run and not new_pz_root.exists():
+                new_pz_root.mkdir(parents=True, exist_ok=True)
+
+            # Map legacy subfolders → new subdirectories
+            moves = [
+                (legacy_pz_root / "opticals", new_pz_root / PZ_KIND_OPTICAL),
+                (legacy_pz_root / "image_correlation", new_pz_root / PZ_KIND_IMAGE_CORRELATION),
+            ]
+
+            # DEM file (if exists)
+            dem_file = legacy_pz_root / f"{pz_name}_dem.tif"
+            if dem_file.exists():
+                moves.append((dem_file, new_pz_root / PZ_KIND_REFERENCE_DEM / dem_file.name))
+
+            # Moving-areas files (raster and gpkg)
+            for suffix in ["_moving-areas_round-0.tif", "_moving-areas_round-0.gpkg"]:
+                ma_file = legacy_pz_root / f"{pz_name}{suffix}"
+                if ma_file.exists():
+                    moves.append((ma_file, new_pz_root / PZ_KIND_MASKS / ma_file.name))
+
+            # Inversion directories (inversion_* → inversion/*)
+            for legacy_inv_dir in legacy_pz_root.glob("inversion_*"):
+                if legacy_inv_dir.is_dir():
+                    inv_name = legacy_inv_dir.name.replace("inversion_", "")
+                    new_inv_dir = new_pz_root / PZ_KIND_INVERSION / inv_name
+                    moves.append((legacy_inv_dir, new_inv_dir))
+
+            # Execute moves (or just record them if dry_run)
+            for src, dst in moves:
+                if not src.exists():
+                    skipped.append(src)
+                    continue
+
+                if dry_run:
+                    moved.append((src, dst))
+                else:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(src), str(dst))
+                    moved.append((src, dst))
+                    logger.info(f"Moved: {src.relative_to(self.path_root)} → {dst.relative_to(self.path_root)}")
+
+            # Warn about leftover files in legacy pzone root
+            remaining = list(legacy_pz_root.glob("*"))
+            if remaining:
+                leftover_names = [f.name for f in remaining]
+                warnings.append(
+                    f"Pzone '{pz_name}': {len(remaining)} item(s) left in legacy root after moves: "
+                    f"{', '.join(leftover_names)}. Review and remove manually if needed."
+                )
+
+        # Step 3: Migrate figures folder (project-wide)
+        legacy_figures = self.path_root / f"figures_{self.project_name}"
+        new_figures = self.path_root / "figures"
+
+        if legacy_figures.exists() and not new_figures.exists():
+            if not dry_run:
+                shutil.move(str(legacy_figures), str(new_figures))
+                moved.append((legacy_figures, new_figures))
+                logger.success(f"Moved figures folder: {legacy_figures.name} → {new_figures.name}")
+            else:
+                moved.append((legacy_figures, new_figures))
+
+        # Step 4: Rewrite geodatabase path columns (if not dry_run)
+        if not dry_run:
+            self._rewrite_geodatabase_paths(self.pz_names)
+            logger.success("Geodatabase paths updated.")
+
+        # Step 5: Clean up legacy raster_data folder and dead folders
+        if not dry_run:
+            legacy_raster_data = self.path_raster_data
+            if legacy_raster_data.exists() and not list(legacy_raster_data.iterdir()):
+                legacy_raster_data.rmdir()
+                logger.success(f"Removed empty: {legacy_raster_data.name}")
+
+            # Remove empty dead folders if they exist
+            for dead_folder in [self.path_img_correlation_outs, self.path_tio_inversion_outs]:
+                if dead_folder.exists() and not list(dead_folder.iterdir()):
+                    dead_folder.rmdir()
+                    logger.info(f"Removed empty: {dead_folder.name}")
+
+            # Recompute layout detection and compat paths
+            self._legacy_layout = (self.path_root / f"raster_data_{self.project_name}").is_dir()
+            self.path_figures = self.path_root / (f"figures_{self.project_name}" if self._legacy_layout else "figures")
+
+            # Refresh in-memory geodatabase layers
+            self._thumbs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Thumbs").to_crs(epsg=self.epsg)
+            self._pairs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Pairs").to_crs(epsg=self.epsg)
+
+            logger.success("Migration complete. Session re-initialized with new structure.")
+
+        return {"moved": moved, "skipped": skipped, "warnings": warnings}
+
+    def _rewrite_geodatabase_paths(self, pz_names: list[str]) -> None:
+        """Rewrite path columns in Thumbs and Pairs layers after migration.
+
+        Updates th_path (Thumbs), pa_path and pa_disparity_f_path (Pairs) to reflect
+        the new folder structure. Substitutes legacy base segment with new one per pzone.
+        """
+        # Rewrite Thumbs layer
+        thumbs_gdf = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Thumbs")
+        for pz_name in pz_names:
+            # Old pattern: raster_data_<project>/<pz>/opticals/<thumb>
+            # New pattern: <pz>/optical/<thumb>
+            old_segment = f"raster_data_{self.project_name}{pathlib.os.sep}{pz_name}{pathlib.os.sep}opticals"
+            new_segment = f"{pz_name}{pathlib.os.sep}optical"
+
+            thumbs_gdf["th_path"] = thumbs_gdf["th_path"].str.replace(
+                old_segment, new_segment, regex=False
+            )
+
+        thumbs_gdf.to_file(self.path_geodb, layer="Thumbs", engine="pyogrio")
+        logger.info(f"Updated {len(thumbs_gdf)} thumb paths in geodatabase.")
+
+        # Rewrite Pairs layer
+        pairs_gdf = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Pairs")
+        for pz_name in pz_names:
+            # Path pattern change: raster_data_<project>/<pz>/image_correlation/... →
+            # <pz>/image_correlation/...
+            old_segment = f"raster_data_{self.project_name}{pathlib.os.sep}{pz_name}{pathlib.os.sep}"
+            new_segment = f"{pz_name}{pathlib.os.sep}"
+
+            for col in ["pa_path", "pa_disparity_f_path"]:
+                if col in pairs_gdf.columns:
+                    pairs_gdf[col] = pairs_gdf[col].str.replace(
+                        old_segment, new_segment, regex=False
+                    )
+
+        pairs_gdf.to_file(self.path_geodb, layer="Pairs", engine="pyogrio")
+        logger.info(f"Updated {len(pairs_gdf)} pair paths in geodatabase.")
 
     ###############################
     # * Works properly
@@ -1735,9 +1990,15 @@ class Session:
         figsize: tuple[float, float] | None = None,
         plotlyjs: bool | str = True,
         overwrite: bool = True,
+        pz_name: str | None = None,
         **view_kwargs,
     ) -> dict:
-        """Save a pair figure into ``figures_<project>/<subdir>/``.
+        """Save a pair figure.
+
+        For new-layout sessions: saves to ``<pz_name>/figures/<subdir>/`` if
+        the frame contains exactly one distinct pzone and ``pz_name`` is not
+        explicitly overridden. For legacy-layout sessions or multi-pzone frames:
+        falls back to the project-wide ``figures_<project>/<subdir>/``.
 
         Writes the chosen view twice: a self-contained interactive ``.html``
         (plotly — opens with no network access) and a publication-quality
@@ -1757,12 +2018,15 @@ class Session:
                 refreshes the same files instead of piling up copies.
             overwrite: replace a file of the same name (default). False appends
                 _01, _02… instead.
-            subdir: subdirectory under figures_<project>/.
+            subdir: subdirectory under the figures folder.
             title: figure title, applied to both backends.
             dpi: raster resolution for the matplotlib output.
             figsize: matplotlib figure size; a per-view default is used otherwise.
             plotlyjs: True inlines plotly.js (offline-capable, ~3 MB); "cdn"
                 gives a small file that needs a network connection to render.
+            pz_name: For new-layout sessions, explicitly route to this pzone's
+                figures folder. If None and frame has exactly one distinct pzone,
+                that pzone is used; otherwise falls back to project-wide folder.
             view_kwargs: view options (``dedupe``, ``show_arrows``, ``color_by``,
                 ``mirror_direction``, ``nbins``…), filtered per backend.
 
@@ -1774,9 +2038,25 @@ class Session:
         if frame is None:
             frame = self._pairs_frame(criterias)
 
-        out_dir = pathlib.Path(
-            getattr(self, "path_figures", self.path_root / f"figures_{self.project_name}")
-        ) / subdir
+        # Determine output directory per layout and pzone resolution
+        if pz_name is not None:
+            # Explicit pz_name: always route to that pzone's figures folder (new layout only)
+            if self._legacy_layout:
+                logger.warning(f"pz_name={pz_name!r} ignored for legacy-layout session; using project-wide figures folder")
+                out_dir = self.path_figures / subdir
+            else:
+                out_dir = self.pz_dir(pz_name, PZ_KIND_FIGURES) / subdir
+        elif not self._legacy_layout and "pz" in frame.columns:
+            # New layout: check if frame has exactly one distinct pzone
+            distinct_pzones = frame["pz"].unique()
+            if len(distinct_pzones) == 1:
+                out_dir = self.pz_dir(distinct_pzones[0], PZ_KIND_FIGURES) / subdir
+            else:
+                # Multi-pzone or no pz column: fall back to project-wide
+                out_dir = self.path_figures / subdir
+        else:
+            # Legacy layout or frame has no pz column: use project-wide figures folder
+            out_dir = self.path_figures / subdir
 
         if stem is None:
             # _last_pairs_params holds exactly the six keys pairs_figure_stem takes
@@ -2556,16 +2836,19 @@ class Session:
                     pz_vec, self.epsg, target_resolution
                 )
 
-            pz_rasterdata = pathlib.Path(self.path_root, f"raster_data_{self.project_name}", pz["pz_name"])
+            pz_name = pz["pz_name"]
             if image_type == "opt":
-                pz_opticals = pathlib.Path(pz_rasterdata, "opticals")
-                pz_disps = pathlib.Path(pz_rasterdata, "image_correlation")
-                for p in [pz_rasterdata, pz_opticals, pz_disps]:
+                pz_opticals = self.pz_dir(pz_name, PZ_KIND_OPTICAL)
+                pz_disps = self.pz_dir(pz_name, PZ_KIND_IMAGE_CORRELATION)
+                for p in [pz_opticals, pz_disps]:
                     if not p.exists():
                         p.mkdir(parents=True)
+            elif image_type == "dem":
+                pz_dem_dir = self.pz_dir(pz_name, PZ_KIND_REFERENCE_DEM)
+                if not pz_dem_dir.exists():
+                    pz_dem_dir.mkdir(parents=True)
             else:
-                if not pz_rasterdata.exists():
-                    pz_rasterdata.mkdir(parents=True)
+                raise ValueError(f"Unsupported image_type: {image_type}")
 
             selection = georasters_map[georasters_map["geometry"].intersects(pz["geometry"])]
             logger.info(f"Intersecting rasters: {len(selection)}")
@@ -2603,7 +2886,7 @@ class Session:
                         thumb_path = pathlib.Path(pz_opticals, thumb_name)
                     elif image_type == "dem":
                         thumb_name = f"{pz['pz_name']}_dem.tif"
-                        thumb_path = pathlib.Path(pz_rasterdata, thumb_name)
+                        thumb_path = pathlib.Path(pz_dem_dir, thumb_name)
                     else:
                         raise ValueError(f"Unsupported image_type: {image_type}")
 
