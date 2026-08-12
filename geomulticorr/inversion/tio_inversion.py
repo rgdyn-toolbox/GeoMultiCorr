@@ -521,10 +521,14 @@ class TIOInversion:
         # Extract pzone from pair key format: {pzone}_{date1}-{sensor1}_{date2}-{sensor2}
         pzone_name = first_pair.pa_key.split("_")[0]
 
-        # Build inversion directory within pzone structure:
-        # {raster_data}/{pzone_name}/inversion_{inversion_name}
-        pzone_path = Path(session.path_raster_data) / pzone_name
-        self.inversion_dir = pzone_path / f"inversion_{inversion_name}"
+        # Build inversion directory within pzone structure (layout-aware)
+        if session._legacy_layout:
+            # Legacy: inversion_{name} prefix in pzone root
+            pzone_path = session.pz_dir(pzone_name)
+            self.inversion_dir = pzone_path / f"inversion_{inversion_name}"
+        else:
+            # New layout: inversion/{name} subfolder
+            self.inversion_dir = session.pz_dir(pzone_name, "inversion") / inversion_name
 
         logger.info(f"TIO inversion '{inversion_name}' will be stored in: {self.inversion_dir}")
 
