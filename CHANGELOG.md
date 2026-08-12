@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0] — 2026-08-11
+
+### Features
+- **Folder structure refactor (Option C: new-default, backward-compatible)** — New projects use a flatter, Pzone-centric layout (`<pzone>/{optical,image_correlation,reference_dem,masks,vector,inversion,figures}/`) instead of the nested `raster_data_<project>/<pzone>/` wrapper. Single unified path resolver `Session.pz_dir(pz_name, kind)` handles both layouts transparently. Legacy projects (v0.3.x and earlier) continue working unchanged, with opt-in migration via `Session.migrate_to_new_structure()`.
+- **Per-pzone figures** — For new-layout projects, `save_pairs_figure()` routes single-pzone frames to `<pzone>/figures/<subdir>/` (fallback to project-wide `figures/` for multi-pzone). Explicit `pz_name` parameter overrides automatic routing.
+- **Migration helper** — `Session.migrate_to_new_structure(dry_run=True/False)` consolidates legacy projects to the new layout: moves folders, rewrites geodatabase path columns (th_path, pa_path, pa_disparity_f_path), backs up the geodatabase, and updates the session state.
+- **Fixed `copy_geodb()` bug** — Was using `shutil.copytree()` (requires directory) on a `.gpkg` file (single file); now uses `shutil.copy2()`.
+
+### Other
+- bump: 0.3.0 → 0.4.0
+
 ## [0.3.0] — 2026-07-28
 
 ### Features
