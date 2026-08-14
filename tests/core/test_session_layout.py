@@ -14,7 +14,7 @@ from shapely.geometry import Polygon
 from geomulticorr import open_gmc_session
 from geomulticorr.core.session import (
     PZ_KIND_OPTICAL, PZ_KIND_IMAGE_CORRELATION, PZ_KIND_REFERENCE_DEM,
-    PZ_KIND_MASKS, PZ_KIND_VECTOR, PZ_KIND_INVERSION, PZ_KIND_FIGURES,
+    PZ_KIND_VECTOR, PZ_KIND_INVERSION, PZ_KIND_FIGURES,
     NEW_LAYOUT_PZ_SUBDIRS
 )
 
@@ -115,7 +115,6 @@ class TestPzDirMethod:
             (PZ_KIND_OPTICAL, pz_root / "optical"),
             (PZ_KIND_IMAGE_CORRELATION, pz_root / "image_correlation"),
             (PZ_KIND_REFERENCE_DEM, pz_root / "reference_dem"),
-            (PZ_KIND_MASKS, pz_root / "masks"),
             (PZ_KIND_VECTOR, pz_root / "vector"),
             (PZ_KIND_INVERSION, pz_root / "inversion"),
             (PZ_KIND_FIGURES, pz_root / "figures"),
@@ -133,12 +132,29 @@ class TestPzDirMethod:
         expected = project_path / "test_pz"
         assert result == expected
 
+    def test_pz_dir_rejects_removed_masks_kind(self, temp_project_new):
+        """'masks' is no longer a pzone kind — it must fail loudly, not silently.
+
+        Masks are now per-pair products written into the pair folder; the
+        pzone-level moving-areas files moved to vector/.
+        """
+        session, _ = temp_project_new
+        session.insert_pzone([(0, 0), (1, 0), (1, 1), (0, 1)], "test_pz", "TP")
+
+        with pytest.raises(ValueError, match="Unknown pzone subdirectory kind"):
+            session.pz_dir("test_pz", "masks")
+
+    def test_new_layout_has_six_subdirs(self):
+        """NEW_LAYOUT_PZ_SUBDIRS is 6 kinds — masks was removed."""
+        assert len(NEW_LAYOUT_PZ_SUBDIRS) == 6
+        assert "masks" not in NEW_LAYOUT_PZ_SUBDIRS
+
 
 class TestInsertPzoneStructure:
     """Test pzone folder creation per layout."""
 
     def test_insert_pzone_new_layout_creates_all_subdirs(self, temp_project_new):
-        """New layout: insert_pzone should create all 7 subdirectories."""
+        """New layout: insert_pzone should create every NEW_LAYOUT_PZ_SUBDIRS entry."""
         session, project_path = temp_project_new
         session.insert_pzone([(0, 0), (1, 0), (1, 1), (0, 1)], "test_pz", "TP")
 
@@ -148,6 +164,13 @@ class TestInsertPzoneStructure:
         for subdir_kind in NEW_LAYOUT_PZ_SUBDIRS:
             subdir = pz_root / subdir_kind
             assert subdir.exists(), f"{subdir_kind} subdirectory not created"
+
+    def test_insert_pzone_creates_no_masks_folder(self, temp_project_new):
+        """The masks/ folder must not be created — masks are per-pair now."""
+        session, project_path = temp_project_new
+        session.insert_pzone([(0, 0), (1, 0), (1, 1), (0, 1)], "test_pz", "TP")
+
+        assert not (project_path / "test_pz" / "masks").exists()
 
     def test_pzone_dem_path_new_layout(self, temp_project_new):
         """Pzone.pz_dem_path should resolve to reference_dem subfolder."""

@@ -313,9 +313,9 @@ class Pzone:
 
     def vectorize_multitemporal_moving_areas(self, epsg, min_surf = '', operator_size=30, n_clusters=2, mode='m'):
         mask = None
-        masks_dir = self.dir("masks")
-        raster_path = masks_dir / f"{self.pz_name}_moving-areas_round-0.tif"
-        gpkg_path = masks_dir / f"{self.pz_name}_moving-areas_round-0.gpkg"
+        vector_dir = self.dir("vector")
+        raster_path = vector_dir / f"{self.pz_name}_moving-areas_round-0.tif"
+        gpkg_path = vector_dir / f"{self.pz_name}_moving-areas_round-0.gpkg"
         with rasterio.Env():
             with rasterio.open(str(raster_path)) as src:
                 image = src.read(1) # first band

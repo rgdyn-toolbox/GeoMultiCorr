@@ -114,7 +114,6 @@ project_template_location = resources_location / "project_template"
 PZ_KIND_OPTICAL = "optical"
 PZ_KIND_IMAGE_CORRELATION = "image_correlation"
 PZ_KIND_REFERENCE_DEM = "reference_dem"
-PZ_KIND_MASKS = "masks"
 PZ_KIND_VECTOR = "vector"
 PZ_KIND_INVERSION = "inversion"
 PZ_KIND_FIGURES = "figures"
@@ -123,7 +122,6 @@ NEW_LAYOUT_PZ_SUBDIRS = (
     PZ_KIND_OPTICAL,
     PZ_KIND_IMAGE_CORRELATION,
     PZ_KIND_REFERENCE_DEM,
-    PZ_KIND_MASKS,
     PZ_KIND_VECTOR,
     PZ_KIND_INVERSION,
     PZ_KIND_FIGURES,
@@ -395,7 +393,6 @@ class Session:
         - pz_dir(name, "optical") → path_raster_data/name/opticals
         - pz_dir(name, "image_correlation") → path_raster_data/name/image_correlation
         - pz_dir(name, "reference_dem") → path_raster_data/name (DEM file in root)
-        - pz_dir(name, "masks") → path_raster_data/name (masks in root)
         - pz_dir(name, "vector") → path_raster_data/name (vectors in root)
         - pz_dir(name, "inversion") → path_raster_data/name (inversion_* subdirs in root)
         - pz_dir(name, "figures") → path_figures (project-wide)
@@ -416,7 +413,7 @@ class Session:
                 return pz_root / "opticals"
             elif kind == PZ_KIND_IMAGE_CORRELATION:
                 return pz_root / "image_correlation"
-            elif kind in (PZ_KIND_REFERENCE_DEM, PZ_KIND_MASKS, PZ_KIND_VECTOR, PZ_KIND_INVERSION):
+            elif kind in (PZ_KIND_REFERENCE_DEM, PZ_KIND_VECTOR, PZ_KIND_INVERSION):
                 return pz_root
             elif kind == PZ_KIND_FIGURES:
                 return self.path_figures
@@ -787,7 +784,10 @@ class Session:
             pz_root.mkdir(parents=True, exist_ok=True)
             for subdir_kind in NEW_LAYOUT_PZ_SUBDIRS:
                 (pz_root / subdir_kind).mkdir(parents=True, exist_ok=True)
-            logger.success(f"Pzone '{pz_name}' inserted with full 7-subfolder structure.")
+            logger.success(
+                f"Pzone '{pz_name}' inserted with full "
+                f"{len(NEW_LAYOUT_PZ_SUBDIRS)}-subfolder structure."
+            )
 
         return gmc_pzone.Pzone(pz_name, self)
 
@@ -1397,7 +1397,7 @@ class Session:
             for suffix in ["_moving-areas_round-0.tif", "_moving-areas_round-0.gpkg"]:
                 ma_file = legacy_pz_root / f"{pz_name}{suffix}"
                 if ma_file.exists():
-                    moves.append((ma_file, new_pz_root / PZ_KIND_MASKS / ma_file.name))
+                    moves.append((ma_file, new_pz_root / PZ_KIND_VECTOR / ma_file.name))
 
             # Inversion directories (inversion_* → inversion/*)
             for legacy_inv_dir in legacy_pz_root.glob("inversion_*"):
@@ -3634,6 +3634,9 @@ class Session:
                 ``None`` skips filtering (all valid pixels used as stable ground).
             criterias: Same filter syntax as :meth:`get_pairs`.
             overwrite: Re-process pairs whose corrected files already exist.
+                Pairs corrected before the stable-ground masks were persisted
+                are re-processed regardless when a *filter_pipeline* is given,
+                so their ``*EWmask``/``*NSmask`` files get written.
             save_plot: Save a before/after control figure for each pair.
             plot_level: Rendering cost of those figures — ``"light"`` (default)
                 decimates rasters to 1400 px on the long axis, uses a 200-bin
@@ -3653,7 +3656,11 @@ class Session:
                 ``cc=`` is auto-injected from the pair folder when available.
 
         Returns:
-            Dict mapping ``pa_key`` → ``{"ew": Path, "ns": Path}`` or ``None`` if skipped.
+            Dict mapping ``pa_key`` → ``{"ew": Path, "ns": Path}`` or ``None`` if
+            skipped.  When a *filter_pipeline* is given, the per-component
+            stable-ground keep-masks are also written into the pair folder as
+            1-bit GeoTIFFs and reported as ``"ew_mask"`` / ``"ns_mask"``
+            (see :meth:`~geomulticorr.core.pair.Pair.save_correction_masks`).
 
         Raises:
             ValueError: If neither *correction_pipeline* nor *filter_pipeline* is provided,
@@ -3729,7 +3736,12 @@ class Session:
                     live.refresh()
                     continue
 
-                if not overwrite and ew_corr.exists() and ns_corr.exists():
+                # A pair corrected before masks were persisted has no mask files;
+                # regenerate it so the stable-ground record catches up.
+                masks_ok = filter_pipeline is None or (
+                    pair.pa_ew_mask_path.exists() and pair.pa_ns_mask_path.exists()
+                )
+                if not overwrite and ew_corr.exists() and ns_corr.exists() and masks_ok:
                     rec["median"] = rec["ramp_topo"] = rec["stats"] = "[dim]exists[/dim]"
                     rec["ew_corr"] = rec["ns_corr"] = "[dim]exists[/dim]"
                     results[pair.pa_key] = None
@@ -3849,7 +3861,26 @@ class Session:
                     y_corr.save(str(ns_corr))
                     rec["ew_corr"] = "[green]ok[/green]" if ew_corr.exists() else "[red]missing[/red]"
                     rec["ns_corr"] = "[green]ok[/green]" if ns_corr.exists() else "[red]missing[/red]"
-                    results[pair.pa_key] = {"ew": ew_corr, "ns": ns_corr}
+                    pair_result = {"ew": ew_corr, "ns": ns_corr}
+
+                    # Persist the stable-ground masks the corrections were fitted
+                    # on, as 1-bit GeoTIFFs alongside the rasters they describe.
+                    # A failure here must not lose the corrected output.
+                    if x_stable is not None or y_stable is not None:
+                        try:
+                            masks = pair.save_correction_masks(
+                                x_stable, y_stable, reference=x_raw
+                            )
+                            pair_result.update(
+                                {f"{k}_mask": v for k, v in masks.items()}
+                            )
+                        except Exception as mask_exc:
+                            logger.warning(
+                                f"Could not save correction masks for "
+                                f"'{pair.pa_key}': {mask_exc}"
+                            )
+
+                    results[pair.pa_key] = pair_result
 
                 except Exception as exc:
                     logger.error(f"Failed for '{pair.pa_key}': {exc}")
