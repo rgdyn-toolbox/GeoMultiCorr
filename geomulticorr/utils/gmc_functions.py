@@ -37,6 +37,7 @@ import pathlib
 import subprocess
 import geoutils as gu
 import rasterstats
+from affine import Affine
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -377,6 +378,65 @@ def get_rounded_limits(
     return float(np.ceil(lim / round_to) * round_to)
 
 
+# --------------------------------------------------------------------------- #
+# Display decimation
+# --------------------------------------------------------------------------- #
+# Correlation output is routinely 10+ Mpx, while the largest panel in these
+# control figures renders at well under 1000 px.  Drawing at full resolution
+# costs seconds per figure and is discarded by the rasteriser, so every public
+# ``plot_*`` decimates its inputs first.  ``PLOT_PREVIEW_PX`` is the target size
+# of the longest raster axis; ``None`` disables decimation entirely.
+PLOT_PREVIEW_PX: int | None = 1400
+
+
+def _preview_stride(shape: tuple[int, int], target_px: int | None) -> int:
+    """Integer stride that brings *shape*'s longest axis down to ``target_px``.
+
+    Returns ``1`` (no decimation) when *target_px* is ``None`` or the raster is
+    already small enough.
+    """
+    if target_px is None or target_px <= 0:
+        return 1
+    return max(1, int(np.ceil(max(shape) / target_px)))
+
+
+def _preview(raster: gu.Raster, target_px: int | None = PLOT_PREVIEW_PX) -> gu.Raster:
+    """Return a strided-decimated copy of *raster* for display.
+
+    The georeferencing is preserved — the origin is unchanged and the pixel size
+    is scaled by the stride — so decimated panels stay spatially aligned with
+    full-resolution ones.  The decimated extent can overshoot the original by up
+    to ``stride - 1`` pixels on the right/bottom edge, which is sub-panel-pixel
+    at any realistic stride.
+
+    Returns the input **unchanged** (same object, no copy) when no decimation is
+    needed, so small rasters pay nothing.
+    """
+    if raster is None:
+        return None
+    k = _preview_stride(raster.shape, target_px)
+    if k == 1:
+        return raster
+    return gu.Raster.from_array(
+        raster.data[::k, ::k],
+        transform=raster.transform * Affine.scale(k, k),
+        crs=raster.crs,
+        nodata=raster.nodata,
+    )
+
+
+def _preview_mask(keep, target_px: int | None = PLOT_PREVIEW_PX):
+    """Decimate a boolean *keep* mask with the same stride :func:`_preview` uses.
+
+    *keep* must be full-grid (same shape as the raster it accompanies).
+    """
+    if keep is None:
+        return None
+    arr = np.asarray(keep)
+    k = _preview_stride(arr.shape, target_px)
+    return arr if k == 1 else arr[::k, ::k]
+
+
 # Hue convention shared by every correction diagnostic panel:
 # EW = orange family (matches PuOr), NS = green family (matches PiYG);
 # "before" is lighter/dashed, "after" is darker/solid.
@@ -536,17 +596,28 @@ def plot_show_raw_results(
     cmap_cc: str = 'binary_r',
     fig_name=None,
     symmetric_limits: bool = True,
-    hexbin_gridsize: int = 1000,
+    hexbin_gridsize: int = 200,
     hexbin_cmap: str = 'viridis',
     hexbin_nmad_multiplier: float = 1.0,
     hexbin_log_scale: bool = True,
+    preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
     """Compact displacement control figure with hexbin scatter and histograms.
 
     Layout: 2 rows × 3 cols with hexbin spanning both rows on the right.
     - xDisp (raster) | yDisp (raster)     | xyDisp_comp (hexbin, spans both)
     - ncc (raster)   | xyDisp_hist (hist) |
+
+    Rasters are decimated to *preview_px* before drawing (see :func:`_preview`);
+    pass ``preview_px=None`` to render at full resolution.  The histogram and
+    NMAD annotations are therefore computed on the decimated sample — they are
+    display-quality.  Authoritative statistics come from the pair stats JSON
+    written by :func:`~geomulticorr.stats.stats.save_corrected_stats`.
     """
+    xDisp = _preview(xDisp, preview_px)
+    yDisp = _preview(yDisp, preview_px)
+    ncc   = _preview(ncc, preview_px)
+
     fig, axs = plt.subplot_mosaic(
         [['xDisp',       'yDisp',        'xyDisp_comp'],
          ['ncc',        'xyDisp_hist',  'xyDisp_comp']],
@@ -639,10 +710,11 @@ def plot_show_corrected_results(
     cmap_cc: str = 'binary_r',
     fig_name=None,
     symmetric_limits: bool = True,
-    hexbin_gridsize: int = 1000,
+    hexbin_gridsize: int = 200,
     hexbin_cmap: str = 'viridis',
     hexbin_nmad_multiplier: float = 1.0,
     hexbin_log_scale: bool = True,
+    preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
     """Corrected-displacement dashboard (3×3) with stable-area panels.
 
@@ -655,7 +727,20 @@ def plot_show_corrected_results(
     The *stable* panels show the corrected displacement with non-stable pixels
     masked out (the pixels the corrections were fitted on).  ``x_stable`` /
     ``y_stable`` are boolean *keep* masks; if ``None`` the full field is shown.
+
+    Rasters and stable masks are decimated to *preview_px* before drawing (see
+    :func:`_preview`); pass ``preview_px=None`` to render at full resolution.
+    The histogram and NMAD annotations are therefore computed on the decimated
+    sample — they are display-quality.  Authoritative statistics come from the
+    pair stats JSON written by
+    :func:`~geomulticorr.stats.stats.save_corrected_stats`.
     """
+    xDisp = _preview(xDisp, preview_px)
+    yDisp = _preview(yDisp, preview_px)
+    ncc   = _preview(ncc, preview_px)
+    x_stable = _preview_mask(x_stable, preview_px)
+    y_stable = _preview_mask(y_stable, preview_px)
+
     fig, axs = plt.subplot_mosaic(
         [['xDisp',    'yDisp',    'xyDisp_comp'],
          ['xStable',  'yStable',  'xyDisp_comp'],
@@ -743,6 +828,7 @@ def plot_median_centering(
     figsize: tuple[float, float] = (12, 7),
     cmap_ew: str = 'PuOr',
     cmap_ns: str = 'PiYG',
+    preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
     """3-col × 2-row control figure for a MedianCentering correction step.
 
@@ -750,7 +836,15 @@ def plot_median_centering(
     ------
     a) EW before  |  b) EW after  |  c) EW histograms before / after
     d) NS before  |  e) NS after  |  f) NS histograms before / after
+
+    Rasters are decimated to *preview_px* before drawing (see :func:`_preview`);
+    pass ``preview_px=None`` to render at full resolution.
     """
+    xDisp_before = _preview(xDisp_before, preview_px)
+    xDisp_after  = _preview(xDisp_after, preview_px)
+    yDisp_before = _preview(yDisp_before, preview_px)
+    yDisp_after  = _preview(yDisp_after, preview_px)
+
     fig, axs = plt.subplot_mosaic(
         [['a)', 'b)', 'c)'],
          ['d)', 'e)', 'f)']],
@@ -845,6 +939,7 @@ def plot_directional_bias_correction(
     cmap_ew: str = 'PuOr',
     cmap_ns: str = 'PiYG',
     cmap_bias: str = 'RdBu_r',
+    preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
     """Control figure for a DirectionalBiasCorrection step.
 
@@ -859,7 +954,16 @@ def plot_directional_bias_correction(
     a) EW before  |  b) EW bias  |  c) EW after  |  d) EW histogram
     e) NS before  |  f) NS bias  |  g) NS after  |  h) NS histogram
     i) EW seam profile  |  i) EW seam profile  |  j) NS seam profile  |  j) NS seam profile
+
+    Raster panels are decimated to *preview_px* before drawing (see
+    :func:`_preview`); pass ``preview_px=None`` to render at full resolution.
+    The 1-D seam profiles come from ``step.meta`` and are unaffected.
     """
+    xDisp_before = _preview(xDisp_before, preview_px)
+    xDisp_after  = _preview(xDisp_after, preview_px)
+    yDisp_before = _preview(yDisp_before, preview_px)
+    yDisp_after  = _preview(yDisp_after, preview_px)
+
     fig, axs = plt.subplot_mosaic(
         [['a)', 'b)', 'c)', 'd)'],
          ['e)', 'f)', 'g)', 'h)'],
@@ -1010,6 +1114,7 @@ def plot_ramp_correction(
     cmap_ew: str = 'PuOr',
     cmap_ns: str = 'PiYG',
     cmap_ramp: str = 'RdBu_r',
+    preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
     """4-col × 2-row control figure for a RampCorrection step.
 
@@ -1019,7 +1124,15 @@ def plot_ramp_correction(
     ------
     a) EW before  |  b) EW ramp  |  c) EW after  |  d) EW histograms before / after
     e) NS before  |  f) NS ramp  |  g) NS after  |  h) NS histograms before / after
+
+    Rasters are decimated to *preview_px* before drawing (see :func:`_preview`);
+    pass ``preview_px=None`` to render at full resolution.
     """
+    xDisp_before = _preview(xDisp_before, preview_px)
+    xDisp_after  = _preview(xDisp_after, preview_px)
+    yDisp_before = _preview(yDisp_before, preview_px)
+    yDisp_after  = _preview(yDisp_after, preview_px)
+
     fig, axs = plt.subplot_mosaic(
         [['a)', 'b)', 'c)', 'd)'],
          ['e)', 'f)', 'g)', 'h)']],
@@ -1054,7 +1167,12 @@ def _plot_topo_like_correction(
     cmap_ns: str,
     cmap_removed: str,
 ) -> plt.Figure:
-    """Shared 4×3 template: removed-surface rows + disp-vs-predictor bottom panels (EW & NS)."""
+    """Shared 4×3 template: removed-surface rows + disp-vs-predictor bottom panels (EW & NS).
+
+    Expects *already-decimated* rasters and a *predictor* built on the same grid
+    — the public wrappers decimate first so the DEM is regridded straight onto
+    the preview grid rather than onto the full one.
+    """
     fig, axs = plt.subplot_mosaic(
         [['a)', 'b)', 'c)', 'd)'],
          ['e)', 'f)', 'g)', 'h)'],
@@ -1109,6 +1227,7 @@ def plot_topo_correction(
     cmap_ns: str = 'PiYG',
     cmap_removed: str = 'RdBu_r',
     elev_bin_width: float = 100.0,
+    preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
     """4-col × 3-row control figure for a TopoCorrection / TopoRampCorrection step.
 
@@ -1116,7 +1235,16 @@ def plot_topo_correction(
     (full width) shows binned-median displacement vs **elevation** (EW & NS,
     before & after) so the elevation-correlated bias and its removal are visible.
     Requires ``dem=`` (any grid; reprojected internally).
+
+    Rasters are decimated to *preview_px* before drawing (see :func:`_preview`)
+    and the DEM is regridded onto that preview grid; pass ``preview_px=None`` to
+    render at full resolution.
     """
+    xDisp_before = _preview(xDisp_before, preview_px)
+    xDisp_after  = _preview(xDisp_after, preview_px)
+    yDisp_before = _preview(yDisp_before, preview_px)
+    yDisp_after  = _preview(yDisp_after, preview_px)
+
     predictor = _dem_on_grid(dem, xDisp_before) if dem is not None else None
     return _plot_topo_like_correction(
         xDisp_before, xDisp_after, yDisp_before, yDisp_after,
@@ -1142,6 +1270,7 @@ def plot_slope_correction(
     cmap_ns: str = 'PiYG',
     cmap_removed: str = 'RdBu_r',
     slope_bin_width: float = 2.0,
+    preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
     """4-col × 3-row control figure for a SlopeRampCorrection step.
 
@@ -1149,7 +1278,18 @@ def plot_slope_correction(
     binned-median displacement vs **terrain slope** (degrees, derived from the
     DEM via :func:`~geomulticorr.corrections.fit.compute_slope`).
     Requires ``dem=``.
+
+    Rasters are decimated to *preview_px* before drawing (see :func:`_preview`)
+    and the DEM is regridded onto that preview grid; pass ``preview_px=None`` to
+    render at full resolution.  Note that slope derived from a decimated DEM is
+    slightly smoother than slope at native resolution — this panel is a
+    diagnostic view, not the surface the correction was fitted on.
     """
+    xDisp_before = _preview(xDisp_before, preview_px)
+    xDisp_after  = _preview(xDisp_after, preview_px)
+    yDisp_before = _preview(yDisp_before, preview_px)
+    yDisp_after  = _preview(yDisp_after, preview_px)
+
     predictor = None
     if dem is not None:
         dem_arr = _dem_on_grid(dem, xDisp_before)
@@ -1209,6 +1349,7 @@ def plot_destriping_correction(
     cmap_ew: str = 'PuOr',
     cmap_ns: str = 'PiYG',
     cmap_bias: str = 'RdBu_r',
+    preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
     """Control figure for an Along-/Across-track destriping step.
 
@@ -1222,7 +1363,16 @@ def plot_destriping_correction(
     a) EW before  |  b) EW undulation  |  c) EW after  |  d) EW histogram
     e) NS before  |  f) NS undulation  |  g) NS after  |  h) NS histogram
     i) EW stripe profile  |  i) EW stripe profile  |  j) NS stripe profile  |  j) NS stripe profile
+
+    Raster panels are decimated to *preview_px* before drawing (see
+    :func:`_preview`); pass ``preview_px=None`` to render at full resolution.
+    The 1-D stripe profiles come from ``step.meta`` and are unaffected.
     """
+    xDisp_before = _preview(xDisp_before, preview_px)
+    xDisp_after  = _preview(xDisp_after, preview_px)
+    yDisp_before = _preview(yDisp_before, preview_px)
+    yDisp_after  = _preview(yDisp_after, preview_px)
+
     fig, axs = plt.subplot_mosaic(
         [['a)', 'b)', 'c)', 'd)'],
          ['e)', 'f)', 'g)', 'h)'],
@@ -1291,6 +1441,7 @@ def plot_correction_result(
     fig_name: str | None = None,
     *,
     dem: gu.Raster | None = None,
+    preview_px: int | None = PLOT_PREVIEW_PX,
     **_,
 ) -> plt.Figure:
     """Dispatch to the appropriate before/after figure for a correction step.
@@ -1308,28 +1459,28 @@ def plot_correction_result(
     if isinstance(step_ew, DirectionalBiasCorrection):
         return plot_directional_bias_correction(
             step_ew, step_ns, xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-            fig_name=fig_name,
+            fig_name=fig_name, preview_px=preview_px,
         )
     if isinstance(step_ew, (AlongTrackDestriping, AcrossTrackDestriping)):
         return plot_destriping_correction(
             step_ew, step_ns, xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-            fig_name=fig_name,
+            fig_name=fig_name, preview_px=preview_px,
         )
     if isinstance(step_ew, SlopeRampCorrection):
         return plot_slope_correction(
             step_ew, step_ns, xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-            dem=dem, fig_name=fig_name,
+            dem=dem, fig_name=fig_name, preview_px=preview_px,
         )
     if isinstance(step_ew, (TopoCorrection, TopoRampCorrection)):
         return plot_topo_correction(
             step_ew, step_ns, xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-            dem=dem, fig_name=fig_name,
+            dem=dem, fig_name=fig_name, preview_px=preview_px,
         )
     if isinstance(step_ew, RampCorrection):
         return plot_ramp_correction(xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-                                    fig_name=fig_name)
+                                    fig_name=fig_name, preview_px=preview_px)
     return plot_median_centering(xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-                                 fig_name=fig_name)
+                                 fig_name=fig_name, preview_px=preview_px)
 
 
 def plot_disp_vs_elev_raw(
