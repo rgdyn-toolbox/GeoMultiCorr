@@ -799,9 +799,11 @@ status    : {self.pa_status}
                 ncc=ncc,
                 fig_name=self.pa_key,
             )
-            fig.savefig(
-                str(self.pa_plot_raw_path), dpi=150, format="JPEG", bbox_inches="tight"
-            )
+            # No bbox_inches="tight": it forces a second full renderer pass to
+            # measure the bounding box, and plot_show_raw_results already calls
+            # tight_layout(). Decimation for display is handled by that function's
+            # preview_px default.
+            fig.savefig(str(self.pa_plot_raw_path), dpi=150, format="JPEG")
             plt.close(fig)
             logger.save(f"Control plot saved: {self.pa_plot_raw_path.name}")
 
