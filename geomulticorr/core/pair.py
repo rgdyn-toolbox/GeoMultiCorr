@@ -190,6 +190,9 @@ class Pair:
         self.pa_cc_path = Path(self.pa_path, f"{self.pa_key}-F_CC.tif")
         self.pa_ew_corr_path = Path(self.pa_path, f"{self.pa_key}-F_EW_corr.tif")
         self.pa_ns_corr_path = Path(self.pa_path, f"{self.pa_key}-F_NS_corr.tif")
+        # Stable-ground keep-masks used to fit the corrections (1-bit GeoTIFFs)
+        self.pa_ew_mask_path = Path(self.pa_path, f"{self.pa_key}-F_EWmask.tif")
+        self.pa_ns_mask_path = Path(self.pa_path, f"{self.pa_key}-F_NSmask.tif")
         self.pa_plot_raw_path = Path(self.pa_path, f"{self.pa_key}_raw_disp.jpg")
         self.pa_magn_path = Path(self.pa_path, f"{self.pa_key}_magn.tif")
         self.pa_vect_path = Path(self.pa_path, f"{self.pa_key}_vect.gpkg")
@@ -708,6 +711,70 @@ status    : {self.pa_status}
         magn_in_meters.to_file(str(self.pa_magn_path))
 
         return magn_in_meters
+
+    def save_correction_masks(
+        self,
+        x_stable: np.ndarray | None,
+        y_stable: np.ndarray | None,
+        reference: gu.Raster,
+    ) -> dict[str, Path]:
+        """Write the per-component stable-ground keep-masks as 1-bit GeoTIFFs.
+
+        These record which pixels the corrections were *fitted* on, so a
+        corrected pair stays reproducible after the fact.
+
+        The masks are binary, so they are packed one pixel per bit
+        (``NBITS=1``) and deflated: a 1500x1500 mask lands around 15-40 kB
+        instead of the ~9 MB a float32 write would produce. GDAL, rasterio
+        and QGIS expand ``NBITS=1`` transparently on read, so consumers see
+        an ordinary uint8 0/1 raster.
+
+        Args:
+            x_stable: Boolean keep-array for the EW component (True = kept),
+                as returned by ``FilterPipeline.compute``. None skips it.
+            y_stable: Same for the NS component. None skips it.
+            reference: Raster supplying CRS, transform and shape.
+
+        Returns:
+            Mapping of ``"ew"`` / ``"ns"`` to the written path. A component
+            passed as None is absent from the mapping.
+        """
+        written: dict[str, Path] = {}
+
+        for key, mask, out_path in (
+            ("ew", x_stable, self.pa_ew_mask_path),
+            ("ns", y_stable, self.pa_ns_mask_path),
+        ):
+            if mask is None:
+                continue
+
+            arr = np.asarray(mask)
+            if arr.ndim == 3 and arr.shape[0] == 1:
+                arr = arr[0]
+
+            # Built from scratch rather than reference.copy(): copy() inherits
+            # the reference's nodata (0.0 for the displacement rasters), which
+            # would mark every *excluded* pixel as nodata — 0 is a real value
+            # here, meaning "not kept". from_array(nodata=None) keeps all
+            # pixels valid.
+            #
+            # Cast to uint8 explicitly: geoutils 0.2.5 auto-casts bool arrays
+            # and force-sets nodata=255, which cannot be represented in one bit.
+            # Passing dtype= does not help — it is accepted but never read there.
+            mask_raster = gu.Raster.from_array(
+                arr.astype("uint8"),
+                transform=reference.transform,
+                crs=reference.crs,
+                nodata=None,
+            )
+            mask_raster.to_file(
+                str(out_path),
+                nodata=None,
+                co_opts={"NBITS": "1", "COMPRESS": "DEFLATE", "TILED": "YES"},
+            )
+            written[key] = out_path
+
+        return written
 
     def extract_raw_displacements(
         self,
