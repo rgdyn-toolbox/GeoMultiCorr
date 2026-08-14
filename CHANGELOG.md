@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.1] — 2026-08-14
+
+### Performance
+- **Light control figures (~6× faster per pair).** `apply_pairs_corrections` spent ~83 % of its
+  wall time in matplotlib, drawing 10+ Mpx rasters into panels that render under 1000 px. Every
+  public `plot_*` now decimates for display first (`_preview` / `_preview_mask`, `preview_px`
+  default 1400 px on the long axis), the hexbin grid drops from 1000 to 200 bins, and the
+  redundant `bbox_inches="tight"` second render pass is gone. Measured on 3708×3158 PlanetScope
+  output: the three figures written per pair go from **39.6 s to 6.5 s**, with smaller files and
+  no visible difference. New `plot_level="light"|"full"` parameter on
+  `Session.apply_pairs_corrections` (`PLOT_LEVELS` in `session.py`); `"full"` restores native
+  resolution, 1000-bin hexbin and 150 dpi. Statistics written to the pair stats JSON are
+  unchanged — only the numbers annotated inside the figures come from the decimated sample.
+
 ## [0.4.0] — 2026-08-11
 
 ### Features
