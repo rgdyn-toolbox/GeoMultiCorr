@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.4.2] — 2026-08-14
+
+### Features
+- **Per-pair stable-ground masks.** The boolean keep-mask that `FilterPipeline.compute()`
+  produces was used to fit the corrections and then discarded, leaving no record of which
+  pixels a correction was fitted on. `apply_pairs_corrections()` now writes it per pair, per
+  component, into the pair folder as `{pa_key}-F_EWmask.tif` / `{pa_key}-F_NSmask.tif`
+  (new `Pair.save_correction_masks()`; paths on `pair.pa_ew_mask_path` /
+  `pair.pa_ns_mask_path`, also returned as `"ew_mask"` / `"ns_mask"` in the results dict).
+  Written only when a `filter_pipeline` is supplied; the `overwrite=False` skip guard now
+  treats a corrected-but-maskless pair as needing reprocessing.
+
+  Masks are binary, so they are stored as **1-bit GeoTIFFs** (`NBITS=1` + DEFLATE): a
+  1500×1500 mask is ~14 kB instead of the megabytes a float32 write would produce. GDAL,
+  rasterio and QGIS expand `NBITS=1` transparently, so consumers see an ordinary uint8 0/1
+  raster with no nodata — `0` means "not kept", not "no data".
+
+### Changed
+- **BREAKING (new-layout projects): the pzone-level `masks/` folder is removed.** It never
+  held per-pair data. `PZ_KIND_MASKS` is gone and `NEW_LAYOUT_PZ_SUBDIRS` is now 6 entries;
+  `pz_dir(pz, "masks")` raises `ValueError` so stale call sites fail loudly. The pzone-level
+  moving-areas raster/vector pair (`<pz>_moving-areas_round-0.{tif,gpkg}`) now lives in
+  `vector/`, and `migrate_to_new_structure()` moves it there. **Legacy-layout projects are
+  unaffected** — `pz_dir(name, "vector")` already collapsed to the pzone root, which is
+  exactly where those files sat. Existing new-layout projects with a populated `masks/`
+  folder should move its contents into `vector/`.
+
 ## [0.4.1] — 2026-08-14
 
 ### Performance
