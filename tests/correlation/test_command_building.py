@@ -162,15 +162,20 @@ class TestBuildCorrevalCmd:
         assert f"--prefilter-mode {expected_mode}" in result, f"Expected '--prefilter-mode {expected_mode}' not found in {result}"
     # END def
 
-    def test_output_filename_includes_metric(self, asp_helper):
-        """Output should include metric in filename."""
+    def test_output_prefix_and_metric_flag(self, asp_helper):
+        """Metric goes in as a flag; the last argument is the ``-F`` output prefix.
+
+        ``corr_eval`` appends ``-<metric>.tif`` to that prefix itself, so the file
+        it produces is ``<out_prefix>-F-ncc.tif`` (hence ``-F-ncc.tif`` in
+        ``ASP._KEEP_SUFFIXES``). The metric never appears in the argv path, so
+        asserting on ``-F-ncc`` here would be testing ASP's behaviour, not ours.
+        """
         result = asp_helper._build_correval_cmd(
             out_prefix="/tmp/output",
             metric="ncc"
         )
 
-        # The output filename should be in the last argument
-        # and should include the metric
-        assert any("-F-ncc" in part for part in result)
+        assert "--metric ncc" in result
+        assert result[-1] == "/tmp/output-F"
     # END def
 # END class

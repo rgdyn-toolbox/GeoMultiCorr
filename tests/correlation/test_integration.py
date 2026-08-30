@@ -497,6 +497,8 @@ class TestCleanPairDirectory:
             pair_dir / "pair-RD.tif",  # KEEP
             pair_dir / "pair-F-ncc.tif",  # KEEP
             pair_dir / "pair-L-R-disp-diff.tif",  # KEEP
+            pair_dir / "pair_CorrelationJob.sh",  # KEEP
+            pair_dir / "pair_CorrParameters.txt",  # KEEP
             pair_dir / "pair-D.tif",  # REMOVE
             pair_dir / "pair-temp.txt",  # REMOVE
             pair_dir / "pair-mask.tif",  # REMOVE
