@@ -98,26 +98,35 @@ supported_sensors = [
         "aerial", "uav", "drone", "swissimage", "dem", "hillshade",
     ]
 
+# Opening-tag suffix: either ">" or " attr=...>". Written as an optional group that
+# must start with whitespace, so it admits attributes without ever widening the tag
+# name itself (`<TIME_ATTR>` must not be matched by the `TIME` pattern).
+#
+# This is not hypothetical: ESA writes the Sentinel-2 granule sensing time as
+# `<SENSING_TIME metadataLevel="Standard">…</SENSING_TIME>`, so an attribute-free
+# pattern silently fails on *every real* MTD_TL.xml and the scene ends up undated.
+_TAG_ATTRS = r"(?:\s[^>]*)?"
+
 # Sensor-family → XML tag pattern mapping for acquisition date extraction
 _XML_DATE_TAGS: dict[str, str] = {
-    "spot":        r"<IMAGING_DATE>\s*([^<]+)\s*</IMAGING_DATE>",
-    "pleiades":    r"<IMAGING_DATE>\s*([^<]+)\s*</IMAGING_DATE>",
-    "planetscope": r"<eop:acquisitionDate>\s*([^<]+)\s*</eop:acquisitionDate>",
-    "planet":      r"<eop:acquisitionDate>\s*([^<]+)\s*</eop:acquisitionDate>",
-    "landsat":     r"<IMAGING_DATE>\s*([^<]+)\s*</IMAGING_DATE>",
-    "sentinel":    r"<SENSING_TIME>\s*([^<]+)\s*</SENSING_TIME>",
-    "worldview":   r"<FIRSTLINETIME>\s*([^<]+)\s*</FIRSTLINETIME>",
-    "geoeye":      r"<FIRSTLINETIME>\s*([^<]+)\s*</FIRSTLINETIME>",
+    "spot":        rf"<IMAGING_DATE{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_DATE>",
+    "pleiades":    rf"<IMAGING_DATE{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_DATE>",
+    "planetscope": rf"<eop:acquisitionDate{_TAG_ATTRS}>\s*([^<]+)\s*</eop:acquisitionDate>",
+    "planet":      rf"<eop:acquisitionDate{_TAG_ATTRS}>\s*([^<]+)\s*</eop:acquisitionDate>",
+    "landsat":     rf"<IMAGING_DATE{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_DATE>",
+    "sentinel":    rf"<SENSING_TIME{_TAG_ATTRS}>\s*([^<]+)\s*</SENSING_TIME>",
+    "worldview":   rf"<FIRSTLINETIME{_TAG_ATTRS}>\s*([^<]+)\s*</FIRSTLINETIME>",
+    "geoeye":      rf"<FIRSTLINETIME{_TAG_ATTRS}>\s*([^<]+)\s*</FIRSTLINETIME>",
 }
 
 # Applied when sensor family is unknown or the sensor-specific tag is not found
 _GENERIC_XML_DATE_PATTERNS: list[str] = [
-    r"<(?:IMAGING_DATE|imaging_date)>\s*([^<]+)\s*</",
-    r"<(?:SENSING_TIME|sensing_time)>\s*([^<]+)\s*</",
-    r"<(?:eop:acquisitionDate)>\s*([^<]+)\s*</",
-    r"<(?:FIRSTLINETIME|firstlinetime)>\s*([^<]+)\s*</",
-    r"<(?:DATE_ACQUIRED|date_acquired)>\s*([^<]+)\s*</",
-    r"<(?:ACQUISITION_DATE|acquisition_date)>\s*([^<]+)\s*</",
+    rf"<(?:IMAGING_DATE|imaging_date){_TAG_ATTRS}>\s*([^<]+)\s*</",
+    rf"<(?:SENSING_TIME|sensing_time){_TAG_ATTRS}>\s*([^<]+)\s*</",
+    rf"<(?:eop:acquisitionDate){_TAG_ATTRS}>\s*([^<]+)\s*</",
+    rf"<(?:FIRSTLINETIME|firstlinetime){_TAG_ATTRS}>\s*([^<]+)\s*</",
+    rf"<(?:DATE_ACQUIRED|date_acquired){_TAG_ATTRS}>\s*([^<]+)\s*</",
+    rf"<(?:ACQUISITION_DATE|acquisition_date){_TAG_ATTRS}>\s*([^<]+)\s*</",
 ]
 
 # Sensor-family → XML tag pattern mapping for acquisition *time* extraction.
@@ -125,16 +134,16 @@ _GENERIC_XML_DATE_PATTERNS: list[str] = [
 # Sensors whose date tag already embeds the time (e.g. ISO "2021-07-14T10:30:45Z")
 # are handled automatically without a separate time tag.
 _XML_TIME_TAGS: dict[str, str] = {
-    "spot":     r"<IMAGING_TIME>\s*([^<]+)\s*</IMAGING_TIME>",
-    "pleiades": r"<IMAGING_TIME>\s*([^<]+)\s*</IMAGING_TIME>",
-    "landsat":  r"<SCENE_CENTER_TIME>\s*([^<]+)\s*</SCENE_CENTER_TIME>",
+    "spot":     rf"<IMAGING_TIME{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_TIME>",
+    "pleiades": rf"<IMAGING_TIME{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_TIME>",
+    "landsat":  rf"<SCENE_CENTER_TIME{_TAG_ATTRS}>\s*([^<]+)\s*</SCENE_CENTER_TIME>",
 }
 
 # Generic time-tag fallbacks tried when sensor family is unknown or has no specific entry
 _GENERIC_XML_TIME_PATTERNS: list[str] = [
-    r"<(?:IMAGING_TIME|imaging_time)>\s*([^<]+)\s*</",
-    r"<(?:SCENE_CENTER_TIME|scene_center_time)>\s*([^<]+)\s*</",
-    r"<(?:TIME|time)>\s*([^<]+)\s*</",
+    rf"<(?:IMAGING_TIME|imaging_time){_TAG_ATTRS}>\s*([^<]+)\s*</",
+    rf"<(?:SCENE_CENTER_TIME|scene_center_time){_TAG_ATTRS}>\s*([^<]+)\s*</",
+    rf"<(?:TIME|time){_TAG_ATTRS}>\s*([^<]+)\s*</",
 ]
 
 def _gdal_info_json(path: pathlib.Path) -> dict:
