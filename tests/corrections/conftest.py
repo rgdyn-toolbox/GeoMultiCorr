@@ -58,6 +58,24 @@ class MockRaster:
         return MockRaster(data=new_array, transform=self.transform, res=self.res)
     #END def
 
+    def reproject(self, ref: "MockRaster", **_) -> "MockRaster":
+        """Regrid onto *ref*'s grid, mimicking geoutils.Raster.reproject.
+
+        The corrections only need the DEM to end up on the displacement grid, so
+        this samples nearest-neighbour over normalised row/col indices rather than
+        doing real CRS-aware warping.
+        """
+        n_rows, n_cols = ref.data.shape
+        src_rows, src_cols = self.data.shape
+        rows = np.linspace(0, src_rows - 1, n_rows).round().astype(int)
+        cols = np.linspace(0, src_cols - 1, n_cols).round().astype(int)
+        return MockRaster(
+            data=self.data[np.ix_(rows, cols)],
+            transform=ref.transform,
+            res=ref.res,
+        )
+    #END def
+
     def coords(self, grid: bool = True, force_offset: str = "ll", **_):
         """Map-coordinate meshgrids (x, y), mimicking geoutils.Raster.coords.
 

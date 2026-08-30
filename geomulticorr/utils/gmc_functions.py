@@ -59,6 +59,7 @@ from geomulticorr.corrections.corrections import (
     AcrossTrackDestriping,
 )
 from geomulticorr.corrections.fit import compute_slope
+from geomulticorr.utils._grid import regrid_to_ref
 from geomulticorr.utils._pairs_frame import date_summary, unique_couples, unique_dates
 from geomulticorr.utils._pairs_geometry import (
     CircularTimeScale,
@@ -1029,10 +1030,16 @@ def _flat_disp(raster: gu.Raster) -> np.ndarray:
 
 
 def _dem_on_grid(dem: gu.Raster, ref: gu.Raster) -> np.ndarray:
-    """Reproject *dem* onto *ref*'s grid (if needed) → 2-D float array with NaNs."""
-    d = dem
-    if d.data.shape != ref.data.shape:
-        d = d.reproject(ref=ref)
+    """Reproject *dem* onto *ref*'s grid (if needed) → 2-D float array with NaNs.
+
+    Unlike the correction-side regrid, a reprojection here is *expected*: the
+    plotting path decimates rasters for display (see :func:`_preview`), so
+    *ref* is usually a strided preview grid that no stored DEM will match.
+    The comparison is still a full grid comparison rather than shape-only, so
+    a genuinely misaligned DEM cannot slip through when the shapes happen to
+    coincide.
+    """
+    d, _ = regrid_to_ref(dem, ref)
     return np.ma.filled(d.data, np.nan).astype(float)
 
 

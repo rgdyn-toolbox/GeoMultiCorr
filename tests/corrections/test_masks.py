@@ -7,8 +7,12 @@ from unittest.mock import MagicMock
 import numpy as np
 import numpy.ma as ma
 import pytest
+from affine import Affine
 
+import geopandas as gpd
 import geoutils as gu
+from rasterio.crs import CRS
+from shapely.geometry import box
 
 from geomulticorr.corrections.masks import (
     BaseMask,
@@ -23,36 +27,44 @@ from geomulticorr.corrections.masks import (
 )
 from geomulticorr.corrections.corrections import RampCorrection
 
+# Matches MockRaster's default transform, so gu.Raster masks built here share the
+# mock's georeferencing (10 m pixels, north-up).
+AFFINE_10M = Affine(10.0, 0.0, 0.0, 0.0, -10.0, 0.0)
+
 
 class TestOutlierFilter:
     """Tests for OutlierFilter — mask by value bounds."""
 
-    def test_inside_bounds_kept(self, flat_raster):
+    def test_inside_bounds_kept(self):
         """Values inside (-10, 10) → True."""
-        flat_raster.data[:] = [[1.0, 5.0, -3.0]]
-        result = OutlierFilter((-10, 10)).generate_mask(flat_raster)
+        from .conftest import MockRaster
+        raster = MockRaster(data=ma.array([[1.0, 5.0, -3.0]]))
+        result = OutlierFilter((-10, 10)).generate_mask(raster)
         assert result[0, 0] == True
         assert result[0, 1] == True
         assert result[0, 2] == True
 
-    def test_outside_bounds_masked(self, flat_raster):
+    def test_outside_bounds_masked(self):
         """Values outside (-10, 10) → False."""
-        flat_raster.data[:] = [[15.0, -15.0]]
-        result = OutlierFilter((-10, 10)).generate_mask(flat_raster)
+        from .conftest import MockRaster
+        raster = MockRaster(data=ma.array([[15.0, -15.0]]))
+        result = OutlierFilter((-10, 10)).generate_mask(raster)
         assert result[0, 0] == False
         assert result[0, 1] == False
 
-    def test_boundary_exclusive(self, flat_raster):
+    def test_boundary_exclusive(self):
         """Boundary values (-10, 10): strict inequalities."""
-        flat_raster.data[:] = [[-10.0, 10.0]]
-        result = OutlierFilter((-10, 10)).generate_mask(flat_raster)
+        from .conftest import MockRaster
+        raster = MockRaster(data=ma.array([[-10.0, 10.0]]))
+        result = OutlierFilter((-10, 10)).generate_mask(raster)
         assert result[0, 0] == False
         assert result[0, 1] == False
 
-    def test_nan_masked(self, flat_raster):
+    def test_nan_masked(self):
         """NaN values → False (not finite)."""
-        flat_raster.data[:] = [[1.0, np.nan, 5.0]]
-        result = OutlierFilter((-10, 10)).generate_mask(flat_raster)
+        from .conftest import MockRaster
+        raster = MockRaster(data=ma.array([[1.0, np.nan, 5.0]]))
+        result = OutlierFilter((-10, 10)).generate_mask(raster)
         assert result[0, 0] == True
         assert result[0, 1] == False
         assert result[0, 2] == True
@@ -68,10 +80,11 @@ class TestOutlierFilter:
         assert result[0, 2] == True
 
     @pytest.mark.parametrize("lo,hi", [(-5, 5), (0, 100), (-1e3, 1e3)])
-    def test_parametrized_thresholds(self, flat_raster, lo, hi):
+    def test_parametrized_thresholds(self, lo, hi):
         """Test various thresholds."""
-        flat_raster.data[:] = [[lo - 1, (lo + hi) / 2, hi + 1]]
-        result = OutlierFilter((lo, hi)).generate_mask(flat_raster)
+        from .conftest import MockRaster
+        raster = MockRaster(data=ma.array([[lo - 1, (lo + hi) / 2, hi + 1]]))
+        result = OutlierFilter((lo, hi)).generate_mask(raster)
         assert result[0, 0] == False  # below lo
         assert result[0, 1] == True   # inside
         assert result[0, 2] == False  # above hi
@@ -85,37 +98,43 @@ class TestOutlierFilter:
 class TestCCFilter:
     """Tests for CCFilter — correlation coefficient threshold."""
 
-    def test_above_threshold_kept(self, cc_raster):
+    def test_above_threshold_kept(self):
         """CC ≥ threshold → True."""
-        cc_raster.data[:] = [[0.3, 0.5, 0.8]]
-        result = CCFilter(0.5).generate_mask(cc_raster)
+        from .conftest import MockRaster
+        target = MockRaster(data=ma.array([[0.0, 0.0, 0.0]]))
+        cc = MockRaster(data=ma.array([[0.3, 0.5, 0.8]]))
+        result = CCFilter(0.5).generate_mask(target, cc=cc)
         assert result[0, 0] == False
         assert result[0, 1] == True
         assert result[0, 2] == True
 
-    def test_below_threshold_masked(self, cc_raster):
+    def test_below_threshold_masked(self):
         """CC < threshold → False."""
-        cc_raster.data[:] = [[0.3]]
-        result = CCFilter(0.5).generate_mask(cc_raster)
+        from .conftest import MockRaster
+        target = MockRaster(data=ma.array([[0.0]]))
+        cc = MockRaster(data=ma.array([[0.3]]))
+        result = CCFilter(0.5).generate_mask(target, cc=cc)
         assert result[0, 0] == False
 
-    def test_boundary_inclusive(self, cc_raster):
+    def test_boundary_inclusive(self):
         """CC exactly at threshold (uses >=) → True."""
-        cc_raster.data[:] = [[0.5]]
-        result = CCFilter(0.5).generate_mask(cc_raster)
+        from .conftest import MockRaster
+        target = MockRaster(data=ma.array([[0.0]]))
+        cc = MockRaster(data=ma.array([[0.5]]))
+        result = CCFilter(0.5).generate_mask(target, cc=cc)
         assert result[0, 0] == True
 
     def test_masked_cc_filled_zero(self):
         """Masked CC filled with 0.0 → below threshold → False."""
         from .conftest import MockRaster
-        data = ma.array([[0.8]], mask=[[True]])
-        raster = MockRaster(data=data)
-        result = CCFilter(0.5).generate_mask(raster)
+        target = MockRaster(data=ma.array([[0.0]]))
+        cc = MockRaster(data=ma.array([[0.8]], mask=[[True]]))
+        result = CCFilter(0.5).generate_mask(target, cc=cc)
         assert result[0, 0] == False
 
-    def test_return_bool_dtype(self, cc_raster):
+    def test_return_bool_dtype(self, flat_raster, cc_raster):
         """Result dtype is bool."""
-        result = CCFilter(0.5).generate_mask(cc_raster)
+        result = CCFilter(0.5).generate_mask(flat_raster, cc=cc_raster)
         assert result.dtype == bool
 
 
@@ -215,22 +234,22 @@ class TestSnowMask:
 
     def test_numpy_snow_inverted(self, ramp_raster):
         """snow=True pixels masked out: snow inverted to get keep mask."""
-        snow_mask = np.array([[True, False], [False, True]])
         from .conftest import MockRaster
-        snow_raster = MockRaster(data=ma.array(snow_mask.astype(float)))
+        snow_mask = np.array([[True, False], [False, True]])
         result = SnowMask().generate_mask(
-            type(ramp_raster)(data=ma.array(np.ones((2, 2)))),
-            snow_mask=snow_raster
+            MockRaster(data=ma.array(np.ones((2, 2)))),
+            snow_mask=snow_mask
         )
         assert result[0, 0] == False  # was True → inverted
         assert result[0, 1] == True   # was False → inverted
 
     def test_raster_snow_inverted(self, ramp_raster):
-        """snow_mask as MockRaster with bool data → inverted."""
+        """snow_mask as gu.Raster with bool data → inverted."""
         from .conftest import MockRaster
-        snow_data = np.array([[True, False]])
-        snow_raster = MockRaster(data=ma.array(snow_data))
-        small_raster = type(ramp_raster)(data=ma.array(np.ones((1, 2))))
+        snow_raster = gu.Raster.from_array(
+            np.array([[True, False]]), transform=AFFINE_10M, crs=32632, nodata=None
+        )
+        small_raster = MockRaster(data=ma.array(np.ones((1, 2))))
         result = SnowMask().generate_mask(small_raster, snow_mask=snow_raster)
         assert result[0, 0] == False
         assert result[0, 1] == True
@@ -258,18 +277,18 @@ class TestCloudMask:
         """cloud=True pixels masked out."""
         from .conftest import MockRaster
         cloud_data = np.array([[True, False]])
-        cloud_raster = MockRaster(data=ma.array(cloud_data))
-        small_raster = type(ramp_raster)(data=ma.array(np.ones((1, 2))))
-        result = CloudMask().generate_mask(small_raster, cloud_mask=cloud_raster)
+        small_raster = MockRaster(data=ma.array(np.ones((1, 2))))
+        result = CloudMask().generate_mask(small_raster, cloud_mask=cloud_data)
         assert result[0, 0] == False
         assert result[0, 1] == True
 
     def test_raster_cloud_inverted(self, ramp_raster):
-        """Same as numpy case via MockRaster."""
+        """Same as numpy case via gu.Raster."""
         from .conftest import MockRaster
-        cloud_data = np.array([[False, True]])
-        cloud_raster = MockRaster(data=ma.array(cloud_data))
-        small_raster = type(ramp_raster)(data=ma.array(np.ones((1, 2))))
+        cloud_raster = gu.Raster.from_array(
+            np.array([[False, True]]), transform=AFFINE_10M, crs=32632, nodata=None
+        )
+        small_raster = MockRaster(data=ma.array(np.ones((1, 2))))
         result = CloudMask().generate_mask(small_raster, cloud_mask=cloud_raster)
         assert result[0, 0] == True
         assert result[0, 1] == False
@@ -372,7 +391,7 @@ class TestFilterPipeline:
 
     def test_compute_all_invalid(self, ramp_raster):
         """Tight threshold kills all pixels."""
-        fp = OutlierFilter((0, 1))  # excludes most ramp values
+        fp = FilterPipeline([OutlierFilter((0, 1))])  # excludes all ramp values
         result = fp.compute(ramp_raster)
         assert result.any() == False
 
@@ -440,3 +459,52 @@ class TestBaseMaskApply:
         result = corr.apply_single(partial_mask_raster)
         assert result.data.mask[0, 0] == True
         assert result.data.mask[9, 9] == True
+
+
+class TestStableAreaMaskCRS:
+    """The rasterizer used to ignore CRS entirely.
+
+    ``rasterio.features.geometry_mask`` reads geometry coordinates directly in
+    the transform's coordinate space. Polygons in a different CRS therefore
+    landed nowhere near the grid, producing an all-False moving mask — which
+    inverts to an all-True *stable* mask. The corrections were then fitted on
+    moving terrain, with no error and no warning.
+    """
+
+    EPSG = 2154
+    TRANSFORM = Affine(10.0, 0.0, 900_000.0, 0.0, -10.0, 6_450_200.0)
+
+    def _raster(self):
+        return gu.Raster.from_array(
+            np.ma.MaskedArray(np.zeros((20, 30), dtype="float32")),
+            transform=self.TRANSFORM,
+            crs=CRS.from_epsg(self.EPSG),
+            nodata=None,
+        )
+
+    def _polygons(self, epsg):
+        gdf = gpd.GeoDataFrame(
+            geometry=[box(900_050.0, 6_450_050.0, 900_150.0, 6_450_150.0)],
+            crs=f"EPSG:{self.EPSG}",
+        )
+        return gdf if epsg == self.EPSG else gdf.to_crs(epsg=epsg)
+
+    def test_same_crs_masks_expected_pixels(self):
+        keep = StableAreaMask(self._polygons(self.EPSG)).generate_mask(self._raster())
+        assert 0 < (~keep).sum() < keep.size
+
+    def test_different_crs_is_reprojected_not_silently_empty(self):
+        """A WGS84 GeoDataFrame must mask the same pixels as its Lambert twin."""
+        raster = self._raster()
+        native = StableAreaMask(self._polygons(self.EPSG)).generate_mask(raster)
+        wgs84 = StableAreaMask(self._polygons(4326)).generate_mask(raster)
+
+        assert (~wgs84).sum() > 0, "wrong-CRS polygons masked nothing"
+        assert np.array_equal(native, wgs84)
+
+    def test_crs_less_polygons_warn(self, caplog_gmc):
+        gdf = self._polygons(self.EPSG)
+        gdf.crs = None
+        with caplog_gmc.at_level("WARNING"):
+            StableAreaMask(gdf).generate_mask(self._raster())
+        assert "no CRS" in caplog_gmc.text

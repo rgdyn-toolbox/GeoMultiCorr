@@ -334,12 +334,64 @@ class TestTopoCorrection:
         with pytest.raises(ValueError, match="requires dem="):
             corr.fit(ramp_raster)
 
-    def test_dem_shape_mismatch_raises(self, ramp_raster, dem_raster):
-        """DEM shape mismatch → AssertionError."""
-        dem_bad = type(dem_raster)(data=ma.array(np.zeros((15, 15))))
-        corr = TopoCorrection()
-        with pytest.raises(AssertionError, match="must match displacement"):
-            corr.fit(ramp_raster, dem=dem_bad)
+    def test_dem_shape_mismatch_reprojected(self, ramp_raster, dem_raster):
+        """DEM on a different grid is reprojected onto the displacement grid.
+
+        Unlike SlopeMask (which asserts on a shape mismatch), TopoCorrection
+        regrids the DEM via ``dem.reproject(ref=raster)`` and carries on.
+        """
+        dem_off_grid = type(dem_raster)(
+            data=ma.array(np.random.default_rng(1).uniform(100, 500, (15, 15)))
+        )
+        corr = TopoCorrection(order="linear")
+        corr.fit(ramp_raster, dem=dem_off_grid)
+        assert corr._fit_called
+        assert set(corr.meta) >= {"row_slope", "col_slope", "dem_slope", "intercept", "r2"}
+
+    def test_same_shape_misaligned_dem_is_regridded_and_warned(
+        self, ramp_raster, dem_raster, caplog_gmc
+    ):
+        """A DEM with matching shape but a shifted origin must NOT pass through.
+
+        This is the case the old shape-only guard accepted silently: same
+        shape, different ground. It produced a wrong topographic correction
+        with no error and no warning. Now it regrids and says so.
+        """
+        from affine import Affine
+
+        shifted = type(dem_raster)(
+            data=dem_raster.data.copy(),
+            transform=dem_raster.transform * Affine.translation(0.5, 0.5),
+        )
+        assert shifted.data.shape == ramp_raster.data.shape, "precondition"
+
+        corr = TopoCorrection(order="linear")
+        with caplog_gmc.at_level("WARNING"):
+            corr.fit(ramp_raster, dem=shifted)
+
+        assert corr._fit_called
+        assert "shape matches" in caplog_gmc.text
+        assert "georeferencing does not" in caplog_gmc.text
+        # Both grids must be reported, and they must differ — describing the
+        # DEM after the regrid would print the target grid twice.
+        dem_line = next(l for l in caplog_gmc.text.splitlines() if "DEM  :" in l)
+        pair_line = next(l for l in caplog_gmc.text.splitlines() if "pair :" in l)
+        assert dem_line.split("DEM  :")[1] != pair_line.split("pair :")[1]
+
+    def test_aligned_dem_is_not_regridded(self, ramp_raster, dem_raster, caplog_gmc):
+        """The common case stays silent and does no work."""
+        corr = TopoCorrection(order="linear")
+        with caplog_gmc.at_level("INFO"):
+            corr.fit(ramp_raster, dem=dem_raster)
+
+        assert corr._fit_called
+        assert "regrid" not in caplog_gmc.text.lower()
+
+    def test_declares_dem_required(self):
+        """apply_pairs_corrections validates _REQUIRED_KWARGS before looping."""
+        assert "dem" in TopoCorrection._REQUIRED_KWARGS
+        assert "dem" in TopoRampCorrection._REQUIRED_KWARGS
+        assert "dem" in SlopeRampCorrection._REQUIRED_KWARGS
 
     def test_invalid_order_raises(self):
         """order not in ('linear', 'quadratic') → ValueError."""

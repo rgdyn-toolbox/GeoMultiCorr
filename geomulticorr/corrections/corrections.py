@@ -75,6 +75,9 @@ import numpy as np
 import numpy.ma as ma
 from rasterio.features import geometry_mask
 
+from geomulticorr._logging import logger
+from geomulticorr.utils._grid import describe_grid, regrid_to_ref
+
 from .fit import (
     compute_shift,
     compute_slope,
@@ -130,6 +133,50 @@ class BaseCorrection(ABC):
     # END def
 
     @staticmethod
+    def _dem_array_on_grid(dem: gu.Raster, raster: gu.Raster, step: str) -> np.ndarray:
+        """Return *dem* as a float array on *raster*'s grid, regridding if needed.
+
+        The grid comparison is ``(shape, transform, crs)``, not shape alone.
+        Two rasters can share a shape and still sit on different ground; the
+        previous shape-only guard let that through silently and produced a
+        wrong correction with no error and no warning.
+
+        :param dem: DEM to place on the displacement grid.
+        :type dem: geoutils.Raster
+        :param raster: Displacement raster defining the target grid.
+        :type raster: geoutils.Raster
+        :param step: Correction class name, for log messages.
+        :type step: str
+        :returns: DEM values as float64 with nodata as ``NaN``, on *raster*'s grid.
+        :rtype: np.ndarray
+        """
+        # Capture what the old shape-only guard would have concluded, so the
+        # cases it got wrong can be reported distinctly. The description is
+        # taken before the regrid, otherwise it reports the target grid and
+        # the two lines print identically.
+        shapes_matched = dem.data.shape == raster.data.shape
+        dem_before = describe_grid(dem)
+
+        dem, regridded = regrid_to_ref(dem, raster)
+
+        if regridded:
+            if shapes_matched:
+                logger.warning(
+                    f"{step}: DEM shape matches the displacement grid but the "
+                    f"georeferencing does not — it has been regridded.\n"
+                    f"  DEM  : {dem_before}\n"
+                    f"  pair : {describe_grid(raster)}\n"
+                    "  Earlier versions used such a DEM as-is, so any previously "
+                    "corrected output for this pair was computed on a misaligned "
+                    "DEM and should be re-run."
+                )
+            else:
+                logger.info(f"{step}: DEM regridded onto {describe_grid(raster)}")
+
+        return ma.filled(dem.data, np.nan).astype(float)
+    # END def
+
+    @staticmethod
     def _load_gdf(stable_mask) -> gpd.GeoDataFrame:
         """Normalise *stable_mask* to a :class:`geopandas.GeoDataFrame`.
 
@@ -154,12 +201,20 @@ class BaseCorrection(ABC):
         gdf: gpd.GeoDataFrame,
         shape: tuple[int, int],
         transform,
+        crs=None,
     ) -> np.ndarray:
         """Rasterize moving-area polygons to a boolean exclusion mask.
 
         Pixels that fall *inside* any polygon in *gdf* are marked ``True``
         (they belong to a moving feature and are excluded from fitting).
         Pixels outside all polygons are ``False``.
+
+        ``geometry_mask`` interprets geometry coordinates directly in the
+        transform's coordinate space, so a CRS mismatch is not an error — it
+        simply places every polygon outside the grid, yielding an all-``False``
+        mask.  The caller then reads that as "nothing is moving" and fits the
+        corrections on moving terrain.  Passing *crs* lets this reproject
+        first; omitting it preserves the old, unchecked behaviour.
 
         :param gdf: GeoDataFrame of moving-area polygons (e.g. rock-glacier
             or landslide outlines).
@@ -168,10 +223,23 @@ class BaseCorrection(ABC):
         :type shape: tuple[int, int]
         :param transform: Affine geotransform of the output raster.
         :type transform: affine.Affine
+        :param crs: CRS of the target grid.  When given and *gdf* is in a
+            different CRS, the polygons are reprojected onto it.
         :returns: Boolean array — ``True`` = inside a moving polygon
             (exclude from fit).
         :rtype: np.ndarray
         """
+        if crs is not None:
+            if gdf.crs is None:
+                logger.warning(
+                    "Moving-area polygons have no CRS — assuming they already "
+                    "match the displacement grid. If they do not, the mask will "
+                    "be silently empty and corrections will be fitted on moving "
+                    "terrain."
+                )
+            elif gdf.crs != crs:
+                gdf = gdf.to_crs(crs)
+
         geometries = [g for g in gdf.geometry if g is not None and g.is_valid]
         if not geometries:
             return np.zeros(shape, dtype=bool)
@@ -191,6 +259,7 @@ class BaseCorrection(ABC):
         shape: tuple[int, int],
         transform,
         dem_arr: np.ndarray | None = None,
+        crs=None,
     ) -> np.ndarray:
         """Build a boolean fit mask from various stable-mask input types.
 
@@ -216,6 +285,9 @@ class BaseCorrection(ABC):
         :param dem_arr: Optional DEM array.  When provided, pixels with
             non-finite DEM values are additionally excluded from the fit.
         :type dem_arr: np.ndarray or None
+        :param crs: CRS of the displacement grid.  Passed through so vector
+            stable-masks in a different CRS are reprojected rather than
+            silently rasterizing to nothing.
         :returns: Boolean fit mask — ``True`` = include in fit.
         :rtype: np.ndarray
         """
@@ -227,7 +299,7 @@ class BaseCorrection(ABC):
             fit = valid & stable_mask.astype(bool)
         else:
             gdf = BaseCorrection._load_gdf(stable_mask)
-            moving = BaseCorrection._rasterize_moving_areas(gdf, shape, transform)
+            moving = BaseCorrection._rasterize_moving_areas(gdf, shape, transform, crs)
             fit = valid & ~moving
 
         if dem_arr is not None:
@@ -499,7 +571,8 @@ class MedianCentering(BaseCorrection):
         :rtype: MedianCentering
         """
         fit_mask = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform
+            stable_mask, raster.data, raster.data.shape, raster.transform,
+            crs=getattr(raster, "crs", None),
         )
         self._surface = compute_shift(raster.data, fit_mask, self.stat)
         self.meta = {"shift": self._surface}
@@ -551,7 +624,8 @@ class RampCorrection(BaseCorrection):
         :raises ValueError: If fewer than 4 valid stable pixels are available.
         """
         fit_mask = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform
+            stable_mask, raster.data, raster.data.shape, raster.transform,
+            crs=getattr(raster, "crs", None),
         )
         if fit_mask.sum() < 4:
             raise ValueError("Too few valid pixels for RampCorrection (need ≥ 4).")
@@ -595,6 +669,8 @@ class TopoCorrection(BaseCorrection):
         >>> xc = corr.apply(xDisp)
     """
 
+    _REQUIRED_KWARGS: tuple[str, ...] = ("dem",)
+
     def __init__(self, order: str = "quadratic", lambda_reg: float = 1e-6) -> None:
         if order not in ("linear", "quadratic"):
             raise ValueError("order must be 'linear' or 'quadratic'")
@@ -622,11 +698,10 @@ class TopoCorrection(BaseCorrection):
         dem: gu.Raster = kwargs.get("dem")
         if dem is None:
             raise ValueError("TopoCorrection.fit() requires dem= kwarg.")
-        if dem.data.shape != raster.data.shape:
-            dem = dem.reproject(ref=raster)
-        dem_arr  = ma.filled(dem.data, np.nan).astype(float)
+        dem_arr = self._dem_array_on_grid(dem, raster, "TopoCorrection")
         fit_mask = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform, dem_arr
+            stable_mask, raster.data, raster.data.shape, raster.transform, dem_arr,
+            crs=getattr(raster, "crs", None),
         )
         min_px = 5 if self.order == "linear" else 8
         if fit_mask.sum() < min_px:
@@ -696,6 +771,8 @@ class TopoRampCorrection(BaseCorrection):
         >>> yc = corr.apply(yDisp)   # reuse fitted surface on NS component
     """
 
+    _REQUIRED_KWARGS: tuple[str, ...] = ("dem",)
+
     def __init__(self, order: str = "linear", lambda_reg: float = 1e-6) -> None:
         if order not in ("linear", "quadratic"):
             raise ValueError("order must be 'linear' or 'quadratic'")
@@ -723,11 +800,10 @@ class TopoRampCorrection(BaseCorrection):
         dem: gu.Raster = kwargs.get("dem")
         if dem is None:
             raise ValueError("TopoRampCorrection.fit() requires dem= kwarg.")
-        if dem.data.shape != raster.data.shape:
-            dem = dem.reproject(ref=raster)
-        dem_arr  = ma.filled(dem.data, np.nan).astype(float)
+        dem_arr = self._dem_array_on_grid(dem, raster, "TopoRampCorrection")
         fit_mask = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform, dem_arr
+            stable_mask, raster.data, raster.data.shape, raster.transform, dem_arr,
+            crs=getattr(raster, "crs", None),
         )
         min_px = 4 if self.order == "linear" else 8
         if fit_mask.sum() < min_px:
@@ -857,7 +933,8 @@ class DirectionalBiasCorrection(BaseCorrection):
             available.
         """
         fit_mask = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform
+            stable_mask, raster.data, raster.data.shape, raster.transform,
+            crs=getattr(raster, "crs", None),
         )
         if fit_mask.sum() < max(self.n_bins, 50):
             raise ValueError(
@@ -935,6 +1012,8 @@ class SlopeRampCorrection(BaseCorrection):
         >>> xc = corr.apply(xDisp)
     """
 
+    _REQUIRED_KWARGS: tuple[str, ...] = ("dem",)
+
     def __init__(self, order: str = "linear", lambda_reg: float = 1e-6) -> None:
         if order not in ("linear", "quadratic"):
             raise ValueError("order must be 'linear' or 'quadratic'")
@@ -965,12 +1044,11 @@ class SlopeRampCorrection(BaseCorrection):
         dem: gu.Raster = kwargs.get("dem")
         if dem is None:
             raise ValueError("SlopeRampCorrection.fit() requires dem= kwarg.")
-        if dem.data.shape != raster.data.shape:
-            dem = dem.reproject(ref=raster)
-        dem_arr   = ma.filled(dem.data, np.nan).astype(float)
+        dem_arr   = self._dem_array_on_grid(dem, raster, "SlopeRampCorrection")
         slope_arr = compute_slope(dem_arr, raster.transform)
         fit_mask  = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform, dem_arr
+            stable_mask, raster.data, raster.data.shape, raster.transform, dem_arr,
+            crs=getattr(raster, "crs", None),
         )
         min_px = 5 if self.order == "linear" else 8
         if fit_mask.sum() < min_px:
@@ -1070,7 +1148,8 @@ class _FourierDestriping(BaseCorrection):
         :rtype: _FourierDestriping
         """
         fit_mask = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform
+            stable_mask, raster.data, raster.data.shape, raster.transform,
+            crs=getattr(raster, "crs", None),
         )
         values = ma.filled(raster.data, np.nan).astype(float)
         stable_values = np.where(fit_mask, values, np.nan)

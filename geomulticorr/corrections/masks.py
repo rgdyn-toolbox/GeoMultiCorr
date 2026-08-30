@@ -430,10 +430,12 @@ class StableAreaMask(BaseMask):
             moving_mask = self.stable_mask.create_mask(raster)
             return ~np.asarray(moving_mask.data, dtype=bool)
 
-        # Fallback for str, Path, or gpd.GeoDataFrame inputs
+        # Fallback for str, Path, or gpd.GeoDataFrame inputs.
+        # The grid CRS is passed so polygons in a different CRS are reprojected
+        # instead of landing outside the grid and producing an empty mask.
         gdf = BaseCorrection._load_gdf(self.stable_mask)
         moving = BaseCorrection._rasterize_moving_areas(
-            gdf, raster.data.shape, raster.transform
+            gdf, raster.data.shape, raster.transform, getattr(raster, "crs", None)
         )
         return ~moving  # True = stable = keep
 
