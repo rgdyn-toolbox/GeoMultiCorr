@@ -45,6 +45,7 @@ import matplotlib.pyplot as plt
 
 import geomulticorr.core.thumb as gmc_thumb
 import geomulticorr.stats.stats as gmc_stats
+from geomulticorr.utils._grid import write_binary_raster
 from geomulticorr.utils.gmc_functions import plot_show_raw_results
 from geomulticorr.correlation.correlation import ASP
 from geomulticorr._logging import logger
@@ -724,10 +725,11 @@ status    : {self.pa_status}
         corrected pair stays reproducible after the fact.
 
         The masks are binary, so they are packed one pixel per bit
-        (``NBITS=1``) and deflated: a 1500x1500 mask lands around 15-40 kB
-        instead of the ~9 MB a float32 write would produce. GDAL, rasterio
-        and QGIS expand ``NBITS=1`` transparently on read, so consumers see
-        an ordinary uint8 0/1 raster.
+        (``NBITS=1``) and deflated by
+        :func:`~geomulticorr.utils._grid.write_binary_raster`: a 1500x1500
+        mask lands around 14 kB instead of the megabytes a float32 write
+        would produce. GDAL, rasterio and QGIS expand ``NBITS=1``
+        transparently on read, so consumers see an ordinary uint8 0/1 raster.
 
         Args:
             x_stable: Boolean keep-array for the EW component (True = kept),
@@ -748,29 +750,8 @@ status    : {self.pa_status}
             if mask is None:
                 continue
 
-            arr = np.asarray(mask)
-            if arr.ndim == 3 and arr.shape[0] == 1:
-                arr = arr[0]
-
-            # Built from scratch rather than reference.copy(): copy() inherits
-            # the reference's nodata (0.0 for the displacement rasters), which
-            # would mark every *excluded* pixel as nodata — 0 is a real value
-            # here, meaning "not kept". from_array(nodata=None) keeps all
-            # pixels valid.
-            #
-            # Cast to uint8 explicitly: geoutils 0.2.5 auto-casts bool arrays
-            # and force-sets nodata=255, which cannot be represented in one bit.
-            # Passing dtype= does not help — it is accepted but never read there.
-            mask_raster = gu.Raster.from_array(
-                arr.astype("uint8"),
-                transform=reference.transform,
-                crs=reference.crs,
-                nodata=None,
-            )
-            mask_raster.to_file(
-                str(out_path),
-                nodata=None,
-                co_opts={"NBITS": "1", "COMPRESS": "DEFLATE", "TILED": "YES"},
+            write_binary_raster(
+                mask, reference.transform, reference.crs, out_path
             )
             written[key] = out_path
 

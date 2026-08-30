@@ -14,8 +14,8 @@ from shapely.geometry import Polygon
 from geomulticorr import open_gmc_session
 from geomulticorr.core.session import (
     PZ_KIND_OPTICAL, PZ_KIND_IMAGE_CORRELATION, PZ_KIND_REFERENCE_DEM,
-    PZ_KIND_VECTOR, PZ_KIND_INVERSION, PZ_KIND_FIGURES,
-    NEW_LAYOUT_PZ_SUBDIRS
+    PZ_KIND_REFERENCE_RASTER, PZ_KIND_VECTOR, PZ_KIND_INVERSION,
+    PZ_KIND_FIGURES, NEW_LAYOUT_PZ_SUBDIRS
 )
 
 
@@ -115,6 +115,7 @@ class TestPzDirMethod:
             (PZ_KIND_OPTICAL, pz_root / "optical"),
             (PZ_KIND_IMAGE_CORRELATION, pz_root / "image_correlation"),
             (PZ_KIND_REFERENCE_DEM, pz_root / "reference_dem"),
+            (PZ_KIND_REFERENCE_RASTER, pz_root / "reference_raster"),
             (PZ_KIND_VECTOR, pz_root / "vector"),
             (PZ_KIND_INVERSION, pz_root / "inversion"),
             (PZ_KIND_FIGURES, pz_root / "figures"),
@@ -144,10 +145,11 @@ class TestPzDirMethod:
         with pytest.raises(ValueError, match="Unknown pzone subdirectory kind"):
             session.pz_dir("test_pz", "masks")
 
-    def test_new_layout_has_six_subdirs(self):
-        """NEW_LAYOUT_PZ_SUBDIRS is 6 kinds — masks was removed."""
-        assert len(NEW_LAYOUT_PZ_SUBDIRS) == 6
+    def test_new_layout_subdirs(self):
+        """masks was removed; reference_raster was added."""
+        assert len(NEW_LAYOUT_PZ_SUBDIRS) == 7
         assert "masks" not in NEW_LAYOUT_PZ_SUBDIRS
+        assert "reference_raster" in NEW_LAYOUT_PZ_SUBDIRS
 
 
 class TestInsertPzoneStructure:

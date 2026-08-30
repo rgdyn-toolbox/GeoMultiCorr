@@ -55,6 +55,8 @@ import numpy as np
 import geoutils as gu
 import pandas as pd
 import geopandas as gpd
+import rasterio.crs as rio_crs
+import rasterio.transform as rio_transform
 import shapely.wkt as _wkt
 from shapely.geometry.base import BaseGeometry
 from shapely.geometry import shape
@@ -114,6 +116,7 @@ project_template_location = resources_location / "project_template"
 PZ_KIND_OPTICAL = "optical"
 PZ_KIND_IMAGE_CORRELATION = "image_correlation"
 PZ_KIND_REFERENCE_DEM = "reference_dem"
+PZ_KIND_REFERENCE_RASTER = "reference_raster"
 PZ_KIND_VECTOR = "vector"
 PZ_KIND_INVERSION = "inversion"
 PZ_KIND_FIGURES = "figures"
@@ -122,6 +125,7 @@ NEW_LAYOUT_PZ_SUBDIRS = (
     PZ_KIND_OPTICAL,
     PZ_KIND_IMAGE_CORRELATION,
     PZ_KIND_REFERENCE_DEM,
+    PZ_KIND_REFERENCE_RASTER,
     PZ_KIND_VECTOR,
     PZ_KIND_INVERSION,
     PZ_KIND_FIGURES,
@@ -393,6 +397,7 @@ class Session:
         - pz_dir(name, "optical") → path_raster_data/name/opticals
         - pz_dir(name, "image_correlation") → path_raster_data/name/image_correlation
         - pz_dir(name, "reference_dem") → path_raster_data/name (DEM file in root)
+        - pz_dir(name, "reference_raster") → path_raster_data/name (grid file in root)
         - pz_dir(name, "vector") → path_raster_data/name (vectors in root)
         - pz_dir(name, "inversion") → path_raster_data/name (inversion_* subdirs in root)
         - pz_dir(name, "figures") → path_figures (project-wide)
@@ -413,7 +418,12 @@ class Session:
                 return pz_root / "opticals"
             elif kind == PZ_KIND_IMAGE_CORRELATION:
                 return pz_root / "image_correlation"
-            elif kind in (PZ_KIND_REFERENCE_DEM, PZ_KIND_VECTOR, PZ_KIND_INVERSION):
+            elif kind in (
+                PZ_KIND_REFERENCE_DEM,
+                PZ_KIND_REFERENCE_RASTER,
+                PZ_KIND_VECTOR,
+                PZ_KIND_INVERSION,
+            ):
                 return pz_root
             elif kind == PZ_KIND_FIGURES:
                 return self.path_figures
@@ -711,7 +721,426 @@ class Session:
         Returns:
             list: Return a list of DEMs
         """
-        return [pz.get_dem() for pz in self.get_pzones(criterias) if pz.get_dem() != False]
+        # Read each DEM once. The previous form called pz.get_dem() twice per
+        # pzone — once in the filter, once in the body — and get_dem() loads
+        # the full array, so every DEM was read off disk twice.
+        dems = (pz.get_dem() for pz in self.get_pzones(criterias))
+        return [dem for dem in dems if dem is not False]
+
+    # ------------------------------------------------------------------ #
+    # Pzone reference grid / DEM / moving areas
+    # ------------------------------------------------------------------ #
+
+    def _pzone_vector(self, pz_name: str) -> gu.Vector:
+        """Return a single pzone's AOI as a :class:`geoutils.Vector`.
+
+        Wraps the one-row-slice idiom used by ``sieve_bulk`` and
+        ``extract_pairs_raw_displacements``.  ``self._pzones`` is already in
+        the session CRS, so no reprojection happens here.
+
+        Args:
+            pz_name: Exact processing-zone name.
+
+        Returns:
+            gu.Vector: Single-feature vector in the session CRS.
+
+        Raises:
+            KeyError: If *pz_name* matches no pzone.
+        """
+        df = self.get_pzones_overview(pz_name)
+        exact = df[df["pz_name"] == pz_name] if "pz_name" in df.columns else df
+        if exact.empty:
+            raise KeyError(
+                f"No pzone named {pz_name!r}. Known pzones: {sorted(self.pz_names)}"
+            )
+        return gu.Vector(
+            gpd.GeoDataFrame([exact.iloc[0]], crs=df.crs, geometry="geometry")
+        )
+
+    def _normalize_vector_source(
+        self,
+        source,
+        layer: str | None = None,
+    ) -> gu.Vector:
+        """Normalise any AOI/polygon *source* into a session-CRS ``gu.Vector``.
+
+        Accepts a :class:`geoutils.Vector`, a :class:`geoutils.Raster` (its
+        footprint is used), or a path to either a raster or a vector file.
+
+        Args:
+            source: Vector, raster, or path to one of them.
+            layer: Layer name for multi-layer vector files. Ignored otherwise.
+
+        Returns:
+            gu.Vector: Features reprojected to ``self.epsg``.
+
+        Raises:
+            TypeError: If *source* is not a supported type.
+            ValueError: If the source contains no features.
+        """
+        raster_suffixes = (".tif", ".tiff")
+        if isinstance(source, gu.Vector):
+            vec = source
+        elif isinstance(source, gu.Raster):
+            vec = gu.Vector(source.footprint.ds)
+        elif isinstance(source, gpd.GeoDataFrame):
+            vec = gu.Vector(source)
+        elif isinstance(source, (str, pathlib.Path)):
+            path = pathlib.Path(source)
+            if path.suffix.lower() in raster_suffixes:
+                vec = gu.Vector(gu.Raster(str(path), load_data=False).footprint.ds)
+            else:
+                read_kwargs = {"engine": "pyogrio"}
+                if layer is not None:
+                    read_kwargs["layer"] = layer
+                vec = gu.Vector(gpd.read_file(str(path), **read_kwargs))
+        else:
+            raise TypeError(
+                "source must be a file path, gu.Vector, gu.Raster, or GeoDataFrame "
+                f"(got {type(source).__name__})."
+            )
+
+        if vec.ds.empty:
+            raise ValueError(f"No features found in vector source: {source!r}")
+
+        # A CRS-less source cannot be reprojected — it can only be declared.
+        # Assume it is already in the session CRS and say so loudly.
+        if vec.crs is None:
+            logger.warning(
+                f"Vector source {source!r} has no CRS — assuming EPSG:{self.epsg}."
+            )
+            vec = gu.Vector(vec.ds.set_crs(epsg=self.epsg))
+        elif vec.crs.to_epsg() != self.epsg:
+            vec = vec.reproject(crs=self.epsg)
+
+        return vec
+
+    def reference_grid_path(self, pz_name: str) -> pathlib.Path:
+        """Path of a pzone's reference-grid raster (may not exist yet)."""
+        return (
+            self.pz_dir(pz_name, PZ_KIND_REFERENCE_RASTER) / f"{pz_name}_grid.tif"
+        )
+
+    def build_reference_grid(
+        self,
+        pz_name: str,
+        resolution: float | None = None,
+        from_pair=None,
+        overwrite: bool = False,
+    ) -> pathlib.Path:
+        """Create the pzone's reference grid and persist it as a 1-bit GeoTIFF.
+
+        The reference grid is the single source of truth for a pzone's CRS,
+        extent and pixel dimensions.  Everything else in the pzone — the DEM,
+        the moving-area polygons, any raster you need to crop — is placed on
+        it, so nothing has to hunt for "some displacement raster" to match
+        against.
+
+        The file holds all ones and is packed one pixel per bit, so it costs a
+        few kB no matter how large the grid is.  Only its georeferencing
+        matters.
+
+        Exactly one of *resolution* or *from_pair* must be given:
+
+        - ``resolution=`` derives the grid from the pzone polygon via
+          :meth:`_compute_canonical_grid` — bounds snapped outward to a
+          lattice anchored at the CRS origin, with an exact width/height.
+          This is reproducible from the geodatabase alone and is the same
+          grid ``extract_pairs_raw_displacements`` snaps pairs to.
+        - ``from_pair=`` copies the grid off an existing pair's EW raster.
+          Use it when rasters are already on disk on a grid you must match.
+
+        Args:
+            pz_name: Processing-zone name.
+            resolution: Target pixel size in CRS units (metres).
+            from_pair: A :class:`~geomulticorr.core.pair.Pair` whose EW raster
+                defines the grid.
+            overwrite: Rebuild even if the grid file already exists.
+
+        Returns:
+            pathlib.Path: Path to the written grid raster.
+
+        Raises:
+            ValueError: If neither or both of *resolution* / *from_pair* are
+                given.
+            FileNotFoundError: If *from_pair*'s EW raster does not exist.
+        """
+        from geomulticorr.utils._grid import describe_grid, write_binary_raster
+
+        if (resolution is None) == (from_pair is None):
+            raise ValueError(
+                "Provide exactly one of resolution= or from_pair= "
+                "(resolution derives the grid from the pzone AOI; from_pair "
+                "copies it from an existing pair's EW raster)."
+            )
+
+        out_path = self.reference_grid_path(pz_name)
+        if out_path.exists() and not overwrite:
+            logger.info(f"Reference grid already exists: {out_path} (overwrite=False)")
+            return out_path
+
+        if from_pair is not None:
+            ew_path = pathlib.Path(from_pair.pa_ew_path)
+            if not ew_path.exists():
+                raise FileNotFoundError(
+                    f"Pair {from_pair.pa_key!r} has no EW raster at {ew_path}. "
+                    "Run extract_pairs_raw_displacements() first."
+                )
+            ref = gu.Raster(str(ew_path), load_data=False)
+            crs, transform = ref.crs, ref.transform
+            width, height = ref.width, ref.height
+        else:
+            pz_vec = self._pzone_vector(pz_name)
+            bounds, (width, height) = self._compute_canonical_grid(
+                pz_vec, self.epsg, resolution
+            )
+            crs = rio_crs.CRS.from_epsg(self.epsg)
+            transform = rio_transform.from_bounds(
+                bounds.left, bounds.bottom, bounds.right, bounds.top, width, height
+            )
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        write_binary_raster(
+            np.ones((height, width), dtype="uint8"), transform, crs, out_path
+        )
+
+        written = gu.Raster(str(out_path), load_data=False)
+        logger.success(
+            f"Reference grid for '{pz_name}': {describe_grid(written)} → {out_path}"
+        )
+        return out_path
+
+    def get_reference_grid(self, pz_name: str) -> gu.Raster:
+        """Load a pzone's reference grid, without reading any pixels.
+
+        Opened with ``load_data=False``, so this costs one metadata read and
+        allocates nothing.  ``.crs``, ``.transform``, ``.res``, ``.bounds``,
+        ``.shape``, ``.width`` and ``.height`` are all available.
+
+        To place a raster on this grid, destructure it — do **not** pass it as
+        ``ref=``.  ``reproject(ref=…)`` takes only CRS, resolution and bounds
+        from the reference and then *infers* the size, which can round to a
+        different shape::
+
+            g = session.get_reference_grid("MyPzone")
+            out = r.reproject(crs=g.crs, bounds=g.bounds,
+                              grid_size=(g.width, g.height), resampling="bilinear")
+
+        Args:
+            pz_name: Processing-zone name.
+
+        Returns:
+            gu.Raster: Lazily-opened grid raster.
+
+        Raises:
+            FileNotFoundError: If the grid has not been built yet.
+        """
+        path = self.reference_grid_path(pz_name)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"No reference grid for pzone {pz_name!r} at {path}. "
+                f"Build it first: session.build_reference_grid({pz_name!r}, resolution=…)"
+            )
+        return gu.Raster(str(path), load_data=False)
+
+    def build_reference_dem(
+        self,
+        pz_name: str,
+        source,
+        resampling: str = "bilinear",
+        overwrite: bool = False,
+    ) -> pathlib.Path:
+        """Crop and regrid a DEM onto the pzone reference grid, and persist it.
+
+        Writes ``<pzone>/reference_dem/<pz_name>_dem.tif`` — the exact path
+        :meth:`~geomulticorr.core.pzone.Pzone.get_dem` reads, so that method
+        starts working with no change to it.
+
+        This is what stops the corrections pipeline re-warping the DEM: once
+        the stored DEM sits on the same grid as the displacement rasters, the
+        alignment check in every ``fit()`` is a no-op.
+
+        The source is cropped to the pzone AOI *before* reprojection, so only
+        the overlapping window is read from disk.
+
+        Args:
+            pz_name: Processing-zone name.
+            source: DEM as a path, a :class:`geoutils.Raster`, or the ``Path``
+                returned by
+                :meth:`~geomulticorr.data_sources.global_dem_download.DEMFinder.download_dem`.
+            resampling: Resampling method for the regrid. ``"bilinear"`` suits
+                continuous elevation; use ``"cubic"`` for smoother slopes.
+            overwrite: Rebuild even if the DEM already exists.
+
+        Returns:
+            pathlib.Path: Path to the written DEM.
+
+        Raises:
+            FileNotFoundError: If the reference grid has not been built, or the
+                source path does not exist.
+            ValueError: If the source does not overlap the pzone.
+        """
+        from geomulticorr.utils._grid import describe_grid, grids_match
+
+        grid = self.get_reference_grid(pz_name)
+
+        out_path = self.pz_dir(pz_name, PZ_KIND_REFERENCE_DEM) / f"{pz_name}_dem.tif"
+        if out_path.exists() and not overwrite:
+            logger.info(f"Reference DEM already exists: {out_path} (overwrite=False)")
+            return out_path
+
+        if isinstance(source, gu.Raster):
+            dem = source
+        else:
+            src_path = pathlib.Path(source)
+            if not src_path.exists():
+                raise FileNotFoundError(f"DEM source not found: {src_path}")
+            dem = gu.Raster(str(src_path), load_data=False)
+
+        # Reject a disjoint source up front — reprojecting it would otherwise
+        # produce a full grid of nodata with no explanation.
+        gxmin, gymin, gxmax, gymax = grid.get_bounds_projected(out_crs=dem.crs)
+        dxmin, dymin, dxmax, dymax = dem.bounds.left, dem.bounds.bottom, dem.bounds.right, dem.bounds.top
+        if gxmax <= dxmin or gxmin >= dxmax or gymax <= dymin or gymin >= dymax:
+            raise ValueError(
+                f"DEM source does not overlap pzone {pz_name!r}.\n"
+                f"  pzone (in DEM CRS): ({gxmin:.1f}, {gymin:.1f}, {gxmax:.1f}, {gymax:.1f})\n"
+                f"  DEM:                ({dxmin:.1f}, {dymin:.1f}, {dxmax:.1f}, {dymax:.1f})"
+            )
+
+        # Windowed crop in the source CRS first: reads only the overlap.
+        # Padded by a few pixels so the resampling kernel has neighbours at
+        # the edge instead of inventing nodata there.
+        pad = 4 * max(dem.res)
+        try:
+            dem = dem.crop(
+                [gxmin - pad, gymin - pad, gxmax + pad, gymax + pad],
+                mode="match_pixel",
+            )
+        except Exception as exc:  # pragma: no cover - geoutils edge cases
+            logger.warning(f"Could not pre-crop DEM ({exc}); reprojecting in full.")
+
+        dem_on_grid = dem.reproject(
+            crs=grid.crs,
+            bounds=grid.bounds,
+            grid_size=(grid.width, grid.height),
+            resampling=resampling,
+        )
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        dem_on_grid.to_file(str(out_path))
+
+        if not grids_match(gu.Raster(str(out_path), load_data=False), grid):
+            logger.warning(
+                f"Written DEM grid does not match the reference grid for {pz_name!r} — "
+                "this should not happen; inspect the output."
+            )
+        logger.success(
+            f"Reference DEM for '{pz_name}': {describe_grid(dem_on_grid)} → {out_path}"
+        )
+        return out_path
+
+    def moving_areas_path(self, pz_name: str) -> pathlib.Path:
+        """Path of a pzone's moving-area polygons (may not exist yet)."""
+        return self.pz_dir(pz_name, PZ_KIND_VECTOR) / f"{pz_name}_moving-areas.gpkg"
+
+    def load_moving_areas(
+        self,
+        pz_name: str,
+        source,
+        layer: str | None = None,
+        buffer: float | None = None,
+        clip: bool = True,
+        overwrite: bool = False,
+    ) -> pathlib.Path:
+        """Import moving-area polygons, place them on the pzone grid, and store them.
+
+        Moving areas are the terrain the corrections must **not** be fitted on
+        — rock glaciers, landslides, active glacier tongues.  This reprojects
+        them into the session CRS, trims them to the reference grid, and
+        persists them at ``<pzone>/vector/<pz_name>_moving-areas.gpkg`` so the
+        polygons live with the project instead of at some absolute path in a
+        notebook.
+
+        Distinct from the generated ``<pz>_moving-areas_round-0.gpkg``, which
+        is the *output* of the clustering workflow — these are user-supplied
+        *input*.
+
+        Args:
+            pz_name: Processing-zone name.
+            source: Polygons as a path, :class:`geoutils.Vector`, or
+                :class:`geopandas.GeoDataFrame`.
+            layer: Layer name, for multi-layer GeoPackages.
+            buffer: Optional buffer in CRS units (metres) applied after
+                reprojection — widens the exclusion around each feature.
+            clip: Cut geometries at the grid boundary. ``False`` keeps whole
+                features that merely intersect it.
+            overwrite: Replace an existing file.
+
+        Returns:
+            pathlib.Path: Path to the written GeoPackage.
+
+        Raises:
+            FileNotFoundError: If the reference grid has not been built.
+            ValueError: If no polygon survives the clip to the pzone.
+        """
+        grid = self.get_reference_grid(pz_name)
+
+        out_path = self.moving_areas_path(pz_name)
+        if out_path.exists() and not overwrite:
+            logger.info(f"Moving areas already exist: {out_path} (overwrite=False)")
+            return out_path
+
+        vec = self._normalize_vector_source(source, layer=layer)
+        n_input = len(vec.ds)
+
+        if buffer:
+            vec = gu.Vector(vec.ds.assign(geometry=vec.ds.geometry.buffer(buffer)))
+
+        vec = vec.crop(grid, clip=clip)
+        if vec.ds.empty:
+            raise ValueError(
+                f"No moving-area polygon overlaps pzone {pz_name!r}. "
+                "Check that the source covers the right area."
+            )
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if out_path.exists():
+            out_path.unlink()
+        layer_name = f"{pz_name}_moving-areas"
+        vec.ds.to_file(str(out_path), layer=layer_name, driver="GPKG")
+
+        logger.success(
+            f"Moving areas for '{pz_name}': {len(vec.ds)}/{n_input} features "
+            f"(EPSG:{self.epsg}) → {out_path}"
+        )
+        return out_path
+
+    def get_moving_areas(self, pz_name: str) -> gu.Vector:
+        """Load a pzone's moving-area polygons.
+
+        Returns a :class:`geoutils.Vector`, which is the CRS-safe input to
+        :class:`~geomulticorr.corrections.masks.StableAreaMask` — it carries
+        its CRS, so the mask reprojects rather than assuming.
+
+        Args:
+            pz_name: Processing-zone name.
+
+        Returns:
+            gu.Vector: Moving-area polygons in the session CRS.
+
+        Raises:
+            FileNotFoundError: If they have not been imported yet.
+        """
+        path = self.moving_areas_path(pz_name)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"No moving areas for pzone {pz_name!r} at {path}. "
+                f"Import them first: session.load_moving_areas({pz_name!r}, <source>)"
+            )
+        return gu.Vector(
+            gpd.read_file(str(path), engine="pyogrio", layer=f"{pz_name}_moving-areas")
+        )
 
     def get_georasters_map(self,
                            image_type: str | list[str] = "opt",
@@ -826,33 +1255,8 @@ class Session:
                 without *dissolve*.
             RuntimeError: If the pzone name / shortname were not persisted in the geodatabase.
         """
-        # --- Normalize the input into a gu.Vector (geoutils connectivity) ---
-        raster_suffixes = (".tif", ".tiff")
-        if isinstance(source, gu.Vector):
-            pz_vec = source
-        elif isinstance(source, gu.Raster):
-            pz_vec = gu.Vector(source.footprint.ds)
-        elif isinstance(source, (str, pathlib.Path)):
-            path = pathlib.Path(source)
-            if path.suffix.lower() in raster_suffixes:
-                pz_vec = gu.Vector(gu.Raster(str(path), load_data=False).footprint.ds)
-            else:
-                read_kwargs = {"engine": "pyogrio"}
-                if layer is not None:
-                    read_kwargs["layer"] = layer
-                pz_vec = gu.Vector(gpd.read_file(str(path), **read_kwargs))
-        else:
-            raise TypeError(
-                "source must be a file path, gu.Vector, or gu.Raster "
-                f"(got {type(source).__name__})."
-            )
-
-        if pz_vec.ds.empty:
-            raise ValueError(f"No features found in AOI source: {source!r}")
-
-        # --- Reproject to the session CRS via geoutils ---
-        if pz_vec.crs is None or pz_vec.crs.to_epsg() != self.epsg:
-            pz_vec = pz_vec.reproject(crs=self.epsg)
+        # --- Normalize the input into a session-CRS gu.Vector ---
+        pz_vec = self._normalize_vector_source(source, layer=layer)
 
         # --- Resolve to a single Polygon ---
         if dissolve or len(pz_vec.ds) > 1:
@@ -1585,8 +1989,20 @@ class Session:
             georaster_metadata['sensor_family'] = sensor_normalized['family']
 
             # Struggling to extract acquisition date, may be due to sensor-specific formats or missing metadata
-            georaster_metadata["acq_datetime"] = gmc_sensors.extract_acquisition_date(ta, sensor=sensor)
-            georaster_metadata["acq_date"] = georaster_metadata["acq_datetime"].date()
+            acq_datetime = gmc_sensors.extract_acquisition_date(ta, sensor=sensor)
+            if acq_datetime is None:
+                # Raising here would surface as "'NoneType' object has no attribute
+                # 'date'" from the generic handler below, which points nowhere near
+                # the cause. Name the file and what was searched instead.
+                logger.warning(
+                    f"Skip {ta.name}: no acquisition date found. Neither the filename nor "
+                    f"any .xml/.dim sidecar in {ta.parent.name}/ yielded one — for a "
+                    f"band-scoped filename (e.g. Sentinel-2 'B08.tif') the date can only "
+                    f"come from the metadata, so check it was downloaded."
+                )
+                return None
+            georaster_metadata["acq_datetime"] = acq_datetime
+            georaster_metadata["acq_date"] = acq_datetime.date()
 
             # Handle footprint and CRS extraction
             raster_footprint = r.footprint
