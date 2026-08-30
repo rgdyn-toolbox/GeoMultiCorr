@@ -35,6 +35,9 @@ dependencies:
   - shapely
   - geemap
   - earthengine-api
+  - pystac-client
+  - planetary-computer
+  - python-dotenv
   - geodatasets
   - contextily
   - rich
@@ -45,3 +48,5 @@ dependencies:
   - pip:
       - geemap
       - earthengine-api
+      # presigns DINAMIS/Théia MinIO asset URLs (SPOT 6/7 downloads)
+      - teledetection
