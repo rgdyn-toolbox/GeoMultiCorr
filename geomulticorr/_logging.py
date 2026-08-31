@@ -44,6 +44,17 @@ Control verbosity externally:
     import logging
     logging.getLogger("GMC").setLevel(logging.WARNING)
 
+Silence a chatty batch loop temporarily:
+    from geomulticorr._logging import quiet
+
+    with quiet():                 # only WARNING and above get through
+        for pair in pairs:
+            pair.extract_raw_displacements()
+
+Note that ``setLevel`` alone is a blunt instrument: LIST and LAUNCH sit
+numerically *above* WARNING and would slip through. Prefer :func:`quiet`,
+which ranks records by :func:`severity` rather than by raw level number.
+
 Available symbols by level:
     · DEBUG
     ℹ INFO
@@ -64,6 +75,8 @@ from __future__ import annotations
 
 import logging
 import sys
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 # Define custom logging levels (between INFO=20 and WARNING=30)
 SUCCESS = 25
@@ -86,6 +99,122 @@ LIST = 31
 logging.addLevelName(LIST, "LIST")
 LAUNCH = 32
 logging.addLevelName(LAUNCH, "LAUNCH")
+
+
+# ── Severity remap ───────────────────────────────────────────────────────────
+# The custom levels are NOT ordered by importance. They were numbered to slot
+# between INFO=20 and WARNING=30 so they would print by default, but LIST=31 and
+# LAUNCH=32 overflowed past WARNING — they are chatter, not alerts. Anything
+# reasoning about "how important is this record" must go through severity(),
+# never through record.levelno directly, or a plain setLevel(WARNING) leaks them.
+_SEVERITY: dict[int, int] = {
+    logging.DEBUG:    logging.DEBUG,
+    LIST:             15,
+    logging.INFO:     logging.INFO,
+    FOLDER:           logging.INFO,
+    SETTINGS:         logging.INFO,
+    SEARCH:           logging.INFO,
+    FILE:             logging.INFO,
+    SUCCESS:          logging.INFO,
+    STATISTICS:       logging.INFO,
+    TIMER:            logging.INFO,
+    SAVE:             logging.INFO,
+    LAUNCH:           logging.INFO,
+    logging.WARNING:  logging.WARNING,
+    logging.ERROR:    logging.ERROR,
+    logging.CRITICAL: logging.CRITICAL,
+}
+
+_ALWAYS_ATTR = "gmc_always"
+
+#: ``extra=`` payload marking a record that must survive :func:`quiet`.
+#:
+#: Used by the batch-progress fallback, which has to report progress from
+#: inside the very block that silences the loop's per-item chatter. Treat it as
+#: immutable — :mod:`logging` copies its keys onto the record, so one shared
+#: dict is safe, but mutating it would leak into every record already emitted.
+ALWAYS: dict[str, Any] = {_ALWAYS_ATTR: True}
+
+
+def severity(levelno: int) -> int:
+    """Return the importance rank of *levelno*, correcting the level ordering.
+
+    The GMC custom levels are numbered for print-by-default behaviour, not by
+    importance: ``LIST=31`` and ``LAUNCH=32`` sit above ``WARNING=30`` despite
+    being routine chatter. This maps every level onto a rank that *is* ordered
+    by importance, so callers can compare records meaningfully.
+
+    :param levelno: A logging level number.
+    :type levelno: int
+    :return: The importance rank (unknown levels are returned unchanged).
+    :rtype: int
+    """
+    return _SEVERITY.get(levelno, levelno)
+
+
+class _QuietFilter(logging.Filter):
+    """Drop records ranked below *min_severity*, unless flagged ``gmc_always``."""
+
+    def __init__(self, min_severity: int) -> None:
+        super().__init__()
+        self.min_severity = min_severity
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if getattr(record, _ALWAYS_ATTR, False):
+            return True
+        return severity(record.levelno) >= self.min_severity
+
+
+@contextmanager
+def quiet(min_level: int = logging.WARNING, *, enabled: bool = True) -> Iterator["GMCLogger"]:
+    """Temporarily silence low-severity GMC records.
+
+    Wrap a batch loop whose per-item helpers are chatty by design. Those helpers
+    (``Pair.extract_raw_displacements``, the ``stats`` savers,
+    ``TIOInversion.export_pair_to_binary``) are also driven on a single pair from
+    notebooks, where their messages *are* useful — so they are suppressed here
+    for the duration of the loop rather than removed. Warnings and errors still
+    surface, as do records logged with ``extra=``:data:`ALWAYS`.
+
+    The filter is attached to the *logger*, not to a handler: :meth:`Logger.handle`
+    consults ``self.filter()`` before ``callHandlers``, so one filter covers the
+    console handler and any file handler a user has added.
+
+    The logger's *level* is deliberately left untouched, so this can only ever
+    make output quieter, never louder. Nesting is safe: each block installs and
+    removes its own filter.
+
+    .. warning::
+       The GMC logger is a process-wide singleton, so this also silences records
+       emitted from other threads while the block is active. Safe for sequential
+       loops; pass ``enabled=False`` around threaded work you still want to hear
+       from.
+
+    :param min_level: Lowest level (ranked by :func:`severity`) still emitted.
+        Only DEBUG / INFO / WARNING / ERROR / CRITICAL are meaningful — every
+        custom level between INFO and WARNING ranks as INFO.
+    :type min_level: int
+    :param enabled: ``False`` makes the block a no-op, so callers can write
+        ``with quiet(enabled=not verbose):`` without branching.
+    :type enabled: bool
+    :return: The GMC logger, for convenience.
+    :rtype: GMCLogger
+    """
+    if not enabled:
+        yield logger
+        return
+
+    # Suppression is done purely by the filter — deliberately NOT by raising the
+    # logger level. setLevel(WARNING) would make isEnabledFor(INFO) false, so an
+    # ALWAYS-flagged record would never be constructed and the filter would never
+    # get to let it through. The level is left alone, which also means quiet()
+    # can never lower a level the caller deliberately raised.
+    flt = _QuietFilter(severity(min_level))
+    logger.addFilter(flt)
+    try:
+        yield logger
+    finally:
+        logger.removeFilter(flt)
 
 
 class GMCLogger(logging.Logger):
@@ -196,12 +325,63 @@ class GMCFormatter(logging.Formatter):
         return f"{prefix} : {msg}"
 
 
+_LAZY_STREAM = object()  # sentinel: "resolve sys.stdout at emit time"
+
+
+class LazyStdoutHandler(logging.StreamHandler):
+    """StreamHandler that resolves ``sys.stdout`` at emit time, not at import.
+
+    The stock ``logging.StreamHandler(sys.stdout)`` captures whatever
+    ``sys.stdout`` was bound to when it was constructed and holds that object
+    forever. Since this handler is built at import time, it never sees a later
+    swap — which breaks two things GMC relies on:
+
+    * ``contextlib.redirect_stdout`` and notebook output capture never receive
+      GMC output, because the handler still writes to the original stream;
+    * inside a :class:`rich.live.Live` region, rich replaces ``sys.stdout`` with
+      a :class:`rich.file_proxy.FileProxy` precisely so that ordinary writes are
+      rendered *above* the live region. A handler holding the original stream
+      writes underneath rich's cursor bookkeeping and smears the progress bar —
+      the bar appears stuck or duplicated while work proceeds normally.
+
+    Resolving lazily routes GMC log lines through that FileProxy, which
+    ANSI-decodes each line into a rich ``Text``. Colours survive, and because
+    rich never applies console markup to a ``Text`` instance, bracketed messages
+    such as ``[MedianCentering]`` are passed through rather than eaten as markup.
+
+    ``setStream()`` still works and pins an explicit stream; call
+    :meth:`reset_stream` to go back to following ``sys.stdout``.
+    """
+
+    def __init__(self) -> None:
+        self._pinned: Any = _LAZY_STREAM
+        super().__init__(stream=_LAZY_STREAM)
+
+    @property
+    def stream(self) -> Any:  # type: ignore[override]
+        return sys.stdout if self._pinned is _LAZY_STREAM else self._pinned
+
+    @stream.setter
+    def stream(self, value: Any) -> None:
+        # Both StreamHandler.__init__ and StreamHandler.setStream() assign here;
+        # recording the value (rather than ignoring it) keeps setStream working.
+        self._pinned = value
+
+    def reset_stream(self) -> None:
+        """Drop any pinned stream and follow ``sys.stdout`` again."""
+        self.acquire()
+        try:
+            self._pinned = _LAZY_STREAM
+        finally:
+            self.release()
+
+
 def _setup_logger() -> GMCLogger:
     """Create and configure the GMC logger (called once at import time)."""
     logging.setLoggerClass(GMCLogger)
     _logger = logging.getLogger("GMC")
     if not _logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
+        handler = LazyStdoutHandler()
         handler.setFormatter(GMCFormatter())
         _logger.addHandler(handler)
         _logger.setLevel(logging.INFO)
