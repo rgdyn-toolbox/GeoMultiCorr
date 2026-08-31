@@ -32,11 +32,14 @@ Unit tests for geomulticorr._logging module.
 """
 
 import pytest
+import io
 import logging
+import sys
 
 from geomulticorr._logging import (
     GMCFormatter, logger, SUCCESS, FOLDER, SETTINGS,
-    SEARCH, FILE, STATISTICS, TIMER, SAVE, LIST, LAUNCH
+    SEARCH, FILE, STATISTICS, TIMER, SAVE, LIST, LAUNCH,
+    ALWAYS, LazyStdoutHandler, quiet, severity,
     )
 
 # -------------------------------------------------------------- #
@@ -451,5 +454,202 @@ class TestGMCFormatterEdgeCases:
         )
         result = formatter_plain.format(record)
         assert multiline_msg in result, "Formatter should include the message with newlines"
+    # END def
+# END class
+
+# -------------------------------------------------------------- #
+# TEST GROUP 8: LazyStdoutHandler
+# -------------------------------------------------------------- #
+class TestLazyStdoutHandler:
+    """The handler must resolve sys.stdout at emit time, not at import time."""
+
+    def test_record_lands_in_stream_swapped_after_import(self):
+        """Regression: the handler used to pin sys.stdout when it was built.
+
+        Pinning broke contextlib.redirect_stdout, notebook capture, and — the
+        symptom that motivated this — rich's Live region, which swaps stdout for
+        a FileProxy so writes render *above* the progress bar instead of
+        smearing it.
+        """
+        buf = io.StringIO()
+        old, sys.stdout = sys.stdout, buf
+        try:
+            logger.info("redirected-after-import")
+        finally:
+            sys.stdout = old
+        assert "redirected-after-import" in buf.getvalue()
+    # END def
+
+    def test_setstream_pins_and_reset_stream_unpins(self):
+        """setStream() must still work; reset_stream() goes back to following stdout."""
+        handler = LazyStdoutHandler()
+        handler.setFormatter(GMCFormatter(use_color=False))
+
+        pinned = io.StringIO()
+        handler.setStream(pinned)
+        assert handler.stream is pinned, "setStream should pin an explicit stream"
+
+        # While pinned, a stdout swap must NOT divert output.
+        other = io.StringIO()
+        old, sys.stdout = sys.stdout, other
+        try:
+            assert handler.stream is pinned
+        finally:
+            sys.stdout = old
+
+        handler.reset_stream()
+        assert handler.stream is sys.stdout, "reset_stream should follow sys.stdout again"
+    # END def
+
+    def test_repr_and_flush_do_not_raise(self):
+        """logging.shutdown() flushes every handler; that must stay safe."""
+        handler = LazyStdoutHandler()
+        assert "LazyStdoutHandler" in repr(handler)
+        handler.flush()  # must not raise
+    # END def
+
+    def test_package_logger_uses_the_lazy_handler(self):
+        """The singleton must actually be wired up with it."""
+        assert any(isinstance(h, LazyStdoutHandler) for h in logger.handlers)
+    # END def
+# END class
+
+
+# -------------------------------------------------------------- #
+# TEST GROUP 9: severity() remap
+# -------------------------------------------------------------- #
+class TestSeverityRemap:
+    """The custom levels are numbered for print-by-default, not by importance."""
+
+    def test_launch_ranks_below_warning(self):
+        """LAUNCH=32 sits numerically above WARNING=30 but is routine chatter."""
+        assert LAUNCH > logging.WARNING, "precondition: the raw numbering is inverted"
+        assert severity(LAUNCH) < severity(logging.WARNING)
+    # END def
+
+    def test_list_ranks_below_info(self):
+        assert LIST > logging.WARNING, "precondition: the raw numbering is inverted"
+        assert severity(LIST) < severity(logging.INFO)
+    # END def
+
+    @pytest.mark.parametrize("level", [FOLDER, SETTINGS, SEARCH, FILE,
+                                       SUCCESS, STATISTICS, TIMER, SAVE])
+    def test_info_adjacent_levels_rank_as_info(self, level):
+        assert severity(level) == logging.INFO
+    # END def
+
+    def test_standard_levels_are_unchanged(self):
+        for level in (logging.DEBUG, logging.WARNING, logging.ERROR, logging.CRITICAL):
+            assert severity(level) == level
+    # END def
+
+    def test_unknown_level_passes_through(self):
+        assert severity(37) == 37
+    # END def
+# END class
+
+
+# -------------------------------------------------------------- #
+# TEST GROUP 10: quiet() context manager
+# -------------------------------------------------------------- #
+class TestQuietContext:
+    """quiet() silences chatty batch helpers without hiding warnings."""
+
+    def test_chatter_is_dropped(self, caplog_gmc):
+        with caplog_gmc.at_level(logging.DEBUG, logger="GMC"):
+            with quiet():
+                logger.file("saved EW displacement")
+                logger.statistics("raw correlation stats saved")
+                logger.save("control plot saved")
+                logger.info("resampled")
+        assert caplog_gmc.text == "" or "saved" not in caplog_gmc.text
+    # END def
+
+    def test_warning_and_error_survive(self, caplog_gmc):
+        with caplog_gmc.at_level(logging.DEBUG, logger="GMC"):
+            with quiet():
+                logger.warning("disparity raster not found")
+                logger.error("failed for pair")
+        assert "disparity raster not found" in caplog_gmc.text
+        assert "failed for pair" in caplog_gmc.text
+    # END def
+
+    def test_list_and_launch_are_dropped(self, caplog_gmc):
+        """The whole reason for a Filter over setLevel: these sit above WARNING."""
+        with caplog_gmc.at_level(logging.DEBUG, logger="GMC"):
+            with quiet():
+                logger.list("a list line")
+                logger.launch("a launch line")
+        assert "a list line" not in caplog_gmc.text
+        assert "a launch line" not in caplog_gmc.text
+    # END def
+
+    def test_always_extra_survives(self, caplog_gmc):
+        """The progress fallback reports from inside the block that silences it."""
+        with caplog_gmc.at_level(logging.DEBUG, logger="GMC"):
+            with quiet():
+                logger.info("extract: 37/200", extra=ALWAYS)
+        assert "extract: 37/200" in caplog_gmc.text
+    # END def
+
+    def test_suppression_lifts_after_the_block(self, caplog_gmc):
+        with caplog_gmc.at_level(logging.DEBUG, logger="GMC"):
+            with quiet():
+                logger.file("inside")
+            logger.file("outside")
+        assert "inside" not in caplog_gmc.text
+        assert "outside" in caplog_gmc.text
+    # END def
+
+    def test_enabled_false_is_a_no_op(self, caplog_gmc):
+        """Lets callers write `with quiet(enabled=not verbose)` without branching."""
+        with caplog_gmc.at_level(logging.DEBUG, logger="GMC"):
+            with quiet(enabled=False):
+                logger.file("verbose line")
+        assert "verbose line" in caplog_gmc.text
+    # END def
+
+    def test_filter_removed_on_exception(self):
+        before = list(logger.filters)
+        with pytest.raises(RuntimeError):
+            with quiet():
+                raise RuntimeError("boom")
+        assert list(logger.filters) == before
+    # END def
+
+    def test_nesting_restores_the_outer_filter_only(self, caplog_gmc):
+        before = list(logger.filters)
+        with quiet():
+            with quiet(logging.ERROR):
+                pass
+            assert len(logger.filters) == len(before) + 1
+        assert list(logger.filters) == before
+    # END def
+
+    def test_level_is_left_untouched(self):
+        """Raising the level would stop ALWAYS records being constructed at all."""
+        original = logger.level
+        try:
+            logger.setLevel(logging.INFO)
+            with quiet():
+                assert logger.level == logging.INFO
+        finally:
+            logger.setLevel(original)
+    # END def
+
+    def test_never_makes_output_louder(self, caplog_gmc):
+        """A level the caller deliberately raised must not be lowered.
+
+        Note this deliberately does NOT use ``caplog.at_level`` — that would set
+        the GMC logger's level itself and defeat the very thing under test.
+        """
+        original = logger.level
+        try:
+            logger.setLevel(logging.ERROR)
+            with quiet(logging.DEBUG):
+                logger.file("still below the caller's level")
+            assert "still below the caller's level" not in caplog_gmc.text
+        finally:
+            logger.setLevel(original)
     # END def
 # END class

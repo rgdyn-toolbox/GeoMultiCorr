@@ -338,3 +338,24 @@ class TestMigrateToNewStructure:
         """migrate_to_new_structure() should exist on Session."""
         session, _ = temp_project_new
         assert hasattr(session, 'migrate_to_new_structure')
+
+
+class TestBatchVerbosity:
+    """The batch loops expose a verbose= knob and default to the quiet header.
+
+    Signature-only, so no project or geodatabase is needed. These lock the knob
+    down: without it there is no way to recover the per-pair messages the
+    extraction/correction helpers emit, which are useful on a single pair.
+    """
+
+    @pytest.mark.parametrize("method_name", [
+        "extract_pairs_raw_displacements",
+        "apply_pairs_corrections",
+    ])
+    def test_verbose_exists_and_defaults_to_false(self, method_name):
+        import inspect
+        from geomulticorr.core.session import Session
+
+        params = inspect.signature(getattr(Session, method_name)).parameters
+        assert "verbose" in params, f"{method_name} should expose verbose="
+        assert params["verbose"].default is False, "quiet must be the default"
