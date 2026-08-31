@@ -86,6 +86,7 @@ import geomulticorr.correlation.supported_sensors as gmc_sensors
 
 from geomulticorr.core.console import (
     _rich_console,
+    BatchProgress,
     print_register_thumbs_summary,
     print_sieve_bulk_summary,
     print_prepare_correlation_summary,
@@ -3868,6 +3869,7 @@ class Session:
         canonical_grid_size: "tuple[int, int] | None" = None,
         print_summary: bool = True,
         sync_geodb: bool = True,
+        verbose: bool = False,
     ) -> dict:
         """Extract EW/NS displacements and compute raw stats for all complete pairs.
 
@@ -3896,6 +3898,12 @@ class Session:
             sync_geodb: If ``True`` (default), sync raw stats
                 (:data:`RAW_STATS_SYNC`) into the Pairs geodatabase layer for the
                 pairs processed in this call. See :meth:`sync_raw_stats`.
+            verbose: If ``True``, keep the per-pair messages the extraction
+                helpers emit (``Saved EW displacement``, ``Pair stats file
+                initialised``, …). The default ``False`` prints one header
+                describing the whole run instead, so the progress bar stays
+                readable across hundreds of pairs. Warnings and errors are
+                unaffected either way.
 
         Returns:
             Dict mapping ``pa_key`` → full stats dict (or ``None`` if skipped).
@@ -3919,27 +3927,33 @@ class Session:
 
         summary_rows: list[dict] = []
 
-        pair_name = _RichText("", style="cyan")
-        progress = Progress(
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("•"),
-            TimeElapsedColumn(),
-            console=_rich_console,
-        )
-        task = progress.add_task("", total=len(pairs))
+        # One header for the whole run, in place of 4-7 log lines per pair.
+        # pa_path is <pzone>/image_correlation/<pa_key>/, so the parent differs
+        # per pzone — report the pattern, not one pair's path.
+        stats_dirs = sorted({str(p.pa_path.parent) for p in pairs})
+        where = stats_dirs[0] if len(stats_dirs) == 1 else f"{len(stats_dirs)} pzone dir(s)"
 
-        with _RichLive(
-            _RichGroup(pair_name, progress),
-            console=_rich_console,
-            transient=False,
-            refresh_per_second=10,
-        ) as live:
-            for pair in pairs:
-                pair_name.plain = pair.pa_key
-                live.refresh()
+        logger.info(f"Extracting raw displacements — {len(pairs)} pair(s)")
+        logger.file(f"Extracting EW | NS | CC files → {where}/<pa_key>/")
+        logger.file(f"Pair stats file initialised: {where}/<pa_key>/<pa_key>.json")
+        if save_plot:
+            logger.save("Saving control plot: <pa_key>_raw_disp.jpg (one per pair)")
+        if target_resolution is not None:
+            grid = ("explicit canonical grid" if canonical_bounds is not None
+                    else "per-pzone canonical grid")
+            logger.settings(
+                f"Resampling EW | NS | CC to {target_resolution} m "
+                f"({resampling}, {grid})"
+            )
+        if not verbose:
+            logger.settings("Per-pair messages suppressed — pass verbose=True to show them")
 
+        with BatchProgress(
+            len(pairs),
+            description="extract_pairs_raw_displacements",
+            verbose=verbose,
+        ) as bar:
+            for pair in bar.track(pairs, key=lambda p: p.pa_key):
                 rec = {
                     "pair": pair.pa_key,
                     "ew": "—", "ns": "—", "cc": "—",
@@ -3951,9 +3965,7 @@ class Session:
                     rec["ew"] = rec["ns"] = rec["cc"] = "[red]no disparity[/red]"
                     results[pair.pa_key] = None
                     summary_rows.append(rec)
-                    progress.advance(task)
-                    live.refresh()
-                    continue
+                    continue  # bar.track() advances on continue
 
                 if not overwrite and pair.pa_ew_path.exists() and pair.pa_ns_path.exists():
                     rec["ew"] = "[dim]exists[/dim]"
@@ -3963,9 +3975,7 @@ class Session:
                     rec["stats"] = "[dim]exists[/dim]" if pair.pa_stats_path.exists() else "—"
                     results[pair.pa_key] = None
                     summary_rows.append(rec)
-                    progress.advance(task)
-                    live.refresh()
-                    continue
+                    continue  # bar.track() advances on continue
 
                 # Resolve canonical grid for this pair.
                 if canonical_bounds is not None and canonical_grid_size is not None:
@@ -3994,8 +4004,6 @@ class Session:
                     rec["plot"] = rec["stats"] = "[red]error[/red]"
 
                 summary_rows.append(rec)
-                progress.advance(task)
-                live.refresh()
 
         print_extract_displacements_summary(
             summary_rows, target_resolution, resampling, print_summary=print_summary
@@ -4018,6 +4026,7 @@ class Session:
         plot_level: str = "light",
         print_summary: bool = True,
         sync_geodb: bool = True,
+        verbose: bool = False,
         **kwargs,
     ) -> dict:
         """Apply a filter and/or correction pipeline to all processed pairs.
@@ -4082,10 +4091,18 @@ class Session:
             ValueError: If neither *correction_pipeline* nor *filter_pipeline* is provided,
                 if *plot_level* is not a known level, or if a required kwarg
                 (e.g. ``dem=``) is missing.
+
+        Note:
+            *verbose* (default ``False``) keeps the per-pair, per-step messages
+            the helpers emit — ``save_corrected_stats`` alone logs once per
+            correction step per pair, so a 3-step pipeline over 200 pairs is
+            ~600 lines. The default prints one header describing the run
+            instead. Warnings and errors surface either way, including the
+            misaligned-DEM warning from the topographic corrections.
         """
         import geoutils as gu
         import matplotlib.pyplot as plt
-        from geomulticorr.corrections.corrections import make_corrections
+        from geomulticorr.corrections.corrections import CorrectionPipeline, make_corrections
         from geomulticorr.corrections.masks import FilterPipeline, BaseMask
 
         if correction_pipeline is None and filter_pipeline is None:
@@ -4110,27 +4127,53 @@ class Session:
 
         summary_rows: list[dict] = []
 
-        pair_name = _RichText("", style="cyan")
-        progress = Progress(
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("•"),
-            TimeElapsedColumn(),
-            console=_rich_console,
+        # One header for the whole run, in place of per-pair *and* per-step logs.
+        filt_steps = (
+            [] if filter_pipeline is None
+            else (filter_pipeline.masks if isinstance(filter_pipeline, FilterPipeline)
+                  else [filter_pipeline])
         )
-        task = progress.add_task("", total=len(pairs))
+        corr_steps = (
+            [] if correction_pipeline is None
+            else (correction_pipeline.steps if isinstance(correction_pipeline, CorrectionPipeline)
+                  else [correction_pipeline])
+        )
 
-        with _RichLive(
-            _RichGroup(pair_name, progress),
-            console=_rich_console,
-            transient=False,
-            refresh_per_second=10,
-        ) as live:
-            for pair in pairs:
-                pair_name.plain = pair.pa_key
-                live.refresh()
+        logger.info(f"Applying corrections — {len(pairs)} pair(s)")
+        logger.settings(
+            "Filter pipeline     : "
+            + (" + ".join(type(s).__name__ for s in filt_steps) or "none")
+        )
+        logger.settings(
+            "Correction pipeline : "
+            + (" → ".join(type(s).__name__ for s in corr_steps) or "none")
+        )
+        logger.file(
+            "Writing per pair: <pa_key>-F_EW_corr.tif | <pa_key>-F_NS_corr.tif"
+            + (" | -F_EWmask.tif | -F_NSmask.tif" if filt_steps else "")
+        )
+        logger.file(
+            "Corrected stats appended to <pa_key>.json "
+            "(sections 'correction_stats' → 'final_corrected_stats')"
+        )
+        if save_plot:
+            logger.save(
+                f"Saving control plots: one per correction step "
+                f"(<pa_key>_NN_<Step>_disp.jpg) + a corrections dashboard "
+                f"(plot_level={plot_level!r}, preview_px={plot_opts['preview_px']}, "
+                f"dpi={plot_opts['dpi']})"
+            )
+        if not verbose:
+            logger.settings(
+                "Per-pair / per-step messages suppressed — pass verbose=True to show them"
+            )
 
+        with BatchProgress(
+            len(pairs),
+            description="apply_pairs_corrections",
+            verbose=verbose,
+        ) as bar:
+            for pair in bar.track(pairs, key=lambda p: p.pa_key):
                 ew_corr = pair.pa_path / f"{pair.pa_key}-F_EW_corr.tif"
                 ns_corr = pair.pa_path / f"{pair.pa_key}-F_NS_corr.tif"
 
@@ -4148,9 +4191,7 @@ class Session:
                     rec["ew_corr"] = rec["ns_corr"] = "[red]no input[/red]"
                     results[pair.pa_key] = None
                     summary_rows.append(rec)
-                    progress.advance(task)
-                    live.refresh()
-                    continue
+                    continue  # bar.track() advances on continue
 
                 # A pair corrected before masks were persisted has no mask files;
                 # regenerate it so the stable-ground record catches up.
@@ -4162,9 +4203,7 @@ class Session:
                     rec["ew_corr"] = rec["ns_corr"] = "[dim]exists[/dim]"
                     results[pair.pa_key] = None
                     summary_rows.append(rec)
-                    progress.advance(task)
-                    live.refresh()
-                    continue
+                    continue  # bar.track() advances on continue
 
                 try:
                     x_raw = gu.Raster(str(pair.pa_ew_path), nodata=0)
@@ -4181,7 +4220,6 @@ class Session:
                         fp = filter_pipeline
                         all_steps += fp.masks if isinstance(fp, FilterPipeline) else [fp]
                     if correction_pipeline is not None:
-                        from geomulticorr.corrections.corrections import CorrectionPipeline
                         cp = correction_pipeline
                         all_steps += cp.steps if isinstance(cp, CorrectionPipeline) else [cp]
                     missing = [
@@ -4304,13 +4342,10 @@ class Session:
                     results[pair.pa_key] = None
 
                 summary_rows.append(rec)
-                progress.advance(task)
-                live.refresh()
 
         print_apply_corrections_summary(summary_rows, print_summary=print_summary)
 
         if sync_geodb and correction_pipeline is not None:
-            from geomulticorr.corrections.corrections import CorrectionPipeline
             steps = (
                 correction_pipeline.steps
                 if isinstance(correction_pipeline, CorrectionPipeline)
