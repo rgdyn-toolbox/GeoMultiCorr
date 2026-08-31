@@ -169,11 +169,11 @@ def print_apply_corrections_summary(rows, *, print_summary=True) -> Table:
 
 
 def print_tio_export_summary(rows, *, print_summary=True) -> Table:
-    """Summary for ``TIOInversion.prepare`` pair export.
+    """Summary for ``TIOInversion.prepare_inversion`` pair export.
 
     ``rows`` is a list of ``(pair_key, status)`` tuples.
     """
-    table = Table(title="TIO prepare — pair export summary", show_lines=False)
+    table = Table(title="TIO prepare_inversion — pair export summary", show_lines=False)
     table.add_column("Pair", style="cyan", no_wrap=True)
     table.add_column("Status")
     for key, status in rows:

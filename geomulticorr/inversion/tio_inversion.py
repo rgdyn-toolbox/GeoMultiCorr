@@ -37,7 +37,7 @@ Typical usage
 >>> filter_pipeline = CCFilter(cc_threshold=0.5) + OutlierFilter(threshold=(-15, 15))
 >>> inv = TIOInversion(session, pairs, inversion_name="rock_glacier_2021_2024",
 ...                    filter_pipeline=filter_pipeline)
->>> inv.prepare()
+>>> inv.prepare_inversion()
 >>> inv.launch(mode="local")
 """
 from __future__ import annotations
@@ -46,21 +46,15 @@ import math
 import shutil
 import stat
 import subprocess
+import warnings
 from pathlib import Path
 from datetime import datetime
 
 import numpy as np
 import rasterio
 import geoutils as gu
-from rich.console import Group as _RichGroup
-from rich.live import Live as _RichLive
-from rich.progress import (
-    Progress, TextColumn, BarColumn,
-    MofNCompleteColumn, TimeElapsedColumn,
-)
-from rich.text import Text as _RichText
 
-from geomulticorr.core.console import _rich_console, print_tio_export_summary
+from geomulticorr.core.console import BatchProgress, print_tio_export_summary
 from geomulticorr.stats import load_pair_stats
 from geomulticorr._logging import logger
 from geomulticorr.utils.hpc_tools import (
@@ -1353,7 +1347,7 @@ class TIOInversion:
 
             inv.explore_weights()                       # tune interactively
             inv.write_liste_couple(weights=inv._last_weights)
-            # or inv.prepare(weights=inv._last_weights)
+            # or inv.prepare_inversion(weights=inv._last_weights)
 
         Requires plotly and ipywidgets (Jupyter). Returns the assembled
         ``ipywidgets.VBox`` (also displays inline in a notebook).
@@ -1656,7 +1650,7 @@ class TIOInversion:
             logger.info(f"@GMC TIO ── NMAD filter: all {len(good)} pairs within threshold")
         return good, bad
 
-    def prepare(
+    def prepare_inversion(
         self,
         weight_mode: str | None = None,
         slope: float = 2.0,
@@ -1678,6 +1672,7 @@ class TIOInversion:
         walltime: str = "12:00:00",
         overwrite: bool = False,
         print_summary: bool = True,
+        verbose: bool = False,
     ) -> None:
         """Run the full TIO preparation pipeline.
 
@@ -1690,8 +1685,8 @@ class TIOInversion:
         4. Write ``liste_image``, ``liste_image_inv``, ``liste_couple``,
            ``input_tio``, and bash launch scripts.
 
-        After :meth:`prepare` completes, call :meth:`launch` to start the
-        inversion.
+        After :meth:`prepare_inversion` completes, call :meth:`launch` to start
+        the inversion.
 
         :param weight_mode: Pair weighting strategy passed to
             :meth:`write_liste_couple`.  One of ``'uniform'``, ``'temporal'``,
@@ -1743,12 +1738,17 @@ class TIOInversion:
         :param print_summary: Print a rich summary table of per-pair export
             status once the loop completes (default ``True``).
         :type print_summary: bool
+        :param verbose: If ``True``, keep the per-pair export messages
+            :meth:`export_pair_to_binary` emits. The default ``False`` prints one
+            header describing the whole run instead, so the progress bar stays
+            readable across hundreds of pairs. Warnings and errors are unaffected.
+        :type verbose: bool
 
         Example
         -------
         .. code-block:: python
 
-            inv.prepare(
+            inv.prepare_inversion(
                 weight_mode="sigmoid",
                 dt_range=(300, 400),
                 sharpness=8,
@@ -1759,37 +1759,45 @@ class TIOInversion:
         """
         validate_cluster(cluster)
 
-        logger.info(f"TIO ── preparing '{self.inversion_name}' "
-                    f"({len(self.pairs)} pairs, {len(self.image_dates)} images)")
+        mode = "local" if cluster is None else cluster
+
+        # One header for the whole run, announced *before* the work rather than
+        # after it, in place of one export message per pair.
+        logger.info(
+            f"TIO ── preparing '{self.inversion_name}' — "
+            f"{len(self.pairs)} pair(s), {len(self.image_dates)} image(s)"
+        )
+        logger.folder(f"Creating directory tree → {self.inversion_dir}")
+        logger.file("Writing 'binary/File_info.rsc'")
+        logger.file(
+            "Exporting each pair to ENVI Float32 binary → "
+            "binary/{yyyymmdd1}_{yyyymmdd2}_{EW|NS}"
+        )
+        logger.file("Linking exports → inverse_{EW,NS}/LN_DATA/{d1}-{d2}.r4")
+        logger.settings(
+            "Pair weighting: "
+            f"{weight_mode or ('explicit' if weights is not None else 'uniform')}"
+        )
+        logger.settings(
+            f"Launch target: {mode}"
+            + ("" if cluster is None
+               else f" ({nodes} node(s), {cores} core(s), walltime {walltime})")
+        )
+        if not verbose:
+            logger.settings(
+                "Per-pair export messages suppressed — pass verbose=True to show them"
+            )
 
         self.setup_directories()
-        logger.info(f"Creating directory tree → {self.inversion_dir}")
-
         self.write_file_info_rsc()
-        logger.info(f"Writing 'File_info.rsc'")
 
         summary_rows: list[tuple[str, str]] = []
-        pair_name = _RichText("", style="cyan")
-        progress = Progress(
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("•"),
-            TimeElapsedColumn(),
-            console=_rich_console,
-        )
-        task = progress.add_task("", total=len(self.pairs))
-
-        with _RichLive(
-            _RichGroup(pair_name, progress),
-            console=_rich_console,
-            transient=False,
-            refresh_per_second=10,
-        ) as live:
-            for pair in self.pairs:
-                pair_name.plain = pair.pa_key
-                live.refresh()
-
+        with BatchProgress(
+            len(self.pairs),
+            description="prepare_inversion",
+            verbose=verbose,
+        ) as bar:
+            for pair in bar.track(self.pairs, key=lambda p: p.pa_key):
                 stem   = self._pair_bin_stem(pair)
                 ew_bin = self.inversion_dir / "binary" / f"{stem}_EW"
                 ns_bin = self.inversion_dir / "binary" / f"{stem}_NS"
@@ -1801,8 +1809,6 @@ class TIOInversion:
                 summary_rows.append(
                     (pair.pa_key, "skipped" if skipped else "[green]exported[/green]")
                 )
-                progress.advance(task)
-                live.refresh()
 
         print_tio_export_summary(summary_rows, print_summary=print_summary)
 
@@ -1827,14 +1833,33 @@ class TIOInversion:
         self.write_input_tio()
         self.write_launch_script(cluster=cluster, nodes=nodes, cores=cores, walltime=walltime)
         logger.info(f"TIO input files written to inverse_EW/ and inverse_NS/")
-
-        mode = "local" if cluster is None else cluster
         logger.info(f"TIO ── ready. Call inv.launch(mode='{mode}').")
+
+    def prepare(self, *args, **kwargs) -> None:
+        """Deprecated alias for :meth:`prepare_inversion`.
+
+        .. deprecated:: 0.5.1
+           Renamed so the verb says *what* is being prepared
+           (``Session.prepare_pairs_correlation`` is the correlation-side
+           counterpart). Scheduled for removal in 0.7.0.
+        """
+        warnings.warn(
+            "TIOInversion.prepare() is deprecated and will be removed in 0.7.0 — "
+            "use TIOInversion.prepare_inversion().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        # Notebooks routinely have DeprecationWarning filtered out, so also warn
+        # on the channel the user is actually reading.
+        logger.warning(
+            "TIOInversion.prepare() is deprecated — use prepare_inversion()."
+        )
+        return self.prepare_inversion(*args, **kwargs)
 
     def launch(self, direction: str = "both", mode: str | None = "local") -> None:
         """Run or submit the TIO inversion jobs.
 
-        *mode* mirrors the ``cluster`` values used by :meth:`prepare` /
+        *mode* mirrors the ``cluster`` values used by :meth:`prepare_inversion` /
         :meth:`write_launch_script` — ``None``/``'local'`` runs
         ``invers_pixel_omp`` and ``lect_depl_cumule_lin`` directly on the
         current machine via :func:`~geomulticorr.utils.hpc_tools.run_local`;
@@ -1891,7 +1916,7 @@ class TIOInversion:
                 raise ValueError(
                     f"launch(mode={mode!r}) requested, but the launch scripts on "
                     f"disk were written for cluster={self.cluster!r}. Call "
-                    f"prepare(cluster={mode!r}) or write_launch_script(cluster={mode!r}) "
+                    f"prepare_inversion(cluster={mode!r}) or write_launch_script(cluster={mode!r}) "
                     f"first so the OAR header matches the target cluster."
                 )
             for d in targets:
