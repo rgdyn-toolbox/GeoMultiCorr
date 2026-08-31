@@ -26,8 +26,9 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
-"""Console output helpers: shared rich console + summary-table builders."""
+"""Console output helpers: shared rich console, progress bars + summary tables."""
 from geomulticorr.core.console.console import _rich_console
+from geomulticorr.core.console.progress import BatchProgress
 from geomulticorr.core.console.tables import (
     print_register_thumbs_summary,
     print_sieve_bulk_summary,
