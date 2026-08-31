@@ -1,5 +1,101 @@
 # Changelog
 
+## [0.5.1] — 2026-08-31
+
+### Fixed
+- **The GMC log handler pinned `sys.stdout` at import time**, so it never saw a later
+  swap. Inside a `rich.live.Live` region rich replaces `sys.stdout` with a `FileProxy`
+  precisely so ordinary writes render *above* the bar; the handler kept writing to the
+  original stream, underneath rich's cursor bookkeeping, and smeared the progress bar —
+  it looked stuck or duplicated while the work proceeded and files landed correctly.
+  `LazyStdoutHandler` now resolves `sys.stdout` at emit time, which fixes **every**
+  progress bar in the package and also makes `contextlib.redirect_stdout` and notebook
+  output capture work on GMC logs. As a side benefit, log lines are now ANSI-decoded by
+  rich, so colours survive and bracketed text such as `[MedianCentering]` is no longer
+  at risk of being read as console markup.
+- Progress bars now degrade usefully with no terminal. `Live.refresh()` is a no-op
+  unless the console is a terminal or a Jupyter kernel, so a redirected run (`nohup`,
+  OAR, SLURM) rendered *nothing* until the loop ended and then dumped one final frame.
+  Such runs now get throttled one-line progress records instead.
+
+### Changed
+- **`TIOInversion.prepare()` → `TIOInversion.prepare_inversion()`**, so the verb says
+  what is being prepared (`Session.prepare_pairs_correlation` is the correlation-side
+  counterpart). `prepare()` remains as a deprecated forwarder emitting both a
+  `DeprecationWarning` and a GMC warning; **it will be removed in 0.7.0**.
+- `extract_pairs_raw_displacements`, `apply_pairs_corrections` and `prepare_inversion`
+  print **one header describing the whole run** instead of 1–5 log lines per pair. A
+  3-step correction pipeline over 200 pairs previously emitted up to ~1800 lines, which
+  buried the progress bar. The per-pair messages are unchanged when the same helpers are
+  called directly on a single pair, and all three functions accept `verbose=True` to
+  restore the old behaviour. Warnings and errors are unaffected either way.
+- `TIOInversion.prepare_inversion` announces its steps *before* doing them; the previous
+  code logged "Creating directory tree" after the tree was already created.
+
+### Added
+- `geomulticorr.core.console.BatchProgress` — one reusable two-row progress reporter
+  (item label on row 1, bar on row 2) replacing the ~20-line rich `Live`/`Progress`
+  block that was copy-pasted at nine call sites. Handles the label, the advance, the
+  early-`continue` branches, the non-tty fallback and the log quieting. The six
+  remaining call sites move onto it in a follow-up change.
+- `geomulticorr._logging.quiet()` — context manager silencing low-severity GMC records
+  for the duration of a block, with `extra=ALWAYS` as an escape hatch. Ranks records via
+  the new `severity()` rather than by raw level number, because `LIST=31` and
+  `LAUNCH=32` sit *above* `WARNING=30` and would slip past a plain `setLevel(WARNING)`.
+
+## [0.5.0] — 2026-08-30
+
+### Fixed
+- **Grid alignment was checked by shape alone.** `TopoCorrection`,
+  `TopoRampCorrection`, `SlopeRampCorrection` and the plotting helper `_dem_on_grid`
+  guarded with `dem.data.shape != raster.data.shape`. Two rasters can share a shape and
+  still sit on different ground, so a DEM with a matching shape but a different origin
+  or CRS was used **as-is** — no error, no warning, a wrong topographic correction.
+  Most likely to bite precisely when a DEM was prepared "at the right resolution and
+  extent". All four sites now compare `(shape, transform, crs)`. When the old check
+  would have passed and the new one does not, a `WARNING` names both grids and states
+  that the pair's earlier output should be re-run; a routine regrid logs at `INFO`.
+- **Moving-area polygons were rasterized without any CRS handling.**
+  `_rasterize_moving_areas` passed geometries straight to
+  `rasterio.features.geometry_mask`, which reads coordinates in the transform's
+  coordinate space. Polygons in another CRS landed outside the grid, so the moving mask
+  came back all-`False`, inverted to an all-`True` *stable* mask, and **the corrections
+  were fitted on moving terrain — silently**. Every notebook used this path
+  (`StableAreaMask(<path>)`); only the `gu.Vector` branch was safe. The target CRS is
+  now threaded through `_resolve_stable_mask` and `StableAreaMask`, and a CRS-less
+  GeoDataFrame warns instead of being assumed correct.
+- `Session.get_dems()` called `pz.get_dem()` twice per pzone — once in the filter and
+  once in the body — reading every DEM off disk twice with `load_data=True`.
+- `TopoCorrection`, `TopoRampCorrection` and `SlopeRampCorrection` now declare
+  `_REQUIRED_KWARGS = ("dem",)`. No correction class declared it, so
+  `apply_pairs_corrections`' upfront validation never caught a missing `dem=`; the run
+  failed deep inside the per-pair loop after wasted I/O.
+
+### Features
+- **Persisted reference DEM.** `Session.build_reference_dem()` crops a DEM to the pzone
+  AOI, regrids it onto the reference grid, and writes it to the path `Pzone.get_dem()`
+  already read — connecting `sieve_bulk(image_type="dem")`, `Pzone.get_dem()` and
+  `DEMFinder.download_dem()`, which all existed but were wired to nothing. Once stored,
+  the DEM shares the pair grid and the corrections stop re-warping it (previously twice
+  per pair, plus once more for the control figure).
+- **Moving-area polygon import.** `Session.load_moving_areas()` reprojects outlines to
+  the session CRS, trims them to the reference grid, and stores them at
+  `<pzone>/vector/<pz>_moving-areas.gpkg`; `get_moving_areas()` returns a `gu.Vector`
+  ready for `StableAreaMask`. Polygons live with the project instead of at an absolute
+  path in a notebook.
+- New `geomulticorr/utils/_grid.py`: `grid_key`, `grids_match`, `describe_grid`,
+  `regrid_to_ref`, `write_binary_raster` — no GMC imports, so `corrections` and `core`
+  both use it. The 1-bit writer is now shared by the reference grid and the per-pair
+  masks rather than duplicated.
+
+### Changed
+- `<pzone>/reference_raster/` added to the new layout (`PZ_KIND_REFERENCE_RASTER`,
+  7 subfolders). Legacy-layout projects collapse it to the pzone root, as they already
+  do for `reference_dem`/`vector`/`inversion`.
+- `insert_pzone_from_file` now shares its input normalisation with the new loaders via
+  `Session._normalize_vector_source()`. A CRS-less source is declared as the session CRS
+  with a warning instead of failing in `reproject`.
+
 ## [0.4.2] — 2026-08-14
 
 ### Features
