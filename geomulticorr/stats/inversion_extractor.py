@@ -64,7 +64,7 @@ _STATS = ["mean", "median", "min", "max", "std", "count"]
 class InversionExtractor:
     """Compute statistics and extract values from TIO inversion TOT rasters.
 
-    Discovers all ``TOT_YYYYMMDD.tif`` files produced by
+    Discovers all ``TOT_YYYYMMDD_{EW,NS,magn}.tif`` files produced by
     :meth:`~geomulticorr.inversion.tio_inversion.TIOInversion.post_process`
     and exposes two main methods:
 
@@ -119,7 +119,14 @@ class InversionExtractor:
                 continue
             found = sorted(subdir.glob("TOT_*.tif"))
             if found:
-                result[comp] = {p.stem.removeprefix("TOT_"): p for p in found}
+                # Strip the "TOT_" prefix and the "_{comp}" component suffix
+                # (e.g. "TOT_20210901_EW" -> "20210901") so EW/NS/magn share
+                # identical date keys. A no-op on a pre-suffix file left over
+                # from before TOT_*.tif carried a component suffix.
+                result[comp] = {
+                    p.stem.removeprefix("TOT_").removesuffix(f"_{comp}"): p
+                    for p in found
+                }
         return result
 
     # ── properties ─────────────────────────────────────────────────────────────
