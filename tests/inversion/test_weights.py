@@ -6,6 +6,7 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 import geomulticorr.inversion.tio_inversion as tio
@@ -263,11 +264,27 @@ class TestComputePairWeights:
         inv.write_liste_couple(weight_mode="quality", combine="geomean")
         assert captured == {"mode": "quality", "combine": "geomean"}
 
-        # (b) weights from explore_weights → reuse its stashed mode/combine
+        # (b) weights from explore_weights → reuse its stashed mode/combine.
+        # The explorer now stashes one params dict; _last_weight_mode /
+        # _last_combine are read-only deprecated views onto it, so setting them
+        # would raise.
         inv._last_weights = {"EW": [0.5], "NS": [0.5]}
-        inv._last_weight_mode = "quality"
-        inv._last_combine = "wmean"
+        inv._last_weights_params = {"weight_mode": "quality", "combine": "wmean"}
         inv.write_liste_couple(weights=inv._last_weights)
+        assert captured == {"mode": "quality", "combine": "wmean"}
+
+        # (b2) the same weights in a *different object* are still recognised —
+        # identity was too strict, dict(inv._last_weights) used to fall through
+        # to "explicit".
+        inv.write_liste_couple(weights=dict(inv._last_weights))
+        assert captured == {"mode": "quality", "combine": "wmean"}
+
+        # (b3) numpy payloads must not raise. A bare `==` on a dict of ndarrays
+        # returns an array, and `if <array>` raises "truth value of an array is
+        # ambiguous" — aborting a write that works today.
+        inv.write_liste_couple(
+            weights={"EW": np.array([0.5]), "NS": np.array([0.5])}
+        )
         assert captured == {"mode": "quality", "combine": "wmean"}
 
         # (c) unknown external weights → honest "explicit" (not "uniform")
@@ -277,6 +294,28 @@ class TestComputePairWeights:
         # (d) no weights, no mode → uniform
         inv.write_liste_couple()
         assert captured["mode"] == "uniform"
+
+    def test_deprecated_weight_mode_views(self, monkeypatch):
+        """The old loose attributes still read through, with a warning."""
+        inv = TIOInversion.__new__(TIOInversion)
+        inv._last_weights_params = {"weight_mode": "sigmoid", "combine": "geomean"}
+
+        with pytest.warns(DeprecationWarning, match="_last_weights_params"):
+            assert inv._last_weight_mode == "sigmoid"
+        with pytest.warns(DeprecationWarning, match="_last_weights_params"):
+            assert inv._last_combine == "geomean"
+
+    def test_deprecated_views_are_read_only(self):
+        """Assignment must fail loudly rather than create a second source of truth.
+
+        A getter-only ``property`` is a data descriptor, so it shadows the
+        instance ``__dict__`` — this is what the assignment actually hits.
+        """
+        inv = TIOInversion.__new__(TIOInversion)
+        with pytest.raises(AttributeError):
+            inv._last_weight_mode = "quality"
+        with pytest.raises(AttributeError):
+            inv._last_combine = "wmean"
 
     def test_all_modes_in_unit_range(self, monkeypatch):
         pairs = [

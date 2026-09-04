@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.5.2] — 2026-08-31
+
+### Added
+- **`TIOInversion.save_weights_figure()` and a Save-figure button in
+  `explore_weights`.** Writes to `<project>/<pzone>/figures/inversion/` (created on
+  demand; project-wide with a warning on a legacy-layout project). Like the pair
+  figures, the file name is a pure function of the weighting parameters — no
+  timestamp — so re-running a notebook refreshes the same files rather than
+  accumulating copies, and only the parameters that *affect* the chosen mode appear in
+  it. Static formats go through a new matplotlib twin, never `kaleido`.
+- **A run-parameters trace, written per direction** by `prepare_inversion` to
+  `inverse_{EW,NS}/inverse_{EW,NS}_parameters.json`. Per-pair weights already reached
+  disk in four places, but the *recipe* did not: `save_pair_weight`'s `params` field
+  only ever held `{"weight_mode": …}`, so `slope`, `sharpness`, `cc_gamma` and the rest
+  were lost when the kernel died — along with the filter pipeline, the NMAD threshold,
+  the launch profile and which pairs went in (`liste_couple` holds dates, so two
+  sensors on one date are indistinguishable). The file carries the **full unpruned**
+  twelve parameters, so `write_liste_couple(**params)` reproduces the run from the file
+  alone. A write failure is logged, never raised: losing a trace must not cost an
+  otherwise fully prepared inversion.
+- `explore_weights(interactive=False)` returns `(frame, fig)` — the weights frame and a
+  built-but-never-displayed plotly figure — importing no ipywidgets and needing no
+  display, so the figure is reachable from scripts and batch jobs.
+- Three pure helper modules mirroring the pair-figure stack, so the interactive figure
+  and its static twin draw provably the same thing: `utils/_weights_frame.py` (the
+  frame contract and the shared colour/marker/mode tables), `utils/_weights_plotly.py`
+  and `utils/_weights_export.py`.
+
+### Changed
+- **`explore_weights` now stashes one parameters dict**, `_last_weights_params`,
+  mirroring `Session.explore_pairs_strategy`'s `_last_pairs_params`, in place of three
+  loose attributes none of which was initialised. It holds exactly the twelve keys both
+  writers accept, so `inv.prepare_inversion(**inv._last_weights_params)` is a legal
+  splat. `_last_weights` keeps its shape and meaning — parameters are the input you
+  replay, results are the output you consume — and the vectors are now computed *from*
+  the dict, so the two cannot disagree.
+- `explore_weights` moved off `go.FigureWidget`, which since plotly 6 is an *anywidget*
+  whose front-end JS is not bundled with the VSCode Jupyter extension. It now redraws a
+  plain `go.Figure` into a `widgets.Output`, the way the pairing explorer already did.
+- `explore_weights(**defaults)` **validates its keyword arguments** and raises
+  `TypeError` on an unknown one; `sharpnes=8` used to be silently ignored. It also
+  accepts `dt_range`, which it previously could not reproduce at all.
+- Recognising the explorer's own weights no longer depends on object *identity*, so
+  `dict(inv._last_weights)` is no longer mislabelled `"explicit"`. The comparison is
+  numpy-safe: a dict of ndarrays used to make a plain `==` raise "truth value of an
+  array is ambiguous", and a provenance *label* must never abort a write.
+- `_pair_quality_metrics()` is memoised. It opens one stats JSON per pair and the
+  explorer called it twice per redraw — 920 file opens per slider tick at 460 pairs.
+  The cache is cleared by `filter_pairs_by_nmad`, which changes the pair list.
+- **`TIOInversion.post_process()` now writes direction-suffixed GeoTIFF names** —
+  `TOT_<date>_EW.tif` / `TOT_<date>_NS.tif` / `TOT_<date>_magn.tif` — instead of the
+  same `TOT_<date>.tif` in both `inverse_EW/` and `inverse_NS/` (and unsuffixed in
+  `inverse_magn/`). The old name never collided on disk — the per-direction
+  directories already kept them apart — but it lost the direction the moment a file
+  was copied elsewhere or listed flat. All three components now go through one
+  `_tot_tif_name()` name-builder instead of deriving the pattern independently in
+  `_tot_to_geotiff` and twice more in `post_process`, and
+  `InversionExtractor._discover_tif_paths` strips the suffix back off when building
+  its date keys, so `EW`/`NS`/`magn` still align on the same `YYYYMMDD` string. It
+  also tolerates a pre-change unsuffixed file already on disk — stripping a suffix
+  that isn't there is a no-op.
+
+### Deprecated
+- `TIOInversion._last_weight_mode` and `._last_combine` are now read-only views onto
+  `_last_weights_params`, each emitting a `DeprecationWarning`. **Removal in 0.7.0**,
+  the same horizon as `TIOInversion.prepare()`.
+
 ## [0.5.1] — 2026-08-31
 
 ### Fixed

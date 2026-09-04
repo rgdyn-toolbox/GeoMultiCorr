@@ -273,16 +273,87 @@ class TestPairModeTwo:
 
 
 class TestTIOInversionDir:
-    """Test TIOInversion.inversion_dir prefix vs. subfolder naming."""
+    """Test TIOInversion.inversion_dir prefix vs. subfolder naming.
 
-    def test_tio_inversion_dir_new_layout_uses_subfolder(self):
-        """New layout should create inversion_dir as inversion/<name>."""
-        from geomulticorr.inversion.tio_inversion import TIOInversion
+    Both the run-parameters JSON and the weights figure hang off this, so it has
+    to resolve correctly in both layouts.  ``TIOInversion.__init__`` validates
+    the TIO binaries, which are not installed in CI — these drive the path
+    resolution directly instead of constructing the object.
+    """
 
-        # We can't fully test without pairs, but we verify the logic:
-        # For new layout: session.pz_dir(pzone_name, PZ_KIND_INVERSION) / inversion_name
-        # For legacy: pz_dir(pzone_name) / f"inversion_{inversion_name}"
-        # This is verified in the modified code
+    def test_tio_inversion_dir_new_layout_uses_subfolder(self, temp_project_new):
+        """New layout: inversion/<name>, a subfolder rather than a prefix."""
+        session, project_path = temp_project_new
+        session.insert_pzone([(0, 0), (1, 0), (1, 1), (0, 1)], "test_pz", "TP")
+
+        inversion_dir = session.pz_dir("test_pz", PZ_KIND_INVERSION) / "PDL_spot"
+        assert inversion_dir == project_path / "test_pz" / "inversion" / "PDL_spot"
+
+    def test_tio_inversion_dir_legacy_layout_uses_prefix(self, temp_project_new):
+        """Legacy layout: inversion_<name> in the pzone root."""
+        session, project_path = temp_project_new
+        session.insert_pzone([(0, 0), (1, 0), (1, 1), (0, 1)], "test_pz", "TP")
+        session._legacy_layout = True
+
+        inversion_dir = session.pz_dir("test_pz") / "inversion_PDL_spot"
+        assert inversion_dir.name == "inversion_PDL_spot"
+        assert inversion_dir.parent == session.pz_dir("test_pz")
+
+    def test_pzone_name_is_the_first_pa_key_segment(self):
+        """inversion_dir and the figure routing both derive the pzone this way."""
+        pa_key = "PasDeLours_2021-01-01-spot_2022-03-01-spot"
+        assert pa_key.split("_")[0] == "PasDeLours"
+
+    def test_run_parameters_land_beside_the_direction_inputs(self, temp_project_new):
+        """<inversion_dir>/inverse_{EW,NS}/inverse_{EW,NS}_parameters.json."""
+        session, project_path = temp_project_new
+        session.insert_pzone([(0, 0), (1, 0), (1, 1), (0, 1)], "test_pz", "TP")
+
+        inversion_dir = session.pz_dir("test_pz", PZ_KIND_INVERSION) / "PDL_spot"
+        for direction in ("EW", "NS"):
+            path = (inversion_dir / f"inverse_{direction}"
+                    / f"inverse_{direction}_parameters.json")
+            assert path.parent.parent == inversion_dir
+
+
+class TestSaveWeightsFigureRouting:
+    """The weights figure goes to <pzone>/figures/inversion/.
+
+    ``inversion/`` is a subdirectory of ``figures/``, created at write time —
+    deliberately *not* an eighth ``PZ_KIND_*`` constant, since those name the
+    pzone's own subdirectories and a test pins that count at seven.
+    """
+
+    def test_new_layout_routes_under_the_pzone_figures(self, temp_project_new):
+        session, project_path = temp_project_new
+        session.insert_pzone([(0, 0), (1, 0), (1, 1), (0, 1)], "test_pz", "TP")
+
+        out_dir = session.pz_dir("test_pz", PZ_KIND_FIGURES) / "inversion"
+        assert out_dir == project_path / "test_pz" / "figures" / "inversion"
+
+    def test_the_inversion_subfolder_need_not_exist_yet(self, temp_project_new):
+        """pz_dir only resolves paths; the writer creates the folder."""
+        session, project_path = temp_project_new
+        session.insert_pzone([(0, 0), (1, 0), (1, 1), (0, 1)], "test_pz", "TP")
+
+        out_dir = session.pz_dir("test_pz", PZ_KIND_FIGURES) / "inversion"
+        assert not out_dir.exists()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        assert out_dir.is_dir()
+
+    def test_no_new_pz_kind_constant_was_added(self):
+        """The figures subfolder must not grow the pzone subdirectory tuple."""
+        assert len(NEW_LAYOUT_PZ_SUBDIRS) == 7
+        assert "inversion" not in [s for s in NEW_LAYOUT_PZ_SUBDIRS
+                                   if s.endswith("figures")]
+
+    def test_legacy_layout_discards_the_pzone(self, temp_project_new):
+        """Which is exactly why save_weights_figure warns and bypasses pz_dir."""
+        session, _ = temp_project_new
+        session.insert_pzone([(0, 0), (1, 0), (1, 1), (0, 1)], "test_pz", "TP")
+        session._legacy_layout = True
+
+        assert session.pz_dir("test_pz", PZ_KIND_FIGURES) == session.path_figures
 
 
 class TestSavePairsFigure:

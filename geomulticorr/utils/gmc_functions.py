@@ -2401,3 +2401,107 @@ PAIRS_MPL_BUILDERS: dict = {
     "network": plot_pairs_network,
     "dt_hist": plot_pairs_dt_hist,
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TIO inversion weights — the matplotlib twin of _weights_plotly.figure_weights
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _draw_inversion_weights_on_ax(
+    ax,
+    frame: pd.DataFrame,
+    directions: str | tuple[str, ...] = ("EW", "NS"),
+    alpha: float = 0.75,
+    markersize: float = 28.0,
+    **_ignored,
+) -> dict:
+    """Scatter weight-vs-Δt for the requested directions.  Returns an info dict.
+
+    Colours and markers come from
+    :mod:`geomulticorr.utils._weights_frame`, which the plotly view reads too, so
+    a saved PNG cannot style its series differently from the figure it twins.
+    """
+    from geomulticorr.utils._weights_frame import (
+        WEIGHT_DIRECTION_COLORS,
+        WEIGHT_DIRECTION_MARKERS,
+    )
+
+    if isinstance(directions, str):
+        wanted = ("EW", "NS") if directions == "both" else (directions,)
+    else:
+        wanted = tuple(directions)
+
+    dts = frame["dt_days"].to_numpy()
+    handles = []
+    for direction, column in (("EW", "w_ew"), ("NS", "w_ns")):
+        if direction not in wanted:
+            continue
+        _, marker = WEIGHT_DIRECTION_MARKERS[direction]
+        handles.append(
+            ax.scatter(
+                dts, frame[column].to_numpy(),
+                s=markersize, marker=marker, alpha=alpha,
+                color=WEIGHT_DIRECTION_COLORS[direction],
+                edgecolors="none", label=direction,
+            )
+        )
+
+    ax.set_xlabel("Temporal baseline Δt (days)")
+    ax.set_ylabel("weight")
+    ax.set_ylim(-0.02, 1.02)
+    ax.grid(True, alpha=0.25, linestyle=":")
+    ax.set_axisbelow(True)
+
+    return {
+        "n_pairs": len(frame),
+        "directions": wanted,
+        "legend_handles": handles,
+        "legend_title": "Map direction",
+    }
+
+
+def plot_inversion_weights(
+    frame: pd.DataFrame,
+    figsize: tuple[float, float] = (9, 5),
+    fig_name: str | None = None,
+    ax=None,
+    **style,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot TIO pair weights against temporal baseline.
+
+    The static twin of
+    :func:`geomulticorr.utils._weights_plotly.figure_weights`, so
+    :func:`~geomulticorr.utils._weights_export.save_weights_figure` can write a
+    ``.png``/``.pdf``/``.svg`` without ``kaleido``.
+
+    Named ``plot_inversion_weights`` rather than ``plot_weights`` because
+    :meth:`~geomulticorr.inversion.tio_inversion.TIOInversion.plot_weights`
+    already exists and is a different figure (one series per weighting *mode*).
+
+    :param frame: A weights frame (see :mod:`geomulticorr.utils._weights_frame`).
+    :param figsize: Figure size in inches (ignored when *ax* is given).
+    :param fig_name: Optional title; a pair-count title is used when omitted.
+    :param ax: Draw into an existing Axes instead of creating a figure.
+    :param style: Forwarded to :func:`_draw_inversion_weights_on_ax`
+        (``directions``, ``alpha``, ``markersize``).
+    :returns: ``(fig, ax)``.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    info = _draw_inversion_weights_on_ax(ax, frame, **style)
+
+    n_pairs = info["n_pairs"]
+    ax.set_title(
+        fig_name
+        or f"TIO pair weights — {n_pairs} pair{'s' if n_pairs != 1 else ''}",
+        fontsize=10,
+    )
+    if info["legend_handles"]:
+        ax.legend(handles=info["legend_handles"], title=info["legend_title"],
+                  loc="best", fontsize=8, title_fontsize=9)
+
+    fig.tight_layout()
+    return fig, ax
