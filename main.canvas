@@ -1,0 +1,43 @@
+{
+	"nodes":[
+		{"id":"e812d9abe4369437","type":"text","text":"Web Servers Hosting Raw Images","x":-425,"y":-780,"width":250,"height":60,"color":"5"},
+		{"id":"926f5e8bc8e1413e","type":"text","text":"Web Servers Hosting Raw Images","x":-80,"y":-780,"width":250,"height":60,"color":"5"},
+		{"id":"9f4d6b8a7113f55a","type":"text","text":"Web Servers Hosting Raw Images","x":-750,"y":-780,"width":250,"height":60,"color":"5"},
+		{"id":"bd1c16286aa0170c","type":"text","text":"Selection","x":-425,"y":-980,"width":250,"height":60,"color":"1"},
+		{"id":"ea9fe312fddc1b63","type":"text","text":"Downloading","x":-425,"y":-600,"width":250,"height":60,"color":"1"},
+		{"id":"7caf020690dc9a68","type":"text","text":"Local Raw Images Database","x":-425,"y":-440,"width":250,"height":60},
+		{"id":"3a84c0abbca2fef7","type":"text","text":"Thumbs (ready for correlation)","x":-425,"y":-80,"width":250,"height":60,"color":"4"},
+		{"id":"4280ca94caca51c4","type":"text","text":"Metadata Extraction","x":-425,"y":-260,"width":250,"height":68,"color":"1"},
+		{"id":"88c9a5854cdfab5b","type":"text","text":"Selection","x":-840,"y":-170,"width":250,"height":60,"color":"1"},
+		{"id":"70a253ed7dee2a06","type":"text","text":"GMC : Database Management","x":-1240,"y":-440,"width":250,"height":420,"color":"3"},
+		{"id":"5f3080b4a98e304d","type":"text","text":"Multi Sensor Management","x":-875,"y":-920,"width":250,"height":60,"color":"3"},
+		{"id":"8cc2c391c8689cb7","type":"text","text":"Diego's module to downolad the images","x":-1240,"y":-980,"width":250,"height":440,"color":"3"},
+		{"id":"283717097c665ee1","type":"text","text":"Spatial and Statistical Aggregation Strategy","x":-431,"y":1709,"width":250,"height":120,"color":"3"},
+		{"id":"44295416e9979ad0","type":"text","text":"How fast landform X is moving at period Z ?","x":-385,"y":1960,"width":250,"height":120},
+		{"id":"555df748a241b61e","type":"text","text":"Time Series Extraction Strategy","x":-39,"y":2020,"width":250,"height":60},
+		{"id":"1bb63b5a0741c262","type":"text","text":"How landform velocity evolves through time ?","x":-385,"y":2140,"width":250,"height":120},
+		{"id":"331419553093dc86","type":"text","text":"TIO Inversion","x":34,"y":2170,"width":250,"height":60},
+		{"id":"b9f14a32f1b1d648","type":"text","text":"Scientific Results Formulation","x":-1246,"y":1517,"width":250,"height":503,"color":"3"},
+		{"id":"76c2c676e2f10d1e","type":"text","text":"Correlation Strategy ","x":-1240,"y":360,"width":250,"height":937,"color":"6"},
+		{"id":"fdb4e0dda049301c","type":"text","text":"Evaluation Strategy","x":-965,"y":360,"width":250,"height":104},
+		{"id":"21ac19055c26e347","type":"text","text":"Multi Period : Pair Formation","x":-1134,"y":60,"width":250,"height":220,"color":"4"},
+		{"id":"9ab17e1d620ab900","type":"text","text":"Mono Period Related Metrics\n- SNR related metrics\n- Zonal Directional Metrics\n- Topographic metrics\n- Stable Areas Metrics","x":-715,"y":540,"width":338,"height":240},
+		{"id":"14cec24dda7327f9","type":"text","text":"Multi Period Related Metrics\n- Temporal Directional Metrics","x":-715,"y":835,"width":338,"height":220},
+		{"id":"cba4d2437817b75b","type":"text","text":"Best Parameters Choice through demultiplication of One Pair = One Period","x":-344,"y":578,"width":338,"height":165}
+	],
+	"edges":[
+		{"id":"f08a4d4fc26d5b9e","fromNode":"bd1c16286aa0170c","fromSide":"bottom","toNode":"9f4d6b8a7113f55a","toSide":"top"},
+		{"id":"e51df7ac2ab78004","fromNode":"bd1c16286aa0170c","fromSide":"bottom","toNode":"e812d9abe4369437","toSide":"top"},
+		{"id":"fcb2ba38f9c8c417","fromNode":"bd1c16286aa0170c","fromSide":"bottom","toNode":"926f5e8bc8e1413e","toSide":"top"},
+		{"id":"b09772f37352fb7d","fromNode":"e812d9abe4369437","fromSide":"bottom","toNode":"ea9fe312fddc1b63","toSide":"top"},
+		{"id":"55194092c62cc9d4","fromNode":"ea9fe312fddc1b63","fromSide":"bottom","toNode":"7caf020690dc9a68","toSide":"top"},
+		{"id":"f29c066983e6e701","fromNode":"7caf020690dc9a68","fromSide":"bottom","toNode":"4280ca94caca51c4","toSide":"top"},
+		{"id":"1d23980bd2ef0128","fromNode":"4280ca94caca51c4","fromSide":"bottom","toNode":"3a84c0abbca2fef7","toSide":"top"},
+		{"id":"939c5fce2f4db9d9","fromNode":"88c9a5854cdfab5b","fromSide":"right","toNode":"3a84c0abbca2fef7","toSide":"top"},
+		{"id":"a4c281b8b4ad7997","fromNode":"9f4d6b8a7113f55a","fromSide":"bottom","toNode":"ea9fe312fddc1b63","toSide":"top"},
+		{"id":"cba270dce383bb5f","fromNode":"926f5e8bc8e1413e","fromSide":"bottom","toNode":"ea9fe312fddc1b63","toSide":"top"},
+		{"id":"540a2fcda82a193d","fromNode":"21ac19055c26e347","fromSide":"right","toNode":"fdb4e0dda049301c","toSide":"right"},
+		{"id":"5788d9871cf7efcb","fromNode":"fdb4e0dda049301c","fromSide":"bottom","toNode":"9ab17e1d620ab900","toSide":"top"},
+		{"id":"d51080d8d3ca9076","fromNode":"fdb4e0dda049301c","fromSide":"bottom","toNode":"14cec24dda7327f9","toSide":"left"}
+	]
+}
