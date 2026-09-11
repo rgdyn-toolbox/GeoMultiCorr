@@ -1,6 +1,6 @@
 # Compte-rendu
 ## Github repository
-- TD presented to DC the actions listed in [[2026-09-11_online_TD-DC]]
+- TD presented to DC what he does just before the meeting
 - We now have a unique repository with 3 branches
 	- DC's version of the GeoMultiCorr software 
 	- TD's version
@@ -35,8 +35,7 @@
 - The first step is to be aware of what we have in hands. Therefore, TD must try the DC version, and vice versa.
 - DC needs to commit its last changes
 - From the next meeting, we can think about the GeoMultiCorr scope and the questions already open and described in [[issues]] 
----
-# TD's action before the meeting
+# Before the meeting
 ## Paper Plan
 - TD's elaborate a rough potential plan for the paper. See [[Intra/GeoMultiCorr/main|main]]
 - And a graphical canvas [[graphical_canvas.canvas]] visible with obsidian.
