@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.6.0] — 2026-09-14
+
+### Added
+- **Correlation parameters infrastructure recovery**:
+  - `geomulticorr.correlation.corr_params`: ASP parameter derivation (kernel sizing, search reach, dynamic range calculation, strain-rate ceilings)
+  - `geomulticorr.correlation._correlation_plan`: correlation plan JSON structure, precedence resolver (`scalar → group → override`), file comparison guard
+  - `geomulticorr.utils._corrparams_plotly`: interactive 4-view correlation-parameters explorer (design_map, kernel_search, SNR, cost)
+  - `geomulticorr.utils._corrparams_frame`: parameter frame contract (`CORRPARAMS_FRAME_COLUMNS`) and group aggregation
+  - `geomulticorr.utils._corrparams_export`: figure export with stem pruning (`relevant_corr_keys`)
+  - `geomulticorr.utils._durations`: duration string parsing (`"1Y"`, `"6M"`, `"2W"`, `"30D"`) for Δt filters
+  - Comprehensive test suite (`test_corr_params`, `test_correlation_plan`, `test_corrparams_contracts`, `test_prepare_per_pair`, `test_explore_correlation_params`, `test_thumb_resolution`)
+- **`Session.explore_correlation_params()`** — interactive correlation-parameters explorer (headless + widget modes), parameter plan builder, stashes `_last_corr_params` for pipeline replay
+- **`Session.save_correlation_figure()`** — exports correlation-parameters figures (html + static formats)
+- **`Thumb.th_res`** — per-image GSD tracking from raster headers (float dtype); backfill support via `Session.backfill_thumb_resolution()`
+- **License badge** — CC BY-NC-ND 4.0 SVG asset (`by-nc-nd.svg`)
+
+### Changed
+- **Core explorer state consolidation** — `Session._thumb_resolution()` memoised (lazy, bounds-checked), correlation-parameter frame builders split into `_corrparams_pair_facts` (table-based, no `Pair` construction) and `_corrparams_frame` (pure arithmetic over cached facts)
+- **Console tables** — enhanced formatting for correlation-group summaries and parameter details
+- **`TIOInversion` / inversion** — run-parameters trace improvements, weights and state consolidation
+- **`gmc_functions`** — updated plotting with per-correction before/after visuals
+- **`correlation.py`** — ASP parameter passing and `corr_eval` command construction updates
+- **GEE integration (`geomulticorr.gee`)** — improved image search and download robustness
+
+### Technical Details
+- Correlation-parameter explorer recovers table-only design from pair-strategy explorer: reads from `get_pairs_overview()` and Thumbs layer, never constructs `Pair` objects (~100× faster than `get_pairs()` footprint cost)
+- Parameter resolution: `scalar arguments → plan group → per-pair override` precedence, with reuse guard that compares parameters, not just file existence
+- Per-group parameter derivation runs twice: per-pair ideal, then reduced to groups, so figures and files agree with plan replay
+- Δt filters use duration strings; min/max threshold gates whether explicit search box is used; uniform overrides are flagged, never clamped
+
 ## [0.5.2] — 2026-08-31
 
 ### Added
