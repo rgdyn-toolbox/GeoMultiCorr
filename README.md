@@ -2,7 +2,7 @@
   <img src="docs/_static/GMC_logo.svg" width="320px" alt="GeoMultiCorr logo"/>
 </div>
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079420.svg)](https://doi.org/10.5281/zenodo.17079420)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079419.svg)](https://doi.org/10.5281/zenodo.17079419)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE.md)
 
 # GeoMultiCorr
@@ -70,7 +70,6 @@ raw displacement maps (EW, NS, NMAD)
     ↓  AlongTrackDestriping  — remove along-track scanner artifacts
     ↓  AcrossTrackDestriping — remove across-track scanner artifacts
     ↓  Spatial Masks       — SnowMask · CloudMask · SlopeMask · ShadowMask
-    ↓
 corrected displacement maps
 ```
 
@@ -204,13 +203,13 @@ jupyter lab notebooks/
 
 ---
 
-# Contact and citation ![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079420.svg)
+# Contact and citation ![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079419.svg)
 
 For any question, bug, or issue regarding this pipeline/package, please report it in the [Issues](../../issues) section or contact the developer team:
 - [diego.cusicanqui@univ-grenoble-alpes.fr](mailto:diego.cusicanqui@univ-grenoble-alpes.fr)
 - [thibaut.duvanel@unil.ch](mailto:thibaut.duvanel@unil.ch)
 
 > [!IMPORTANT]
-> If you use this tool, please cite it using the following [DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079420.svg). This will help recognise the time invested and keep the tool open and accessible.
+> If you use this tool, please cite it using the following [DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079419.svg). This will help recognise the time invested and keep the tool open and accessible.
 
-![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079420.svg)
+![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079419.svg)
