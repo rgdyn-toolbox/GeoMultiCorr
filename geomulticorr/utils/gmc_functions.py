@@ -2505,3 +2505,363 @@ def plot_inversion_weights(
 
     fig.tight_layout()
     return fig, ax
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Correlation parameters — the matplotlib twins of _corrparams_plotly
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _draw_correlation_design_map_on_ax(
+    ax,
+    frame: pd.DataFrame,
+    k: float = 3.0,
+    c_px: float = 0.15,
+    coreg_px: float = 2.0,
+    margin_px: float = 2.0,
+    tau_days: float | None = None,
+    color_by: str = "group",
+    markersize: float = 42.0,
+    **_ignored,
+) -> dict:
+    """Draw the Δt-versus-velocity feasibility band and the pairs on it.
+
+    Colours come from :mod:`geomulticorr.utils._corrparams_plotly`, which the
+    interactive view reads too, so a saved PNG cannot style its boundaries
+    differently from the figure it twins.
+    """
+    import numpy as np
+
+    from geomulticorr.correlation.corr_params import feasibility_bounds
+    from geomulticorr.utils._corrparams_plotly import (
+        DESIGN_COLORS,
+        GROUP_PALETTE,
+        _dt_grid,
+        _explicit_search_px,
+    )
+
+    grid = _dt_grid(frame)
+    handles = []
+    if grid.size:
+        resolution = float(np.nanmedian(frame["resolution_m"].to_numpy(dtype="float64")))
+        # None when every pair is on ASP's automatic range: there is then no
+        # search reach, and a line from a fabricated default would describe a
+        # constraint that does not exist.
+        search = _explicit_search_px(frame)
+        bounds = feasibility_bounds(
+            grid, resolution, c_px, search if search is not None else 0.0,
+            k=k, coreg_px=coreg_px, margin_px=margin_px,
+        )
+        if search is not None:
+            ax.fill_between(grid, bounds["v_min"], bounds["v_max"],
+                            color="#27ae60", alpha=0.10, label="measurable")
+        handles.append(
+            ax.plot(grid, bounds["v_min"], color=DESIGN_COLORS["floor"], lw=2,
+                    label=f"detection floor (k={k:g})")[0]
+        )
+        if search is not None:
+            handles.append(
+                ax.plot(grid, bounds["v_max"], color=DESIGN_COLORS["ceiling"], lw=2,
+                        ls="--", label=f"search reach (S={search:.0f} px)")[0]
+            )
+        else:
+            handles.append(
+                ax.plot([], [], color=DESIGN_COLORS["limit"], lw=2, ls="--",
+                        label="search reach: ASP auto")[0]
+            )
+
+    if tau_days:
+        ax.axvline(float(tau_days), color=DESIGN_COLORS["limit"], lw=1.5, ls=":")
+
+    column = {"group": "group", "sensor": "sensor_i"}.get(color_by)
+    keys = [""] if column is None else sorted(frame[column].astype(str).unique())
+    n_below = 0
+    for key in keys:
+        sub = frame if column is None else frame[frame[column].astype(str) == key]
+        if len(sub) == 0:
+            continue
+        below = sub["snr"].to_numpy(dtype="float64") < float(k)
+        color = (
+            GROUP_PALETTE[keys.index(key) % len(GROUP_PALETTE)]
+            if column is not None else DESIGN_COLORS["pairs"]
+        )
+        # Two scatters rather than one per pair: the below-floor pairs need a
+        # different marker, and that is the only split worth making.  Only the
+        # circles carry the group label -- labelling both would list every group
+        # twice in the legend.
+        for mask, marker, label in (
+            (~below, "o", key or "pairs"),
+            (below, "X", None),
+        ):
+            if not mask.any():
+                continue
+            handles.append(
+                ax.scatter(
+                    sub["dt_days"].to_numpy()[mask],
+                    sub["velocity_m_yr"].to_numpy()[mask],
+                    s=markersize, marker=marker, color=color,
+                    edgecolors="white", linewidths=0.6, label=label,
+                )
+            )
+        n_below += int(below.sum())
+
+    # One proxy entry explains every X on the plot, whatever its group colour.
+    if n_below:
+        ax.scatter([], [], s=markersize, marker="X", color=DESIGN_COLORS["limit"],
+                   label=f"below floor ({n_below})")
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Temporal baseline Δt (days)")
+    ax.set_ylabel("Surface velocity v (m/yr)")
+    ax.grid(True, alpha=0.25, linestyle=":", which="both")
+    ax.set_axisbelow(True)
+
+    return {"n_pairs": len(frame), "legend_handles": handles,
+            "n_below": n_below, "n_groups": len(keys),
+            "legend_title": "Design map"}
+
+
+def plot_correlation_design_map(
+    frame: pd.DataFrame,
+    figsize: tuple[float, float] = (9, 5.5),
+    fig_name: str | None = None,
+    ax=None,
+    **style,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot the correlation design map: Δt versus velocity, with the band.
+
+    The static twin of
+    :func:`geomulticorr.utils._corrparams_plotly.figure_design_map`, so
+    :func:`~geomulticorr.utils._corrparams_export.save_corrparams_figure` can
+    write a ``.png``/``.pdf``/``.svg`` without ``kaleido``.
+
+    :param frame: A correlation-parameters frame.
+    :param figsize: Figure size in inches (ignored when *ax* is given).
+    :param fig_name: Optional title.
+    :param ax: Draw into an existing Axes instead of creating a figure.
+    :param style: Forwarded to :func:`_draw_correlation_design_map_on_ax`.
+    :returns: ``(fig, ax)``.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    info = _draw_correlation_design_map_on_ax(ax, frame, **style)
+    n = info["n_pairs"]
+    ax.set_title(fig_name or f"Correlation design map — {n} pair{'s' if n != 1 else ''}",
+                 fontsize=10)
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        # A ten-group archive would otherwise bury the plot under its own key.
+        many = info.get("n_groups", 0) > 5
+        ax.legend(loc="best", fontsize=7 if many else 8, ncol=2 if many else 1,
+                  framealpha=0.85)
+    fig.tight_layout()
+    return fig, ax
+
+
+def _draw_correlation_kernel_search_on_ax(
+    ax,
+    frame: pd.DataFrame,
+    strain_rate_per_yr: float | None = None,
+    markersize: float = 38.0,
+    **_ignored,
+) -> dict:
+    """Scatter derived kernel and search against baseline, with both bounds."""
+    from geomulticorr.correlation.corr_params import (
+        TEXTURE_FLOOR_PX,
+        strain_kernel_limit_px,
+    )
+    from geomulticorr.utils._corrparams_plotly import (
+        DESIGN_COLORS,
+        GROUP_PALETTE,
+        _dt_grid,
+    )
+
+    dts = frame["dt_days"].to_numpy()
+    ax.scatter(dts, frame["kernel_px"].to_numpy(), s=markersize, marker="o",
+               color=GROUP_PALETTE[0], edgecolors="none", label="kernel (px)")
+    ax.scatter(dts, frame["search_px"].to_numpy(), s=markersize, marker="D",
+               color=GROUP_PALETTE[1], edgecolors="none",
+               label="search half-width (px)")
+
+    ax.axhline(TEXTURE_FLOOR_PX, color=DESIGN_COLORS["limit"], lw=1.5, ls=":",
+               label=f"texture floor ({TEXTURE_FLOOR_PX} px)")
+
+    if strain_rate_per_yr:
+        grid = _dt_grid(frame)
+        if grid.size:
+            limit = [strain_kernel_limit_px(strain_rate_per_yr, d) for d in grid]
+            ax.plot(grid, limit, color=DESIGN_COLORS["floor"], lw=2, ls="--",
+                    label="strain ceiling")
+
+    ax.set_xscale("log")
+    # Log y, because the strain ceiling reaches hundreds of pixels at short
+    # baselines while the derived kernels sit between 7 and ~40 -- on a linear
+    # axis the ceiling flattens all the actual data into a sliver at the bottom.
+    ax.set_yscale("log")
+    ax.set_xlabel("Temporal baseline Δt (days)")
+    ax.set_ylabel("pixels")
+    ax.grid(True, alpha=0.25, linestyle=":", which="both")
+    ax.set_axisbelow(True)
+    return {"n_pairs": len(frame)}
+
+
+def plot_correlation_kernel_search(
+    frame: pd.DataFrame,
+    figsize: tuple[float, float] = (9, 5),
+    fig_name: str | None = None,
+    ax=None,
+    **style,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot derived kernel and search half-width against temporal baseline.
+
+    :param frame: A correlation-parameters frame.
+    :param figsize: Figure size in inches (ignored when *ax* is given).
+    :param fig_name: Optional title.
+    :param ax: Draw into an existing Axes instead of creating a figure.
+    :param style: Forwarded to :func:`_draw_correlation_kernel_search_on_ax`.
+    :returns: ``(fig, ax)``.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    _draw_correlation_kernel_search_on_ax(ax, frame, **style)
+    ax.set_title(fig_name or "Kernel and search versus baseline", fontsize=10)
+    ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
+    return fig, ax
+
+
+def _draw_correlation_snr_on_ax(
+    ax, frame: pd.DataFrame, k: float = 3.0, markersize: float = 42.0, **_ignored
+) -> dict:
+    """Scatter SNR against baseline, splitting pairs at the ``k`` threshold."""
+    import numpy as np
+
+    from geomulticorr.utils._corrparams_plotly import DESIGN_COLORS
+
+    snr_values = frame["snr"].to_numpy(dtype="float64")
+    dts = frame["dt_days"].to_numpy()
+    below = snr_values < float(k)
+
+    for mask, marker, color, label in (
+        (~below, "o", DESIGN_COLORS["pairs"], "measurable"),
+        (below, "X", DESIGN_COLORS["flagged"], "below floor"),
+    ):
+        if mask.any():
+            ax.scatter(dts[mask], snr_values[mask], s=markersize, marker=marker,
+                       color=color, edgecolors="none", label=label)
+
+    ax.axhline(float(k), color=DESIGN_COLORS["floor"], lw=2,
+               label=f"threshold k={k:g}")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Temporal baseline Δt (days)")
+    ax.set_ylabel("SNR = v·Δt / σ_D")
+    ax.grid(True, alpha=0.25, linestyle=":", which="both")
+    ax.set_axisbelow(True)
+    return {"n_pairs": len(frame), "n_below": int(below.sum())}
+
+
+def plot_correlation_snr(
+    frame: pd.DataFrame,
+    figsize: tuple[float, float] = (9, 5),
+    fig_name: str | None = None,
+    ax=None,
+    **style,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot detectability: SNR against baseline, with the ``k`` threshold.
+
+    :param frame: A correlation-parameters frame.
+    :param figsize: Figure size in inches (ignored when *ax* is given).
+    :param fig_name: Optional title.
+    :param ax: Draw into an existing Axes instead of creating a figure.
+    :param style: Forwarded to :func:`_draw_correlation_snr_on_ax`.
+    :returns: ``(fig, ax)``.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    info = _draw_correlation_snr_on_ax(ax, frame, **style)
+    suffix = f" — {info['n_below']} below the floor" if info["n_below"] else ""
+    ax.set_title(fig_name or f"Detectability{suffix}", fontsize=10)
+    ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
+    return fig, ax
+
+
+def _pretty_group(frame: pd.DataFrame, group: str) -> str:
+    """``"planetscope|dt30-90d"`` -> ``"planetscope\n30-90 d"`` for an axis label."""
+    from geomulticorr.correlation.corr_params import format_dt_span
+
+    sub = frame[frame["group"] == group]
+    sensor = str(group).split("|")[0]
+    if len(sub) == 0:
+        return str(group)
+    return f"{sensor}\n{format_dt_span(sub['dt_days'].min(), sub['dt_days'].max())}"
+
+
+def _draw_correlation_cost_on_ax(ax, frame: pd.DataFrame, **_ignored) -> dict:
+    """Bar the summed relative cost per parameter group."""
+    from geomulticorr.utils._corrparams_plotly import GROUP_PALETTE
+
+    grouped = frame.groupby("group", sort=True)
+    groups = list(grouped.groups.keys())
+    totals = grouped["cost_index"].sum().to_numpy()
+
+    ax.bar(range(len(groups)), totals,
+           color=[GROUP_PALETTE[i % len(GROUP_PALETTE)] for i in range(len(groups))])
+    ax.set_xticks(range(len(groups)))
+    # Readable spans on the axis; the group KEY stays the canonical days form,
+    # because it is also a plan-JSON name and a filename fragment.
+    ax.set_xticklabels([_pretty_group(frame, g) for g in groups],
+                       rotation=30, ha="right", fontsize=8)
+    ax.set_xlabel("parameter group")
+    ax.set_ylabel("relative cost (1.0 = ASP defaults)")
+    ax.grid(True, alpha=0.25, linestyle=":", axis="y")
+    ax.set_axisbelow(True)
+    return {"n_pairs": len(frame), "total": float(totals.sum()) if len(totals) else 0.0}
+
+
+def plot_correlation_cost(
+    frame: pd.DataFrame,
+    figsize: tuple[float, float] = (9, 5),
+    fig_name: str | None = None,
+    ax=None,
+    **style,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot summed relative correlation cost per parameter group.
+
+    :param frame: A correlation-parameters frame.
+    :param figsize: Figure size in inches (ignored when *ax* is given).
+    :param fig_name: Optional title.
+    :param ax: Draw into an existing Axes instead of creating a figure.
+    :param style: Forwarded to :func:`_draw_correlation_cost_on_ax`.
+    :returns: ``(fig, ax)``.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    info = _draw_correlation_cost_on_ax(ax, frame, **style)
+    ax.set_title(fig_name or f"Correlation cost — {info['total']:.0f}× total", fontsize=10)
+    fig.tight_layout()
+    return fig, ax
+
+
+#: Static counterparts of
+#: :data:`geomulticorr.utils._corrparams_plotly.VIEW_BUILDERS`, keyed identically
+#: so a caller can render the same view through either backend.
+CORRPARAMS_MPL_BUILDERS: dict = {
+    "design_map": plot_correlation_design_map,
+    "kernel_search": plot_correlation_kernel_search,
+    "snr": plot_correlation_snr,
+    "cost": plot_correlation_cost,
+}

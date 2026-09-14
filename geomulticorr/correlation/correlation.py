@@ -33,6 +33,11 @@ import shutil
 from pathlib import Path
 
 from geomulticorr._logging import logger
+from geomulticorr.correlation.corr_params import (
+    SGM_ALGORITHMS,
+    SGM_KERNEL,
+    sgm_kernel_override,
+)
 from geomulticorr.utils.hpc_tools import (
     CLUSTER_CHOICES,
     validate_cluster,
@@ -154,12 +159,22 @@ class ASP:
         if nodata_value is not None:
             params.append(f"nodata-value {nodata_value}\n")
 
-        # SGM/MGM algorithms require a small kernel and cost-mode 4.
-        if corr_algorithm in ("asp_sgm", "asp_mgm", "asp_final_mgm"):
-            logger.warning(f"'{corr_algorithm}' requires corr-kernel ≤ 9×9. Overriding to 9 9.")
-            corr_kernel = (9, 9)
-            subpixel_kernel = (9, 9)
-            cost_mode = 4
+        # SGM/MGM algorithms require a small kernel and cost-mode 4.  The
+        # override lives in corr_params.sgm_kernel_override so that every
+        # consumer resolves the same values -- this file, the corr_eval command
+        # below, and suggest_parameters.  Applying it only here is what let
+        # parallel_stereo run 9x9 while corr_eval --kernel-size still received
+        # the caller's kernel, producing a CC map computed over a different
+        # window than the disparity it describes.
+        corr_kernel, subpixel_kernel, cost_mode, _overridden = sgm_kernel_override(
+            corr_algorithm, corr_kernel, subpixel_kernel, cost_mode
+        )
+        if _overridden:
+            logger.warning(
+                f"'{corr_algorithm}' requires corr-kernel <= "
+                f"{SGM_KERNEL[0]}x{SGM_KERNEL[1]}. Overriding to "
+                f"{SGM_KERNEL[0]} {SGM_KERNEL[1]}."
+            )
 
         params.append("# --------------------------------------\n")
         params.append("# Integer Correlation / stereo_corr\n")
@@ -279,10 +294,17 @@ class ASP:
         :param correval_bin: Path or name of the ``corr_eval`` binary.
         :return: Command as a list of strings (ready for subprocess).
         """
-        if corr_algorithm in ("asp_sgm", "asp_mgm", "asp_final_mgm"):
+        if corr_algorithm in SGM_ALGORITHMS:
             prefilter_mode = 0
         else:
             prefilter_mode = 2
+
+        # The CC map must be computed over the SAME window as the disparity.
+        # build_correlation_params applies the SGM/MGM kernel override, so this
+        # command has to apply it too or the two disagree silently.
+        corr_kernel, _, _, _ = sgm_kernel_override(
+            corr_algorithm, corr_kernel, corr_kernel, 2
+        )
 
         p = Path(out_prefix)
         left = str(p.parent / f"{p.name}-L.tif")

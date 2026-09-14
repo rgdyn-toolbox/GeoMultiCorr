@@ -225,8 +225,23 @@ class TestNoReentrantRecompute:
         ctrl = _Controls(_explore(session, strategy="step", max_step=2))
 
         calls = self._count_recomputes(monkeypatch)
-        ctrl.set(ctrl.mindt, 100)          # no ceiling change at all
+        ctrl.set(ctrl.mindt, "100")        # Text widget; no ceiling change at all
         assert calls["n"] == 1
+
+    def test_duration_string_filter_recomputes_once(self, monkeypatch):
+        session = _make_session([_Pzone("PZ1", _thumbs(18))])
+        ctrl = _Controls(_explore(session, strategy="step", max_step=2))
+
+        calls = self._count_recomputes(monkeypatch)
+        ctrl.set(ctrl.mindt, "6M")
+        assert calls["n"] == 1
+
+    def test_an_unparseable_duration_does_not_raise(self, monkeypatch):
+        """A bad string must degrade, not kill the control: an exception in a
+        widget callback reaches only the kernel log, which VSCode hides."""
+        session = _make_session([_Pzone("PZ1", _thumbs(18))])
+        ctrl = _Controls(_explore(session, strategy="step", max_step=2))
+        ctrl.set(ctrl.mindt, "nonsense")   # must not propagate
 
     def test_moving_the_slider_recomputes_once(self, monkeypatch):
         session = _make_session([_Pzone("PZ1", _thumbs(18))])

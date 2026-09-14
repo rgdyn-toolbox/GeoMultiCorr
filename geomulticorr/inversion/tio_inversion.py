@@ -57,6 +57,14 @@ import geoutils as gu
 from geomulticorr.core.console import BatchProgress, print_tio_export_summary
 from geomulticorr.stats import load_pair_stats
 from geomulticorr._logging import logger
+from geomulticorr.utils._weights_frame import (
+    WEIGHT_MODE_KEYS,
+    format_weights_summary,
+    relevant_weight_keys,
+    weight_summary,
+    weights_frame,
+    weights_stats,
+)
 from geomulticorr.utils.hpc_tools import (
     oar_header,
     cluster_base_env,
@@ -493,6 +501,36 @@ class TIOInversion:
 
     _DIRECTIONS = ("EW", "NS")
 
+    #: Exactly the keys :attr:`_last_weights_params` carries.
+    #:
+    #: These are the twelve weighting parameters shared by
+    #: :meth:`compute_pair_weights`, :meth:`write_liste_couple` and
+    #: :meth:`prepare_inversion`, so both of these are legal::
+    #:
+    #:     inv.write_liste_couple(**inv._last_weights_params)
+    #:     inv.prepare_inversion(**inv._last_weights_params)
+    #:
+    #: ``direction`` is **excluded, and that is forced rather than a
+    #: preference**: neither writer has that parameter, so including it would
+    #: make both splats raise ``TypeError``.  It is view-only in the explorer
+    #: anyway — it toggles which series is visible, nothing more.
+    #:
+    #: The key set is fixed, never pruned per mode: a variable set would break
+    #: the splat guarantee, and the receiving method would quietly substitute its
+    #: own default for whatever was dropped.
+    _WEIGHT_PARAM_KEYS: tuple[str, ...] = (
+        "weight_mode", "slope", "min_weight", "dt_range", "sharpness", "w_min",
+        "invert", "combine", "alpha", "beta", "gamma", "cc_gamma",
+    )
+
+    #: Initial values :meth:`explore_weights` accepts through ``**defaults``.
+    #: Anything else raises ``TypeError`` rather than being silently ignored —
+    #: a typo like ``sharpnes=8`` used to be a no-op.
+    _WEIGHTS_EXPLORER_DEFAULTS: tuple[str, ...] = (
+        "direction", "combine", "alpha", "beta", "gamma", "cc_gamma",
+        "sharpness", "slope", "min_weight", "w_min", "invert", "dt_range",
+    )
+
     def __init__(
         self,
         session,
@@ -531,10 +569,21 @@ class TIOInversion:
         self.lect_depl_cumule_lin_bin = _find_tio_executable("lect_depl_cumule_lin", self.tio_binaries_dir)
         logger.info(f"TIO binaries found: invers_pixel_omp, lect_depl_cumule_lin")
 
+        self.pzone_name = pzone_name
+
         self._image_dates: list[str] | None = None
         self._raster_width:  int | None = None
         self._raster_height: int | None = None
         self.cluster: str | None = None
+
+        # Explorer / provenance state.  Every reader still goes through
+        # getattr(..., None): the tests build instances via TIOInversion.__new__,
+        # which never runs this method.
+        self._last_weights_params: dict | None = None
+        self._last_weights: dict | None = None
+        self._quality_metrics: tuple | None = None
+        self._last_nmad_filter: dict | None = None
+        self._last_launch: dict | None = None
 
     # ── repr ──────────────────────────────────────────────────────────────────
 
@@ -582,6 +631,42 @@ class TIOInversion:
             self._raster_width  = r.width
             self._raster_height = r.height
         return self._raster_width, self._raster_height
+
+    @property
+    def _last_weight_mode(self) -> str | None:
+        """Deprecated view onto ``_last_weights_params["weight_mode"]``.
+
+        .. deprecated:: 0.6.0
+           :meth:`explore_weights` now stashes one parameters dict, the way
+           ``Session.explore_pairs_strategy`` does.  Read
+           ``inv._last_weights_params["weight_mode"]``.  Removal in 0.7.0.
+
+        Read-only on purpose.  A setter would have to fabricate the other eleven
+        parameters out of defaults, re-creating exactly the second source of
+        truth this replaced.
+        """
+        warnings.warn(
+            "TIOInversion._last_weight_mode is deprecated and will be removed in "
+            "0.7.0 — use _last_weights_params['weight_mode'].",
+            DeprecationWarning, stacklevel=2,
+        )
+        params = getattr(self, "_last_weights_params", None) or {}
+        return params.get("weight_mode")
+
+    @property
+    def _last_combine(self) -> str | None:
+        """Deprecated view onto ``_last_weights_params["combine"]``.
+
+        .. deprecated:: 0.6.0
+           See :attr:`_last_weight_mode`.  Removal in 0.7.0.
+        """
+        warnings.warn(
+            "TIOInversion._last_combine is deprecated and will be removed in "
+            "0.7.0 — use _last_weights_params['combine'].",
+            DeprecationWarning, stacklevel=2,
+        )
+        params = getattr(self, "_last_weights_params", None) or {}
+        return params.get("combine")
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
@@ -760,7 +845,27 @@ class TIOInversion:
             if not rsc_link.exists() and not rsc_link.is_symlink():
                 rsc_link.symlink_to(file_info)
 
-    def _tot_to_geotiff(self, tot_file: Path, ref_raster_path: Path) -> Path:
+    @staticmethod
+    def _tot_tif_name(directory: Path, date: str, component: str) -> Path:
+        """``<directory>/TOT_<date>_<component>.tif``.
+
+        The single place ``TOT_*`` GeoTIFF names are built, for all three
+        components (``EW``, ``NS``, ``magn``) — used by :meth:`_tot_to_geotiff`
+        (the writer), :meth:`post_process` (the pre-write skip-check, and the
+        magnitude output), so the naming can never drift between them.
+
+        :param directory: Destination directory (``inverse_EW``, ``inverse_NS``
+            or ``inverse_magn``).
+        :type directory: pathlib.Path
+        :param date: ``YYYYMMDD`` date string.
+        :type date: str
+        :param component: ``"EW"``, ``"NS"`` or ``"magn"``.
+        :type component: str
+        :rtype: pathlib.Path
+        """
+        return directory / f"TOT_{date}_{component}.tif"
+
+    def _tot_to_geotiff(self, tot_file: Path, ref_raster_path: Path, direction: str) -> Path:
         """Convert a raw ENVI Float32 TOT binary to a georeferenced GeoTIFF.
 
         ``lect_depl_cumule_lin`` is called with ``height - 1`` rows, so TOT
@@ -775,8 +880,12 @@ class TIOInversion:
         :param ref_raster_path: Path to any same-grid GeoTIFF whose CRS and
             geotransform will be copied (typically ``pairs[0].pa_ew_path``).
         :type ref_raster_path: pathlib.Path
-        :returns: Path to the newly written GeoTIFF (same stem, ``.tif``
-            extension, LZW-compressed).
+        :param direction: ``"EW"`` or ``"NS"`` — appended to the output name
+            via :meth:`_tot_tif_name` so the two directions never collide if
+            ever written to the same directory.
+        :type direction: str
+        :returns: Path to the newly written GeoTIFF (``TOT_<date>_<direction>.tif``,
+            LZW-compressed).
         :rtype: pathlib.Path
         """
 
@@ -787,7 +896,8 @@ class TIOInversion:
         mask = ~np.isfinite(data) | (data == 0)
         data[mask] = np.nan
 
-        out = tot_file.with_suffix(".tif")
+        date = tot_file.name.removeprefix("TOT_")
+        out  = self._tot_tif_name(tot_file.parent, date, direction)
         with rasterio.open(str(ref_raster_path)) as ref_ds:
             profile = ref_ds.profile.copy()
         profile.update(
@@ -904,10 +1014,19 @@ class TIOInversion:
         ``pair.pa_dt_days``. Missing values are recorded as ``nan`` (treated as
         neutral downstream) with a warning — a pair is never dropped here.
 
+        **Memoised**, because this opens one stats JSON per pair and
+        :meth:`explore_weights` calls it twice per redraw — 920 file opens per
+        slider tick at 460 pairs, on the default ``quality`` mode.  The cache is
+        cleared by :meth:`filter_pairs_by_nmad`, which changes ``self.pairs``.
+
         :returns: Four lists (ew_nmad, ns_nmad, cc, dt_days), each aligned to
             ``self.pairs``.
         :rtype: tuple[list[float], list[float], list[float], list[float]]
         """
+        cached = getattr(self, "_quality_metrics", None)
+        if cached is not None:
+            return cached
+
         def _num(v):
             return float(v) if isinstance(v, (int, float)) and math.isfinite(v) else float("nan")
 
@@ -932,7 +1051,9 @@ class TIOInversion:
             )
             ccs.append(_num(cc))
             dts.append(float(pair.pa_dt_days))
-        return ew_nmads, ns_nmads, ccs, dts
+
+        self._quality_metrics = (ew_nmads, ns_nmads, ccs, dts)
+        return self._quality_metrics
 
     def compute_pair_weights(
         self,
@@ -1214,17 +1335,8 @@ class TIOInversion:
                 w_ns = _check(weights["NS"], "NS")
             else:  # single vector → both directions
                 w_ew = w_ns = _check(weights, "EW/NS")
-            # Resolve the recorded mode label for explicit weights: an explicit
-            # weight_mode wins; otherwise reuse what explore_weights tuned (when
-            # these are its weights); else be honest and call it "explicit".
-            if weight_mode is not None:
-                res_mode, res_combine = weight_mode, combine
-            elif weights is getattr(self, "_last_weights", None) and \
-                    getattr(self, "_last_weight_mode", None):
-                res_mode = self._last_weight_mode
-                res_combine = getattr(self, "_last_combine", combine)
-            else:
-                res_mode, res_combine = "explicit", None
+            res_mode, res_combine, _src = self._resolve_weight_label(
+                weight_mode, combine, weights)
         else:
             res_mode = weight_mode or "uniform"
             res_combine = combine
@@ -1250,6 +1362,65 @@ class TIOInversion:
             self._sync_pair_weights(w_ew, w_ns, res_mode, res_combine)
 
         return {"EW": w_ew, "NS": w_ns}
+
+    @staticmethod
+    def _same_weights(a, b) -> bool:
+        """Whether two weight mappings hold the same numbers.
+
+        Identity (``a is b``) was too strict: ``dict(inv._last_weights)`` is the
+        same weights but a different object, and it fell through to the
+        ``"explicit"`` label.
+
+        A bare ``==`` is not the fix either — the docs and notebooks do
+        ``np.array(inv._last_weights["EW"])``, and comparing a dict holding an
+        ndarray returns an *array*, so ``if a == b`` raises "truth value of an
+        array is ambiguous".  Both sides are therefore coerced to plain float
+        lists inside a ``try``: a provenance **label** must never be able to
+        abort a write that would otherwise succeed.
+        """
+        def _as_lists(value):
+            if not isinstance(value, dict):
+                return None
+            return {k: [float(x) for x in v] for k, v in value.items()}
+
+        try:
+            left, right = _as_lists(a), _as_lists(b)
+        except (TypeError, ValueError):
+            return False
+        if left is None or right is None:
+            return False
+        return left == right
+
+    def _resolve_weight_label(
+        self,
+        weight_mode: str | None,
+        combine: str | None,
+        weights,
+    ) -> tuple[str, str | None, str]:
+        """Decide what mode label to record for an explicit *weights* vector.
+
+        An explicit *weight_mode* wins; otherwise reuse what
+        :meth:`explore_weights` tuned, when these are its weights; else be
+        honest and call it ``"explicit"`` rather than silently recording
+        ``"uniform"``.
+
+        :returns: ``(mode, combine, source)`` where *source* is one of
+            ``"argument"``, ``"explorer"``, ``"explicit"`` or ``"computed"`` —
+            the JSON trace records it, so a reader can tell a tuned run from a
+            hand-supplied vector.
+        """
+        if weights is None:
+            return (weight_mode or "uniform"), combine, "computed"
+
+        if weight_mode is not None:
+            return weight_mode, combine, "argument"
+
+        stashed = getattr(self, "_last_weights", None)
+        params = getattr(self, "_last_weights_params", None) or {}
+        if params.get("weight_mode") and self._same_weights(weights, stashed):
+            return params["weight_mode"], params.get("combine", combine), "explorer"
+
+        return "explicit", None, "explicit"
 
     def _sync_pair_weights(
         self,
@@ -1286,15 +1457,14 @@ class TIOInversion:
 
     #: Controls that actually affect each weighting mode (drives the explorer's
     #: show/hide logic). ``direction`` and ``mode`` are always shown.
-    _MODE_CONTROLS: dict[str, set[str]] = {
-        "uniform": set(),
-        "temporal": {"w_min"},
-        "relative_temporal": {"w_min", "invert"},
-        "sigmoid": {"sharpness", "w_min", "invert"},
-        "parametric": {"slope", "min_weight"},
-        "quality": {"combine", "cc_gamma", "invert"},
-        "quality_spatial": {"combine", "cc_gamma"},
-    }
+    #:
+    #: An **alias**, not a copy: the figure-stem builder and the run-parameters
+    #: JSON prune by the same table, and two tables would eventually disagree
+    #: about which slider matters. It carries one name with no widget —
+    #: ``dt_range``, needed so two runs differing only in ``dt_range`` do not
+    #: collide on one file stem — which ``_apply_visibility`` ignores, since it
+    #: looks names up by membership.
+    _MODE_CONTROLS: dict[str, set[str]] = WEIGHT_MODE_KEYS
 
     def plot_weights(self, modes: list[str] | None = None, direction: str = "max",
                      **params):
@@ -1334,51 +1504,255 @@ class TIOInversion:
         )
         return fig
 
-    def explore_weights(self, weight_mode: str = "quality", **defaults):
+    def _weights_frame(self, w_ew: list[float], w_ns: list[float]):
+        """Assemble the weights frame both plotting backends consume.
+
+        The hover metrics come from the memoised :meth:`_pair_quality_metrics`,
+        so building a frame costs no file reads after the first call.
+        """
+        ew_nmads, ns_nmads, ccs, dts = self._pair_quality_metrics()
+        return weights_frame(
+            [p.pa_key for p in self.pairs],
+            dts, w_ew, w_ns,
+            nmad_ew=ew_nmads, nmad_ns=ns_nmads, cc=ccs,
+            corr_direction=[
+                str(getattr(p, "pa_direction", "")).capitalize() for p in self.pairs
+            ],
+        )
+
+    def _stash_weight_params(self, weight_mode: str, **params) -> dict:
+        """Write :attr:`_last_weights_params` — the single stash for the explorer.
+
+        Exactly :attr:`_WEIGHT_PARAM_KEYS`, no more and no less, so
+        ``write_liste_couple(**params)`` and ``prepare_inversion(**params)`` are
+        both legal splats.  Values are coerced to plain Python scalars here so
+        the dict is JSON-safe by construction, rather than needing a custom
+        encoder at the point it is written to the run-parameters file.
+
+        :returns: The stashed dict (also assigned to ``self``).
+        """
+        def _scalar(value):
+            if isinstance(value, bool) or value is None or isinstance(value, str):
+                return value
+            if isinstance(value, (list, tuple)):
+                return tuple(float(v) for v in value)
+            return float(value)
+
+        stash = {"weight_mode": str(weight_mode)}
+        for key in self._WEIGHT_PARAM_KEYS:
+            if key == "weight_mode":
+                continue
+            stash[key] = _scalar(params.get(key))
+        self._last_weights_params = stash
+        return stash
+
+    def _compute_stashed_weights(self) -> dict[str, list[float]]:
+        """Compute both directions' weights **from the stash**, not the widgets.
+
+        Reading the stash rather than the controls is what makes
+        ``inv._last_weights_params`` and ``inv._last_weights`` unable to
+        disagree: the vectors become a pure function of the dict that was just
+        written.  It also means
+
+        .. code-block:: python
+
+            inv.prepare_inversion(**inv._last_weights_params)
+
+        recomputes byte-identical weights *and* takes the explicit-``weight_mode``
+        branch, so the provenance question never arises.
+        """
+        params = dict(self._last_weights_params or {})
+        mode = params.pop("weight_mode", "uniform")
+        w_ew = self.compute_pair_weights(mode, direction="EW", **params)
+        w_ns = self.compute_pair_weights(mode, direction="NS", **params)
+        self._last_weights = {"EW": w_ew, "NS": w_ns}
+        return self._last_weights
+
+    def save_weights_figure(
+        self,
+        *,
+        frame=None,
+        formats: str | list[str] | tuple[str, ...] = ("html", "png"),
+        stem: str | None = None,
+        subdir: str = "inversion",
+        title: str = "",
+        dpi: int = 300,
+        figsize: tuple[float, float] | None = None,
+        plotlyjs: bool | str = True,
+        overwrite: bool = True,
+        **view_kwargs,
+    ) -> dict:
+        """Save the weight-vs-Δt figure for this inversion.
+
+        Routes to ``<project>/<pzone>/figures/<subdir>/`` on a new-layout
+        project.  On a **legacy-layout** project it falls back to the
+        project-wide ``figures_<project>/<subdir>/`` with a warning, because
+        ``pz_dir(pz, PZ_KIND_FIGURES)`` discards the pzone name entirely there.
+
+        The ``inversion/`` folder need not exist — it is created at write time.
+        No ``PZ_KIND_*`` constant is added for it: those name the seven
+        *pzone* subdirectories, and this is a subdirectory of ``figures/``.
+
+        Writes the figure twice: a self-contained interactive ``.html`` (plotly,
+        opens with no network access) and a publication-quality
+        ``.png``/``.jpg``/``.pdf``/``.svg`` (matplotlib).  No ``kaleido`` needed.
+
+        :param frame: Weights frame to draw.  ``None`` rebuilds it from
+            :attr:`_last_weights`, or from freshly computed uniform weights when
+            the explorer has never run.
+        :param formats: Any of ``"html"``, ``"png"``, ``"jpg"``, ``"pdf"``, ``"svg"``.
+        :param stem: File stem; when omitted a deterministic one is built from
+            the pzone, inversion name and weighting parameters — so re-running
+            refreshes the same files instead of piling up copies.
+        :param subdir: Subdirectory under the figures folder.
+        :param title: Figure title, applied to both backends.
+        :param dpi: Raster resolution for the matplotlib output.
+        :param figsize: Matplotlib figure size.
+        :param plotlyjs: ``True`` inlines plotly.js (offline-capable, ~3 MB);
+            ``"cdn"`` gives a small file needing a network connection.
+        :param overwrite: Replace a file of the same name (default).  ``False``
+            appends ``_01``, ``_02``… instead.
+        :param view_kwargs: Figure options (``directions``, ``height``,
+            ``alpha``, ``markersize``), filtered per backend.
+        :returns: ``{format: Path}`` for every file written.
+        """
+        from geomulticorr.core.session import PZ_KIND_FIGURES
+        from geomulticorr.utils._weights_export import (
+            save_weights_figure,
+            weights_figure_stem,
+        )
+
+        params = dict(getattr(self, "_last_weights_params", None) or {})
+        if frame is None:
+            weights = getattr(self, "_last_weights", None)
+            if weights is None:
+                self._stash_weight_params(params.pop("weight_mode", "uniform"), **params)
+                weights = self._compute_stashed_weights()
+                params = dict(self._last_weights_params)
+            frame = self._weights_frame(weights["EW"], weights["NS"])
+
+        pz = getattr(self, "pzone_name", "") or ""
+        if self.session._legacy_layout:
+            logger.warning(
+                f"pz_name={pz!r} ignored for legacy-layout session; "
+                "using project-wide figures folder"
+            )
+            out_dir = self.session.path_figures / subdir
+        else:
+            out_dir = self.session.pz_dir(pz, PZ_KIND_FIGURES) / subdir
+
+        if stem is None:
+            stem = weights_figure_stem(
+                inversion_name=self.inversion_name, pz_name=pz,
+                **{k: v for k, v in params.items() if k != "weight_mode"},
+                weight_mode=params.get("weight_mode", ""),
+            )
+
+        paths = save_weights_figure(
+            frame, out_dir, formats=formats, stem=stem, title=title, dpi=dpi,
+            figsize=figsize, plotlyjs=plotlyjs, view_kwargs=view_kwargs,
+            overwrite=overwrite,
+        )
+        logger.success(f"Saved weights figure to {out_dir} ({', '.join(paths)}).")
+        return paths
+
+    def explore_weights(
+        self,
+        weight_mode: str = "quality",
+        *,
+        interactive: bool = True,
+        savefig: bool = True,
+        formats: str | tuple[str, ...] = ("html", "png"),
+        **defaults,
+    ):
         """Interactive Plotly + ipywidgets tool to tune and preview pair weights.
 
         Renders a live scatter of **weight vs Δt** with one point per pair **per
-        direction** (EW circles + NS diamonds — 2 × ``len(pairs)`` points in
-        ``both`` view, one series otherwise). Sliders/dropdowns recompute the
+        direction** (EW circles + NS diamonds). Sliders/dropdowns recompute the
         weights on every change, and only the controls that affect the selected
-        mode are shown. The current per-direction weights are stored on
-        ``self._last_weights`` (a ``{"EW": [...], "NS": [...]}`` dict) so they can
-        be written directly::
+        mode are shown.
 
-            inv.explore_weights()                       # tune interactively
+        Every control change writes one parameters dict, mirroring
+        ``Session.explore_pairs_strategy``'s ``_last_pairs_params``::
+
+            inv.explore_weights()                             # tune interactively
+            inv.prepare_inversion(**inv._last_weights_params) # commit
+
+        Two pieces of state, deliberately kept apart: ``_last_weights_params``
+        holds the **parameters** you replay, ``_last_weights`` holds the
+        **computed** ``{"EW": [...], "NS": [...]}`` vectors you consume. The
+        vectors are computed *from* the dict, so the two cannot disagree.
+        Writing the vectors directly still works::
+
             inv.write_liste_couple(weights=inv._last_weights)
-            # or inv.prepare_inversion(weights=inv._last_weights)
 
-        Requires plotly and ipywidgets (Jupyter). Returns the assembled
-        ``ipywidgets.VBox`` (also displays inline in a notebook).
+        Requires plotly and ipywidgets when *interactive*; the headless path
+        imports neither.
 
         :param weight_mode: Initial mode selected in the dropdown.
-        :param defaults: Initial values for any control (``direction``,
-            ``combine``, ``alpha``, ``beta``, ``gamma``, ``cc_gamma``,
-            ``sharpness``, ``slope``, ``min_weight``, ``w_min``, ``invert``).
-        :returns: An ``ipywidgets.VBox`` containing the controls and figure.
+        :param interactive: ``False`` returns ``(frame, fig)`` — the weights
+            frame and a built-but-never-displayed plotly figure — importing no
+            ipywidgets and needing no display, so it works from scripts and
+            batch jobs.
+        :param savefig: Headless mode only: write the figure to
+            ``<pzone>/figures/inversion/``. Ignored when *interactive* (which has
+            a **Save figure** button instead).
+        :param formats: Formats for that headless save.
+        :param defaults: Initial values for any control — see
+            :attr:`_WEIGHTS_EXPLORER_DEFAULTS`. An unknown key raises
+            ``TypeError`` rather than being silently ignored.
+        :returns: An ``ipywidgets.VBox``, or ``(frame, fig)`` when not
+            *interactive*.
+        :raises TypeError: On an unrecognised *defaults* key.
         """
-        import ipywidgets as widgets
-        import plotly.graph_objects as go
-
-        ew_nmads, ns_nmads, ccs, dts = self._pair_quality_metrics()
-        keys = [p.pa_key for p in self.pairs]
-        dirs = [str(getattr(p, "pa_direction", "")).capitalize() for p in self.pairs]
-        # list-of-lists (not np.column_stack) so float NMAD/CC keep their dtype
-        # alongside the string correlation direction.
-        cd_ew = [[e, c, d] for e, c, d in zip(ew_nmads, ccs, dirs)]
-        cd_ns = [[n, c, d] for n, c, d in zip(ns_nmads, ccs, dirs)]
-
-        def _compute():
-            common = dict(
-                combine=c_combine.value, alpha=c_alpha.value, beta=c_beta.value,
-                gamma=c_gamma.value, cc_gamma=c_ccg.value, sharpness=c_sharp.value,
-                slope=c_slope.value, min_weight=c_minw.value, w_min=c_wmin.value,
-                invert=c_invert.value,
+        unknown = sorted(set(defaults) - set(self._WEIGHTS_EXPLORER_DEFAULTS))
+        if unknown:
+            raise TypeError(
+                f"explore_weights() got unexpected keyword argument(s) {unknown}. "
+                f"Accepted: {list(self._WEIGHTS_EXPLORER_DEFAULTS)}."
             )
-            w_ew = self.compute_pair_weights(c_mode.value, direction="EW", **common)
-            w_ns = self.compute_pair_weights(c_mode.value, direction="NS", **common)
-            return w_ew, w_ns
+
+        from geomulticorr.utils._weights_plotly import figure_weights
+
+        initial = {
+            "combine": defaults.get("combine", "geomean"),
+            "alpha": defaults.get("alpha", 1 / 3),
+            "beta": defaults.get("beta", 1 / 3),
+            "gamma": defaults.get("gamma", 1 / 3),
+            "cc_gamma": defaults.get("cc_gamma", 1.0),
+            "sharpness": defaults.get("sharpness", 5.0),
+            "slope": defaults.get("slope", 2.0),
+            "min_weight": defaults.get("min_weight", 0.1),
+            "w_min": defaults.get("w_min", 0.0),
+            "invert": defaults.get("invert", False),
+            "dt_range": defaults.get("dt_range", None),
+        }
+
+        def _title_for(mode: str, combine: str) -> str:
+            label = f"{mode}:{combine}" if mode in ("quality", "quality_spatial") else mode
+            return f"TIO pair weights — '{self.inversion_name}' [{label}]"
+
+        # ── headless path: results only, no widgets, no display ──
+        if not interactive:
+            self._stash_weight_params(weight_mode, **initial)
+            weights = self._compute_stashed_weights()
+            frame = self._weights_frame(weights["EW"], weights["NS"])
+            direction = defaults.get("direction", "both")
+            title = _title_for(weight_mode, initial["combine"])
+            fig = figure_weights(frame, title=title, directions=direction)
+
+            if savefig and len(frame):
+                self.save_weights_figure(
+                    frame=frame, formats=formats, title=title, directions=direction,
+                )
+            elif savefig:
+                logger.warning("No pairs to plot — nothing saved.")
+            return frame, fig
+
+        import ipywidgets as widgets
+        from IPython.display import display as _ipy_display
+
+        from geomulticorr.utils._pairs_export import FIGURE_FORMATS
 
         # ── controls ──
         c_mode = widgets.Dropdown(
@@ -1389,25 +1763,31 @@ class TIOInversion:
                                  value=defaults.get("direction", "both"),
                                  description="direction")
         c_combine = widgets.Dropdown(options=["geomean", "wmean", "product"],
-                                     value=defaults.get("combine", "geomean"),
-                                     description="combine")
-        c_alpha = widgets.FloatSlider(value=defaults.get("alpha", 1/3), min=0, max=1,
+                                     value=initial["combine"], description="combine")
+        c_alpha = widgets.FloatSlider(value=initial["alpha"], min=0, max=1,
                                       step=0.05, description="α nmad")
-        c_beta = widgets.FloatSlider(value=defaults.get("beta", 1/3), min=0, max=1,
+        c_beta = widgets.FloatSlider(value=initial["beta"], min=0, max=1,
                                      step=0.05, description="β cc")
-        c_gamma = widgets.FloatSlider(value=defaults.get("gamma", 1/3), min=0, max=1,
+        c_gamma = widgets.FloatSlider(value=initial["gamma"], min=0, max=1,
                                       step=0.05, description="γ dt")
-        c_ccg = widgets.FloatSlider(value=defaults.get("cc_gamma", 1.0), min=0.1, max=3.0,
+        c_ccg = widgets.FloatSlider(value=initial["cc_gamma"], min=0.1, max=3.0,
                                     step=0.1, description="cc_gamma")
-        c_sharp = widgets.FloatSlider(value=defaults.get("sharpness", 5.0), min=1, max=12,
+        c_sharp = widgets.FloatSlider(value=initial["sharpness"], min=1, max=12,
                                       step=0.5, description="sharpness")
-        c_slope = widgets.FloatSlider(value=defaults.get("slope", 2.0), min=0.5, max=5,
+        c_slope = widgets.FloatSlider(value=initial["slope"], min=0.5, max=5,
                                       step=0.1, description="slope")
-        c_minw = widgets.FloatSlider(value=defaults.get("min_weight", 0.1), min=0, max=1,
+        c_minw = widgets.FloatSlider(value=initial["min_weight"], min=0, max=1,
                                      step=0.05, description="min_weight")
-        c_wmin = widgets.FloatSlider(value=defaults.get("w_min", 0.0), min=0, max=0.9,
+        c_wmin = widgets.FloatSlider(value=initial["w_min"], min=0, max=0.9,
                                      step=0.05, description="w_min")
-        c_invert = widgets.Checkbox(value=defaults.get("invert", False), description="invert")
+        c_invert = widgets.Checkbox(value=initial["invert"], description="invert")
+        # save row — the file name is derived from the weighting parameters, so
+        # the only choice left is which formats to write.
+        c_formats = widgets.SelectMultiple(options=list(FIGURE_FORMATS),
+                                           value=("html", "png"),
+                                           rows=len(FIGURE_FORMATS),
+                                           description="formats")
+        b_save = widgets.Button(description="Save figure", icon="save")
 
         # map control name -> widget, for show/hide
         tunables = {
@@ -1416,81 +1796,98 @@ class TIOInversion:
             "min_weight": c_minw, "w_min": c_wmin, "invert": c_invert,
         }
 
+        plot_out = widgets.Output()
+        summary = widgets.HTML()
+        status = widgets.HTML()
+        state: dict = {"syncing": False}
+
         def _apply_visibility():
-            relevant = set(self._MODE_CONTROLS.get(c_mode.value, set()))
-            # α/β/γ only matter for the weighted-mean combine of quality mode
-            if c_mode.value == "quality" and c_combine.value == "wmean":
-                relevant |= {"alpha", "beta", "gamma"}
-            # α/β only matter for the weighted-mean combine of quality_spatial mode
-            if c_mode.value == "quality_spatial" and c_combine.value == "wmean":
-                relevant |= {"alpha", "beta"}
+            """Show only the controls the current mode actually uses."""
+            relevant = relevant_weight_keys(c_mode.value, c_combine.value)
             for name, w in tunables.items():
                 w.layout.display = None if name in relevant else "none"
 
-        w_ew, w_ns = _compute()
-        self._last_weights = {"EW": w_ew, "NS": w_ns}
-        self._last_weight_mode = c_mode.value
-        self._last_combine = c_combine.value
+        def _stash():
+            self._stash_weight_params(
+                c_mode.value,
+                combine=c_combine.value, alpha=c_alpha.value, beta=c_beta.value,
+                gamma=c_gamma.value, cc_gamma=c_ccg.value, sharpness=c_sharp.value,
+                slope=c_slope.value, min_weight=c_minw.value, w_min=c_wmin.value,
+                invert=c_invert.value, dt_range=initial["dt_range"],
+            )
 
-        fig = go.FigureWidget(
-            data=[
-                go.Scatter(x=dts, y=w_ew, mode="markers", name="EW", text=keys,
-                           customdata=cd_ew, opacity=0.75,
-                           marker=dict(size=9, symbol="circle", color="#1f77b4"),
-                           hovertemplate="pair_key=%{text}<br>weight=%{y:.3f}"
-                                         "<br>map=EW"
-                                         "<br>corr_dir=%{customdata[2]}"
-                                         "<br>NMAD=%{customdata[0]:.3f}"
-                                         "<br>CC=%{customdata[1]:.2f}"
-                                         "<br>Δt=%{x:.0f} d<extra></extra>"),
-                go.Scatter(x=dts, y=w_ns, mode="markers", name="NS", text=keys,
-                           customdata=cd_ns, opacity=0.75,
-                           marker=dict(size=9, symbol="diamond", color="#ff7f0e"),
-                           hovertemplate="pair_key=%{text}<br>weight=%{y:.3f}"
-                                         "<br>map=NS"
-                                         "<br>corr_dir=%{customdata[2]}"
-                                         "<br>NMAD=%{customdata[0]:.3f}"
-                                         "<br>CC=%{customdata[1]:.2f}"
-                                         "<br>Δt=%{x:.0f} d<extra></extra>"),
-            ]
-        )
-        fig.update_layout(
-            title=f"TIO pair weights — '{self.inversion_name}' [{c_mode.value}]",
-            xaxis_title="Temporal baseline Δt (days)",
-            yaxis_title="weight", yaxis_range=[-0.02, 1.02],
-            template="plotly_white", height=460,
-        )
+        def _fig_title() -> str:
+            return _title_for(c_mode.value, c_combine.value)
 
-        def _apply_direction():
-            show_ew = c_dir.value in ("both", "EW")
-            show_ns = c_dir.value in ("both", "NS")
-            fig.data[0].visible = show_ew
-            fig.data[1].visible = show_ns
+        # A plain ``go.Figure`` redrawn inside an ``Output`` is used instead of a
+        # ``go.FigureWidget``: since plotly 6 the latter is an *anywidget*, whose
+        # front-end JS is not bundled with the VSCode Jupyter extension and often
+        # fails to load ("No version of module anywidget is registered"). Core
+        # ipywidgets + the built-in plotly renderer work everywhere, offline.
+        def _draw():
+            fig = figure_weights(state["frame"], title=_fig_title(),
+                                 directions=c_dir.value)
+            with plot_out:
+                plot_out.clear_output(wait=True)
+                _ipy_display(fig)
+
+        def _render_summary():
+            summary.value = format_weights_summary(
+                weights_stats(state["frame"], weight_mode=c_mode.value,
+                              combine=c_combine.value)
+            )
 
         def _update(_change=None):
+            """Weighting change — re-stash, recompute, then redraw."""
+            if state.get("syncing"):
+                return
             _apply_visibility()
-            w_ew, w_ns = _compute()
-            self._last_weights = {"EW": w_ew, "NS": w_ns}
-            self._last_weight_mode = c_mode.value
-            self._last_combine = c_combine.value
-            with fig.batch_update():
-                fig.data[0].y = w_ew
-                fig.data[1].y = w_ns
-                _apply_direction()
-                fig.layout.title.text = (
-                    f"TIO pair weights — '{self.inversion_name}' [{c_mode.value}]"
+            _stash()
+            weights = self._compute_stashed_weights()
+            state["frame"] = self._weights_frame(weights["EW"], weights["NS"])
+            _draw()
+            _render_summary()
+
+        def _redraw(_change=None):
+            """View-only change — reuse the cached weights, never recompute."""
+            if state.get("syncing"):
+                return
+            _draw()
+
+        def _on_save(_button):
+            # Never let this raise: an uncaught exception in a widget callback
+            # only reaches the kernel log, which VSCode usually hides.
+            b_save.disabled = True
+            status.value = "<i>saving…</i>"
+            try:
+                paths = self.save_weights_figure(
+                    frame=state["frame"],
+                    formats=tuple(c_formats.value) or ("html",),
+                    title=_fig_title(), directions=c_dir.value,
                 )
+                names = " ".join(f"<code>{p.name}</code>" for p in paths.values())
+                folder = next(iter(paths.values())).parent
+                status.value = (f"<span style='color:#2a7'>✔ saved to</span> "
+                                f"<code>{folder}</code><br>{names}")
+            except Exception as exc:
+                logger.error(f"save_weights_figure failed: {exc!r}")
+                status.value = (f"<span style='color:#c33'>✘ save failed — "
+                                f"{type(exc).__name__}: {exc}</span>")
+            finally:
+                b_save.disabled = False
 
-        for c in (c_mode, c_dir, *tunables.values()):
+        for c in (c_mode, *tunables.values()):
             c.observe(_update, names="value")
+        c_dir.observe(_redraw, names="value")
+        b_save.on_click(_on_save)
 
-        _apply_visibility()
-        _apply_direction()
+        _update()
 
         row1 = widgets.HBox([c_mode, c_dir, c_combine, c_invert])
         row2 = widgets.HBox([c_alpha, c_beta, c_gamma, c_ccg])
         row3 = widgets.HBox([c_sharp, c_slope, c_minw, c_wmin])
-        return widgets.VBox([row1, row2, row3, fig])
+        row4 = widgets.HBox([c_formats, b_save])
+        return widgets.VBox([row1, row2, row3, plot_out, summary, status, row4])
 
     def write_input_tio(self) -> None:
         """Write the ``input_tio`` parameter file to both inversion directories.
@@ -1567,6 +1964,12 @@ class TIOInversion:
         # for, so launch() can catch a mode mismatch instead of failing at
         # `oarsub` time with a script that has the wrong (or no) header.
         self.cluster = "local" if cluster is None else cluster
+        self._last_launch = {
+            "cluster": self.cluster,
+            "nodes": int(nodes),
+            "cores": int(cores),
+            "walltime": walltime,
+        }
 
     # ── Orchestration ─────────────────────────────────────────────────────────
 
@@ -1642,6 +2045,14 @@ class TIOInversion:
 
         self.pairs = good
         self._image_dates = None
+        # per-pair metrics are indexed positionally against self.pairs
+        self._quality_metrics = None
+        self._last_nmad_filter = {
+            "threshold": float(threshold),
+            "correction_name": correction_name,
+            "kept": len(good),
+            "removed": len(bad),
+        }
 
         if bad:
             logger.info(f"@GMC TIO ── NMAD filter (≤{threshold} m): "
@@ -1649,6 +2060,71 @@ class TIOInversion:
         else:
             logger.info(f"@GMC TIO ── NMAD filter: all {len(good)} pairs within threshold")
         return good, bad
+
+    def write_run_parameters(
+        self,
+        weight_mode: str,
+        combine: str | None,
+        weight_source: str,
+        weight_params: dict,
+        weights: dict[str, list[float]],
+    ) -> dict[str, Path]:
+        """Write one self-contained run-parameters JSON per direction.
+
+        Lands beside that direction's TIO inputs, as
+        ``inverse_EW/inverse_EW_parameters.json`` and the NS twin.
+        ``setup_directories`` already created both folders.
+
+        The files record the *recipe*, not the results: the weighting parameters
+        in full (so ``write_liste_couple(**params)`` reproduces the run), the
+        filter pipeline, the NMAD threshold and the launch profile. The per-pair
+        weights, the acquisition dates and the solver settings are deliberately
+        left out — each already sits in the same folder, and a second copy would
+        only be somewhere for the two to disagree.
+
+        What makes the two files genuinely differ is ``direction`` and the
+        weight ``summary``, computed from *that* direction's vector. For
+        date-based modes the two summaries coincide, which is itself informative.
+
+        :returns: ``{direction: Path}`` for the files written.
+        """
+        from geomulticorr.inversion._run_parameters import (
+            build_run_parameters,
+            write_run_parameters,
+        )
+
+        try:
+            raster_shape = self.raster_shape
+        except Exception as exc:  # a missing raster must not abort the trace
+            logger.warning(f"[run parameters] raster shape unavailable: {exc}")
+            raster_shape = None
+
+        written: dict[str, Path] = {}
+        for direction in self._DIRECTIONS:
+            document = build_run_parameters(
+                direction=direction,
+                inversion_name=self.inversion_name,
+                pzone=getattr(self, "pzone_name", "") or "",
+                inversion_dir=self.inversion_dir,
+                raster_shape=raster_shape,
+                pair_keys=[p.pa_key for p in self.pairs],
+                n_images=len(self.image_dates),
+                weight_mode=weight_mode,
+                combine=combine,
+                weight_source=weight_source,
+                weight_params=weight_params,
+                relevant_params=sorted(relevant_weight_keys(weight_mode, combine)),
+                weight_summary=weight_summary(
+                    weights.get(direction, []) if weights else []
+                ),
+                filter_pipeline=self.filter_pipeline,
+                nmad_filter=getattr(self, "_last_nmad_filter", None),
+                launch=getattr(self, "_last_launch", None),
+            )
+            path = self.inversion_dir / f"inverse_{direction}" / \
+                f"inverse_{direction}_parameters.json"
+            written[direction] = write_run_parameters(path, document)
+        return written
 
     def prepare_inversion(
         self,
@@ -1684,6 +2160,10 @@ class TIOInversion:
            binary → create symlinks in ``LN_DATA/``.
         4. Write ``liste_image``, ``liste_image_inv``, ``liste_couple``,
            ``input_tio``, and bash launch scripts.
+        5. Write ``inverse_{EW,NS}/inverse_{EW,NS}_parameters.json`` — the
+           run-parameters trace (see :meth:`write_run_parameters`). A failure
+           here is logged, never raised: it must not cost an otherwise fully
+           prepared inversion.
 
         After :meth:`prepare_inversion` completes, call :meth:`launch` to start
         the inversion.
@@ -1814,24 +2294,33 @@ class TIOInversion:
 
         self.write_liste_image()
         self.write_liste_image_inv()
-        self.write_liste_couple(
-            weight_mode=weight_mode,
-            slope=slope,
-            min_weight=min_weight,
-            dt_range=dt_range,
-            sharpness=sharpness,
-            w_min=w_min,
-            invert=invert,
-            combine=combine,
-            alpha=alpha,
-            beta=beta,
-            gamma=gamma,
-            cc_gamma=cc_gamma,
-            weights=weights,
-            sync_geodb=sync_geodb,
+        weight_params = dict(
+            weight_mode=weight_mode, slope=slope, min_weight=min_weight,
+            dt_range=dt_range, sharpness=sharpness, w_min=w_min, invert=invert,
+            combine=combine, alpha=alpha, beta=beta, gamma=gamma, cc_gamma=cc_gamma,
+        )
+        written_weights = self.write_liste_couple(
+            **weight_params, weights=weights, sync_geodb=sync_geodb,
         )
         self.write_input_tio()
         self.write_launch_script(cluster=cluster, nodes=nodes, cores=cores, walltime=walltime)
+
+        # After write_launch_script, so self.cluster and the launch profile are
+        # set. Wrapped: this is a trace, and losing it must never cost an
+        # otherwise fully prepared inversion (the _sync_pair_weights precedent).
+        res_mode, res_combine, source = self._resolve_weight_label(
+            weight_mode, combine, weights)
+        if weights is not None and source == "explorer":
+            # the explorer's own parameters describe these vectors, not the
+            # defaults that were never used to produce them
+            weight_params = dict(getattr(self, "_last_weights_params", None)
+                                 or weight_params)
+        try:
+            self.write_run_parameters(
+                res_mode, res_combine, source, weight_params, written_weights)
+        except Exception as exc:
+            logger.warning(f"[run parameters] could not write the trace: {exc}")
+
         logger.info(f"TIO input files written to inverse_EW/ and inverse_NS/")
         logger.info(f"TIO ── ready. Call inv.launch(mode='{mode}').")
 
@@ -1936,16 +2425,18 @@ class TIOInversion:
 
         1. For each direction: convert ``TOT_*`` binaries to georeferenced
            GeoTIFF via :meth:`_tot_to_geotiff` (CRS and geotransform inherited
-           from ``pairs[0].pa_ew_path``).
+           from ``pairs[0].pa_ew_path``), named ``TOT_<date>_EW.tif`` /
+           ``TOT_<date>_NS.tif`` (see :meth:`_tot_tif_name`).
         2. When *direction* is ``'both'``: for every date where both EW and NS
            GeoTIFFs exist, compute ``sqrt(EW² + NS²)`` via
-           :meth:`_compute_magnitude` and save to ``inverse_magn/``.
+           :meth:`_compute_magnitude` and save to ``inverse_magn/`` as
+           ``TOT_<date>_magn.tif``.
 
         :param direction: Which directions to process — ``'EW'``, ``'NS'``,
             or ``'both'`` (default).
         :type direction: str
-        :param overwrite: When ``False`` (default), skip conversion if a
-            ``.tif`` already exists alongside the binary.  Set to ``True``
+        :param overwrite: When ``False`` (default), skip conversion if the
+            ``TOT_<date>_<component>.tif`` already exists.  Set to ``True``
             to force re-conversion.
         :type overwrite: bool
 
@@ -1973,13 +2464,14 @@ class TIOInversion:
 
             logger.info(f"post_process ── converting {len(tot_files)} TOT files [{d}]")
             for tot in tot_files:
-                out = tot.with_suffix(".tif")
+                date = tot.stem.replace("TOT_", "")
+                out  = self._tot_tif_name(inv_dir, date, d)
                 if not overwrite and out.exists():
-                    logger.info(f"  {tot.name}.tif already exists, skipping")
-                    tifs[d][tot.stem.replace("TOT_", "")] = out
+                    logger.info(f"  {out.name} already exists, skipping")
+                    tifs[d][date] = out
                     continue
-                self._tot_to_geotiff(tot, ref_path)
-                tifs[d][tot.stem.replace("TOT_", "")] = out
+                self._tot_to_geotiff(tot, ref_path, direction=d)
+                tifs[d][date] = out
                 logger.file(f"  {out.name}")
 
         # Magnitude only when both directions are available
@@ -1989,9 +2481,9 @@ class TIOInversion:
             common_dates = sorted(set(tifs["EW"]) & set(tifs["NS"]))
             logger.info(f"post_process ── computing magnitude for {len(common_dates)} dates")
             for date in common_dates:
-                out = magn_dir / f"TOT_{date}.tif"
+                out = self._tot_tif_name(magn_dir, date, "magn")
                 if not overwrite and out.exists():
-                    logger.info(f"  TOT_{date}.tif magnitude already exists, skipping")
+                    logger.info(f"  {out.name} already exists, skipping")
                     continue
                 self._compute_magnitude(tifs["EW"][date], tifs["NS"][date], out)
                 logger.file(f"  magnitude: {out.name}")

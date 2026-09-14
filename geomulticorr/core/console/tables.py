@@ -71,15 +71,23 @@ def print_sieve_bulk_summary(rows, target_resolution, *, print_summary=True) -> 
 
 
 def print_prepare_correlation_summary(rows, *, print_summary=True) -> Table:
-    """Summary for ``Session.prepare_pairs_correlation``."""
+    """Summary for ``Session.prepare_pairs_correlation``.
+
+    The *Group* column reports which parameter set each pair resolved to and
+    where it came from — ``scalar`` (the call's arguments), ``group`` (a plan
+    group) or ``override`` (a pinned pair).  Without it, a plan-driven run looks
+    identical to a uniform one in the console.
+    """
     table = Table(title="prepare_pairs_correlation — summary", show_lines=False)
     table.add_column("Pair",         style="cyan", no_wrap=True)
     table.add_column("Directory",    style="dim")
     table.add_column("Symlink",      style="dim")
+    table.add_column("Group",        style="dim")
     table.add_column("Corr. params", style="dim")
     table.add_column("Job Script",   style="dim")
     for rec in rows:
-        table.add_row(rec["pair"], rec["directory"], rec["symlink"], rec["params"], rec["script"])
+        table.add_row(rec["pair"], rec["directory"], rec["symlink"],
+                      rec.get("group", "—"), rec["params"], rec["script"])
     if print_summary:
         _rich_console.print(table)
     return table
