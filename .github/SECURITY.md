@@ -6,7 +6,7 @@ We take security vulnerabilities seriously. If you discover a security vulnerabi
 
 ### How to Report
 
-Send a detailed email to: [diego.cusicanqui.vg@gmail.com](mailto:diego.cusicanqui.vg@gmail.com) with:
+Send a detailed email to: [diego.cusicanqui@univ-grenoble-alpes.fr](mailto:diego.cusicanqui@univ-grenoble-alpes.fr) with:
 
 - **Title:** Security Vulnerability Report
 - **Description:** Clear description of the vulnerability
@@ -69,10 +69,8 @@ GeoMultiCorr integrates with external services:
 - Never commit API keys or tokens
 - Rotate credentials regularly if compromised
 
-See `CLAUDE.md` for integration details.
-
 ## Contact
 
-- **Security reports:** [diego.cusicanqui.vg@gmail.com](mailto:diego.cusicanqui.vg@gmail.com)
+- **Security reports:** [diego.cusicanqui@univ-grenoble-alpes.fr](mailto:diego.cusicanqui@univ-grenoble-alpes.fr)
 - **General questions:** Same email or GitHub Discussions
 - **Repository:** [GeoMultiCorr on GitHub](https://github.com/rgdyn-toolbox/GeoMultiCorr)

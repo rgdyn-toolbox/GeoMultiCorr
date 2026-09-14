@@ -27,12 +27,7 @@ conda activate gmc_env
 
 # Install ASP (Ames Stereo Pipeline)
 bash install_ASP.sh
-
-# Unset PROJ_LIB if you encounter CRSError issues
-unset PROJ_LIB
 ```
-
-See [CLAUDE.md](CLAUDE.md) for detailed environment setup and troubleshooting.
 
 ### 3. Create a Feature Branch
 
@@ -162,14 +157,13 @@ Contributors: keep version bumping in `pyproject.toml` unchanged until maintaine
 
 - Update docstrings for API changes
 - Add notebooks for new workflows (examples in `notebooks/`)
-- Update `CLAUDE.md` for architectural changes
 - Render markdown docs in `docs/` as needed
 
 ## Questions or Need Help?
 
 - **Issues:** Open a GitHub issue for bugs or feature requests
 - **Discussions:** Use GitHub Discussions for questions
-- **Email:** [diego.cusicanqui.vg@gmail.com](mailto:diego.cusicanqui.vg@gmail.com)
+- **Email:** [diego.cusicanqui@univ-grenoble-alpes.fr](diego.cusicanqui@univ-grenoble-alpes.fr)
 
 ## Attribution
 
