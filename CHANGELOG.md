@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.1] — 2026-09-14
+
+### Added
+- **Community standards** — Code of Conduct (Contributor Covenant), Contributing guidelines (workflow, testing, commit conventions), and Security policy (vulnerability reporting)
+- **README** — DOI reference for citation
+
 ## [0.6.0] — 2026-09-14
 
 ### Added
