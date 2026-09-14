@@ -39,7 +39,7 @@ import pathlib
 import warnings
 from collections import abc
 from contextlib import ExitStack
-from typing import IO, TYPE_CHECKING, Any, Callable, Iterable, Optional, Sequence, overload
+from typing import IO, TYPE_CHECKING, Any, Callable, Iterable, Mapping, Optional, Sequence, overload
 
 import re
 from shapely.geometry import Polygon, MultiPolygon
@@ -98,6 +98,11 @@ from geomulticorr.core.console import (
 )
 
 from geomulticorr._logging import logger
+from geomulticorr.utils._durations import (
+    DT_UNIT_TO_DAYS,
+    format_dt_days,
+    parse_dt_days,
+)
 from geomulticorr._typing import (
     DTypeLike,
     MArrayNum,
@@ -132,7 +137,11 @@ NEW_LAYOUT_PZ_SUBDIRS = (
     PZ_KIND_FIGURES,
 )
 
-_DT_UNIT_TO_DAYS: dict[str, int] = {"D": 1, "W": 7, "M": 30, "Y": 365}
+#: Backwards-compatible aliases — the implementation now lives in
+#: :mod:`geomulticorr.utils._durations` so ``pzone`` and the explorers can
+#: share it without importing ``session`` (which would be circular).
+_DT_UNIT_TO_DAYS = DT_UNIT_TO_DAYS
+_parse_dt_days = parse_dt_days
 
 # Rendering cost presets for the control figures written by
 # ``apply_pairs_corrections``.  Correlation output is routinely 10+ Mpx while the
@@ -150,6 +159,20 @@ PLOT_LEVELS: dict[str, dict] = {
 # ``geomulticorr.stats.stats.resolve_stat_columns``. Column names are defined
 # here so they live in a single place (the sync is a derived cache; these columns
 # are intentionally NOT part of ``Pair.to_pdserie()``).
+def _asp_param_kwargs(effective: Mapping[str, Any]) -> dict:
+    """Rename resolved parameters to ``build_correlation_params``' argument names.
+
+    Only ``subpixel_mode`` actually differs — the ASP wrapper calls it
+    ``subpixel_refinement_mode`` — but routing every key through one table means
+    a future rename cannot silently drop a parameter at one of the two call
+    sites.
+    """
+    kwargs = {k: v for k, v in dict(effective).items() if k != "subpixel_mode"}
+    if "subpixel_mode" in effective:
+        kwargs["subpixel_refinement_mode"] = effective["subpixel_mode"]
+    return kwargs
+
+
 RAW_STATS_SYNC: dict[str, tuple[str, str]] = {
     "pa_ew_nmad_raw": ("ew", "nmad"),
     "pa_ns_nmad_raw": ("ns", "nmad"),
@@ -159,32 +182,6 @@ CORR_STATS_SYNC: dict[str, tuple[str, str]] = {
     "pa_ew_nmad_corr": ("ew", "nmad"),
     "pa_ns_nmad_corr": ("ns", "nmad"),
 }
-
-def _parse_dt_days(value: int | str | None) -> int | None:
-    """Convert a duration string to integer days.
-
-    Accepts an integer (passed through unchanged), ``None``, or a string of the
-    form ``'<n><unit>'`` where unit is one of ``D`` (days), ``W`` (weeks),
-    ``M`` (months ≈ 30 d), ``Y`` (years ≈ 365 d).  Case-insensitive.
-
-    Examples::
-
-        _parse_dt_days(30)     -> 30
-        _parse_dt_days("30D")  -> 30
-        _parse_dt_days("6M")   -> 180
-        _parse_dt_days("1Y")   -> 365
-        _parse_dt_days("2W")   -> 14
-    """
-    if value is None or isinstance(value, int):
-        return value
-    match = re.fullmatch(r"(\d+)([DdWwMmYy])", str(value).strip())
-    if not match:
-        raise ValueError(
-            f"Cannot parse duration '{value}'. "
-            "Use an integer (days) or a string like '30D', '6M', '1Y', '2W'."
-        )
-    n, unit = int(match.group(1)), match.group(2).upper()
-    return n * _DT_UNIT_TO_DAYS[unit]
 
 def is_conform_to_gmc_template(target_root_path: str | pathlib.Path) -> bool:
     """Check GeoMultiCorr structure (both new and legacy layouts).
@@ -1512,6 +1509,70 @@ class Session:
         self._pairs.to_file(self.path_geodb, layer="Pairs")
         logger.save(f"Geodatabase updated: pa_status synced for {len(pairs)} pair(s).")
 
+    def backfill_thumb_resolution(
+        self,
+        pz_name: str = "",
+        overwrite: bool = False,
+    ) -> gpd.GeoDataFrame:
+        """Fill the ``th_res`` column for thumbs already in the Thumbs layer.
+
+        ``Thumb.to_pdserie`` records ``th_res`` for every thumb registered from
+        now on, and :meth:`update_thumbs` preserves existing rows in full — which
+        is why rows written before the column existed keep a missing value
+        forever unless they are backfilled once. This is that one-shot pass.
+
+        Resolution is read from each file's header via the memoised
+        :meth:`_thumb_resolution`, so a project's handful of unique thumbs costs
+        a few milliseconds.
+
+        :param pz_name: Restrict to one pzone; ``""`` for all.
+        :param overwrite: Recompute rows that already carry a value. Use this
+            after re-sieving thumbs to a different resolution under the same
+            filenames, which is the one case a present value can be stale.
+        :returns: The updated Thumbs layer.
+        """
+        thumbs = self._thumbs
+        if thumbs is None or len(thumbs) == 0:
+            logger.warning("No thumbs registered. Run update_thumbs() first.")
+            return thumbs
+
+        if "th_res" not in thumbs.columns:
+            thumbs["th_res"] = float("nan")
+
+        mask = thumbs["th_pz_name"] == pz_name if pz_name else pd.Series(
+            True, index=thumbs.index
+        )
+        if not overwrite:
+            mask &= ~pd.to_numeric(thumbs["th_res"], errors="coerce").notna()
+
+        targets = thumbs.index[mask]
+        if len(targets) == 0:
+            logger.info("th_res already set for every selected thumb — nothing to do.")
+            return thumbs
+
+        n_failed = 0
+        for idx in targets:
+            value = self._thumb_resolution(thumbs.at[idx, "th_path"])
+            thumbs.at[idx, "th_res"] = value
+            if not np.isfinite(value):
+                n_failed += 1
+
+        # Force a real float column: the rows read back from the GPKG and the
+        # rows written by to_pdserie are concatenated on every update_thumbs, and
+        # a mixed dtype would quietly make this an object column.
+        thumbs["th_res"] = pd.to_numeric(thumbs["th_res"], errors="coerce").astype(
+            "float64"
+        )
+
+        self._thumbs = thumbs
+        thumbs.to_file(self.path_geodb, layer="Thumbs")
+        logger.success(
+            f"Backfilled th_res for {len(targets) - n_failed} / {len(targets)} thumb(s)."
+        )
+        if n_failed:
+            logger.warning(f"{n_failed} thumb(s) had an unreadable resolution.")
+        return thumbs
+
     def sync_pairs_stats(
         self,
         metric_map: dict,
@@ -2539,6 +2600,110 @@ class Session:
         "max_step", "max_dt_days", "min_dt_days", "sensor_filter",
     }
 
+    # ------------------------------------------------------------------ #
+    # Correlation-parameter explorer (see docs/correlation_parameters.md)
+    # ------------------------------------------------------------------ #
+
+    #: Controls each correlation view uses.  Everything not listed is always
+    #: visible.
+    #:
+    #: Only genuinely **view-local** options belong here.  ``strain_rate_per_yr``
+    #: and ``tau_days`` do not: they change the derived kernels and the warnings
+    #: written into every ``*_CorrParameters.txt``, so hiding them off their
+    #: "own" view left invisible values shaping the committed parameters — a
+    #: control the user cannot see but is still being governed by.  They stay
+    #: visible on every view; only ``color_by``, which touches nothing but the
+    #: marker colours, is conditional.
+    _CORR_VIEW_CONTROLS: dict[str, set[str]] = {
+        "design_map": {"color_by"},
+        "kernel_search": set(),
+        "snr": set(),
+        "cost": set(),
+    }
+
+    #: What one drawn element means in each correlation view, for the summary.
+    _CORR_DRAWN_NOUN: dict[str, str] = {
+        "design_map": "pairs plotted",
+        "kernel_search": "pairs sized",
+        "snr": "pairs scored",
+        "cost": "groups costed",
+    }
+
+    #: Keyword arguments ``explore_correlation_params`` accepts through
+    #: ``**defaults``.  Anything else is a typo and raises, rather than being
+    #: silently ignored — ``velocity=5`` used to be a no-op in the pairs
+    #: explorer's equivalent.
+    _CORRPARAMS_EXPLORER_DEFAULTS: set[str] = {
+        "velocity_m_yr", "footprint_m", "c_px", "k", "coreg_px", "margin_px",
+        "flow_azimuth_deg", "strain_rate_per_yr", "corr_algorithm",
+        "subpixel_mode", "tau_days", "dt_bin_ratio",
+        "explicit_search", "explicit_search_above_days",
+        "uniform_kernel", "uniform_kernel_px",
+        "uniform_search", "uniform_search_box",
+        "sensor_filter", "max_dt_days", "min_dt_days",
+        "color_by",
+    }
+
+    #: The **fixed** key set of ``_last_corr_params``.  A strict subset of the
+    #: derivation inputs plus the plan, so
+    #: ``prepare_pairs_correlation(**params)`` is legal.  Never pruned per mode:
+    #: dropping a key would make the receiving method silently substitute its
+    #: own default for whatever went missing.  View-only state (``view``,
+    #: ``color_by``) stays out, exactly as ``direction`` is excluded from
+    #: ``_WEIGHT_PARAM_KEYS``.
+    _CORR_PARAM_KEYS: tuple[str, ...] = ("plan", "params_by_pair")
+
+    #: Derivation inputs the explorer stashes for replay, written into the plan
+    #: JSON rather than splatted into ``prepare_pairs_correlation`` (which knows
+    #: nothing about velocities).
+    _CORR_ASSUMPTION_KEYS: tuple[str, ...] = (
+        "velocity_m_yr", "footprint_m", "c_px", "k", "coreg_px", "margin_px",
+        "flow_azimuth_deg", "strain_rate_per_yr", "corr_algorithm",
+        "subpixel_mode", "tau_days", "dt_bin_ratio",
+        "explicit_search", "explicit_search_above_days",
+    )
+
+    #: Uniform overrides. Kept apart from :attr:`_CORR_ASSUMPTION_KEYS` because
+    #: they do not feed ``suggest_parameters`` — the derivation still runs in
+    #: full, producing the warnings that say where the uniform value is wrong —
+    #: they replace its result afterwards, as the group parameters.
+    _CORR_UNIFORM_KEYS: tuple[str, ...] = (
+        "uniform_kernel", "uniform_kernel_px", "uniform_search", "uniform_search_box",
+    )
+
+    def _thumb_resolution(self, path: str | pathlib.Path) -> float:
+        """Ground sample distance of the raster at *path*, in metres, memoised.
+
+        Nothing in the object model stores resolution — not ``Thumb``, not
+        ``Pair``, not ``SENSOR_CATALOG`` — and a nominal per-sensor table would
+        be wrong the moment ``sieve_bulk``/``target_resolution`` resampled the
+        thumbs.  So read it from the file header, which is authoritative.
+
+        ``load_data=False`` keeps this a metadata read: the array is never
+        pulled, the same discipline ``_grid.py`` enforces for grid comparison.
+        Memoised because the explorer derives parameters on every slider tick
+        and would otherwise reopen the same handful of files hundreds of times.
+
+        :param path: Raster path.
+        :returns: Pixel size in metres, or ``nan`` when unreadable.
+        """
+        key = str(path)
+        cache = getattr(self, "_thumb_res_cache", None)
+        if cache is None:
+            cache = self._thumb_res_cache = {}
+        if key in cache:
+            return cache[key]
+
+        value = float("nan")
+        try:
+            import geoutils as gu
+
+            value = abs(float(gu.Raster(key, load_data=False).res[0]))
+        except Exception as exc:  # noqa: BLE001 — any read failure is non-fatal
+            logger.warning(f"Could not read resolution from {key}: {exc}")
+        cache[key] = value
+        return value
+
     def explore_pairs_strategy(self, strategy: str = "consecutive", pz_name: str = "",
                                view: str = "baseline", interactive: bool = True,
                                savefig: bool = True,
@@ -2756,8 +2921,10 @@ class Session:
             sfilter = str(defaults.get("sensor_filter", "") or "").strip()
             ceiling = _max_useful_step("<all>", sfilter)
             max_step = min(max(int(defaults.get("max_step", 2) or 1), 1), ceiling)
-            max_dt = int(defaults.get("max_dt_days", 0) or 0) or None
-            min_dt = int(defaults.get("min_dt_days", 0) or 0) or None
+            # parse_dt_days, not int(): "1Y"/"6M"/"30D" are the forms
+            # update_pairs already documents, so the same value works in both.
+            max_dt = parse_dt_days(defaults.get("max_dt_days")) or None
+            min_dt = parse_dt_days(defaults.get("min_dt_days")) or None
 
             frame = _build_frame(
                 strategy,
@@ -2803,10 +2970,17 @@ class Session:
             min=1, max=_step_ceiling, step=1, description="max_step",
             tooltip=_step_tooltip(_step_ceiling),
         )
-        c_maxdt = widgets.IntText(value=int(defaults.get("max_dt_days", 0) or 0),
-                                  description="max_dt (d)")
-        c_mindt = widgets.IntText(value=int(defaults.get("min_dt_days", 0) or 0),
-                                  description="min_dt (d)")
+        # Text, not IntText: "1Y"/"6M"/"30D" as well as a bare number of days.
+        c_maxdt = widgets.Text(
+            value=format_dt_days(parse_dt_days(defaults.get("max_dt_days"))),
+            description="max_dt", placeholder="e.g. 1Y, 6M, 200",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="180px"))
+        c_mindt = widgets.Text(
+            value=format_dt_days(parse_dt_days(defaults.get("min_dt_days"))),
+            description="min_dt", placeholder="e.g. 1Y, 6M, 60",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="180px"))
         c_sensor = widgets.Text(value=str(defaults.get("sensor_filter", "") or ""),
                                 description="sensor")
         c_pz = widgets.Dropdown(options=pz_options, value="<all>", description="pzone")
@@ -2839,21 +3013,49 @@ class Session:
                                 (c_arrows, "arrows"), (c_mirror, "mirror")):
                 widget.layout.display = None if key in relevant else "none"
 
+        def _read_dt(widget, label: str) -> int | None:
+            """Parse one Δt field, degrading rather than raising.
+
+            An exception inside a widget callback reaches only the kernel log,
+            which VSCode hides — the control would simply stop responding with no
+            visible cause. So a bad string writes a red status line and the last
+            good value is reused.
+
+            :returns: Days, or None when the field is empty.
+            """
+            text = (widget.value or "").strip()
+            if not text:
+                state.pop(f"dt_{label}", None)
+                return None
+            try:
+                days = parse_dt_days(text if not text.isdigit() else int(text))
+            except ValueError as exc:
+                status.value = (
+                    f"<span style='color:#c33'>✘ {label}: {exc}</span>"
+                )
+                return state.get(f"dt_{label}")
+            state[f"dt_{label}"] = days
+            return days
+
         def _compute() -> pd.DataFrame:
             """Recompute from the current control values."""
             strat = c_strategy.value
             return _build_frame(
                 strat,
                 int(c_step.value) if strat in ("step", "redundancy") else None,
-                c_maxdt.value or None,
-                c_mindt.value or None,
+                _read_dt(c_maxdt, "max_dt"),
+                _read_dt(c_mindt, "min_dt"),
                 (c_sensor.value or "").strip(),
                 c_pz.value,
             )
 
         def _stash():
+            # Resolved integer days, never the typed string: the stash records
+            # what was actually applied, and update_pairs(**params) is pinned by
+            # test to accept exactly these six keys.
             _stash_params(
-                c_strategy.value, c_step.value, c_maxdt.value, c_mindt.value,
+                c_strategy.value, c_step.value,
+                _read_dt(c_maxdt, "max_dt"), _read_dt(c_mindt, "min_dt"),
                 c_sensor.value, "" if c_pz.value == "<all>" else c_pz.value,
             )
 
@@ -3381,6 +3583,1014 @@ class Session:
 
         return written
     
+    def save_correlation_figure(
+        self,
+        view: str = "design_map",
+        *,
+        frame: pd.DataFrame | None = None,
+        criterias: str | list[str] = "",
+        formats: str | list[str] | tuple[str, ...] = ("html", "png"),
+        stem: str | None = None,
+        subdir: str = "correlation",
+        title: str = "",
+        dpi: int = 300,
+        figsize: tuple[float, float] | None = None,
+        plotlyjs: bool | str = True,
+        overwrite: bool = True,
+        pz_name: str | None = None,
+        **view_kwargs,
+    ) -> dict:
+        """Save a correlation-parameters figure.
+
+        Same routing as :meth:`save_pairs_figure`: for new-layout sessions,
+        ``<pz_name>/figures/<subdir>/`` when the frame holds exactly one pzone
+        or *pz_name* is given; otherwise the project-wide figures folder.
+        Legacy-layout sessions always get the project-wide folder, with a
+        warning when *pz_name* was supplied — ``pz_dir`` discards it there, so
+        pretending to route per pzone would be a lie.
+
+        :param view: ``"design_map"`` | ``"kernel_search"`` | ``"snr"`` | ``"cost"``.
+        :param frame: The frame to draw. None derives one from the committed
+            pairs using the last explorer settings.
+        :param criterias: Passed to :meth:`get_pairs` when *frame* is None.
+        :param formats: Any of ``html``, ``png``, ``jpg``, ``pdf``, ``svg``.
+        :param stem: File stem; a deterministic one is built when omitted, so
+            re-running refreshes the same files instead of piling up copies.
+        :param subdir: Subdirectory under the figures folder.
+        :param title: Figure title, applied to both backends.
+        :param dpi: Raster resolution for the matplotlib output.
+        :param figsize: Matplotlib figure size; a per-view default otherwise.
+        :param plotlyjs: True inlines plotly.js (offline-capable).
+        :param overwrite: Replace a file of the same name (the default).
+        :param pz_name: Explicitly route to this pzone's figures folder.
+        :param view_kwargs: View options, filtered per backend.
+        :returns: ``{format: Path}`` for every file written.
+        """
+        from geomulticorr.utils._corrparams_export import (
+            corrparams_figure_stem,
+            save_corrparams_figure,
+        )
+
+        if frame is None:
+            frame = self._corrparams_frame(criterias=criterias)
+
+        if pz_name is not None:
+            if self._legacy_layout:
+                logger.warning(
+                    f"pz_name={pz_name!r} ignored for legacy-layout session; "
+                    f"using project-wide figures folder"
+                )
+                out_dir = self.path_figures / subdir
+            else:
+                out_dir = self.pz_dir(pz_name, PZ_KIND_FIGURES) / subdir
+        elif not self._legacy_layout and "pz" in frame.columns and len(frame):
+            distinct = [p for p in frame["pz"].unique() if p]
+            out_dir = (
+                self.pz_dir(distinct[0], PZ_KIND_FIGURES) / subdir
+                if len(distinct) == 1
+                else self.path_figures / subdir
+            )
+        else:
+            out_dir = self.path_figures / subdir
+
+        if stem is None:
+            assumptions = getattr(self, "_last_corr_assumptions", None) or {}
+            pz_for_stem = pz_name or ""
+            if not pz_for_stem and len(frame) and "pz" in frame.columns:
+                distinct = [p for p in frame["pz"].unique() if p]
+                pz_for_stem = distinct[0] if len(distinct) == 1 else ""
+            stem = corrparams_figure_stem(view, pz_name=pz_for_stem, **assumptions)
+
+        paths = save_corrparams_figure(
+            frame, out_dir, view=view, formats=formats, stem=stem, title=title,
+            dpi=dpi, figsize=figsize, plotlyjs=plotlyjs, view_kwargs=view_kwargs,
+            overwrite=overwrite,
+        )
+        logger.success(
+            f"Saved {view} figure to {out_dir} ({', '.join(paths)})."
+        )
+        return paths
+
+    def _corrparams_pair_facts(
+        self,
+        criterias: str | list[str] = "",
+        pz_name: str = "",
+    ) -> list[dict]:
+        """Per-pair facts the derivation needs, read once — **from tables only**.
+
+        Reads :meth:`get_pairs_overview` and the Thumbs layer, and constructs no
+        ``Pair`` and no ``Thumb``.  That is the whole point: ``Thumb.__init__``
+        computes ``ras.footprint``, a densified ~20 000-vertex polygon costing
+        ~150 ms, and ``get_pairs()`` builds two Thumbs per pair — about 140 s on
+        a 460-pair archive, which is what made this explorer slow to open.  The
+        Pairs layer already carries every fact needed except resolution, and the
+        ``th_res`` column supplies that.
+
+        Called once at setup, so every subsequent control change is pure
+        arithmetic — the same discipline ``explore_pairs_strategy`` applies to
+        ``get_valid_thumbs()``.
+
+        :param criterias: Passed to :meth:`get_pairs_overview`.
+        :param pz_name: Restrict to one pzone; ``""`` for all.
+        :returns: One dict per pair, ready for
+            :func:`~geomulticorr.utils._corrparams_frame.corrparams_frame_from_pairs`.
+        """
+        overview = self.get_pairs_overview(criterias)
+        if overview is None or len(overview) == 0:
+            return []
+        if pz_name:
+            overview = overview[overview["pa_pz_name"] == pz_name]
+
+        resolutions = self._thumb_resolution_lookup()
+
+        facts: list[dict] = []
+        for _, row in overview.iterrows():
+            pz = row["pa_pz_name"]
+            left_res = self._resolution_for(resolutions, pz, row["pa_left_date"],
+                                            row["pa_left_sensor"])
+            right_res = self._resolution_for(resolutions, pz, row["pa_right_date"],
+                                             row["pa_right_sensor"])
+            # pa_path is built as ".../image_correlation/{pa_key}", so the
+            # basename IS the key by construction.  Re-formatting it from the
+            # date/sensor components would be a second source of truth that
+            # drifts the moment Pair's key format changes.
+            pa_key = pathlib.Path(str(row["pa_path"])).name
+            if (
+                np.isfinite(left_res) and np.isfinite(right_res)
+                and abs(left_res - right_res) > 0.01 * max(left_res, right_res)
+            ):
+                # ASP reports disparity in LEFT-image pixels, so the left GSD is
+                # the one every formula uses; say so rather than silently
+                # averaging two different grids.
+                logger.warning(
+                    f"{pa_key}: left and right resolutions differ "
+                    f"({left_res:g} vs {right_res:g} m) — using the left image's "
+                    f"GSD, since ASP disparity is in left-image pixels"
+                )
+            facts.append(
+                {
+                    "pa_key": pa_key,
+                    "pz": pz,
+                    "dt_days": float(row["pa_dt_days"]),
+                    "resolution_m": left_res,
+                    "sensor_i": row["pa_left_sensor"],
+                    "sensor_j": row["pa_right_sensor"],
+                }
+            )
+        return facts
+
+    def _thumb_resolution_lookup(self) -> dict[tuple[str, str, str], float]:
+        """``{(pzone, date, sensor): resolution}`` from the Thumbs layer.
+
+        Built once per explorer setup. Rows whose ``th_res`` is missing — an
+        older geodatabase, or one where :meth:`backfill_thumb_resolution` has not
+        been run — fall back to reading the file header, which is bounded by the
+        number of *unique thumbs* rather than the number of pairs.
+
+        :returns: The lookup; missing thumbs are simply absent.
+        """
+        thumbs = self._thumbs
+        if thumbs is None or len(thumbs) == 0:
+            return {}
+
+        has_column = "th_res" in thumbs.columns
+        lookup: dict[tuple[str, str, str], float] = {}
+        n_from_header = 0
+
+        for _, row in thumbs.iterrows():
+            value = float("nan")
+            if has_column:
+                try:
+                    value = float(row["th_res"])
+                except (TypeError, ValueError):
+                    value = float("nan")
+            if not np.isfinite(value):
+                value = self._thumb_resolution(row["th_path"])
+                n_from_header += 1
+            lookup[(row["th_pz_name"], row["th_date"], row["th_sensor"])] = value
+
+        if n_from_header:
+            # Once, naming the fix — not once per pair.
+            logger.info(
+                f"{n_from_header} thumb(s) have no stored resolution; read from the "
+                f"file headers. Run session.backfill_thumb_resolution() to persist it."
+            )
+        return lookup
+
+    @staticmethod
+    def _resolution_for(
+        lookup: dict[tuple[str, str, str], float],
+        pz_name: str,
+        date: str,
+        sensor: str,
+    ) -> float:
+        """Look one thumb's resolution up, or ``nan`` when it is not registered."""
+        return lookup.get((pz_name, str(date), sensor), float("nan"))
+
+    def _corrparams_frame(
+        self,
+        criterias: str | list[str] = "",
+        pz_name: str = "",
+        **assumptions,
+    ) -> pd.DataFrame:
+        """Derive a correlation-parameters frame from the committed pairs.
+
+        The headless counterpart of the explorer's cached path: convenient for
+        scripts, but it re-reads the thumb headers on every call, so a parameter
+        sweep should go through :meth:`explore_correlation_params` instead.
+
+        :param criterias: Passed to :meth:`get_pairs`.
+        :param pz_name: Restrict to one pzone.
+        :param assumptions: Derivation inputs; the last explorer settings are
+            used for anything omitted.
+        :returns: A correlation-parameters frame.
+        """
+        from geomulticorr.utils._corrparams_frame import (
+            corrparams_frame_from_pairs,
+            empty_corrparams_frame,
+        )
+
+        facts = self._corrparams_pair_facts(criterias, pz_name)
+        if not facts:
+            return empty_corrparams_frame()
+
+        merged = dict(getattr(self, "_last_corr_assumptions", None) or {})
+        merged.update(assumptions)
+        return corrparams_frame_from_pairs(
+            [f["pa_key"] for f in facts],
+            [f["dt_days"] for f in facts],
+            [f["resolution_m"] for f in facts],
+            pz=[f["pz"] for f in facts],
+            sensor_i=[f["sensor_i"] for f in facts],
+            sensor_j=[f["sensor_j"] for f in facts],
+            **merged,
+        )
+
+    def explore_correlation_params(
+        self,
+        criterias: str | list[str] = "",
+        pz_name: str = "",
+        view: str = "design_map",
+        interactive: bool = True,
+        savefig: bool = True,
+        formats: str | list[str] | tuple[str, ...] = ("html", "png"),
+        plan_name: str = "default",
+        write_plan: bool = True,
+        **defaults,
+    ):
+        """Choose ASP correlation parameters for a whole archive, interactively.
+
+        A pair measures ``v * Δt``, and one ASP parameter set spans only
+        ``S / (k * c)`` — roughly 30-100x — so a single setting cannot serve a
+        wide archive.  This derives parameters per **group**
+        ``(sensor, Δt band)``, shows the feasibility band the choice implies, and
+        writes a replayable plan.  See ``docs/correlation_parameters.md``.
+
+        Commit the result with::
+
+            session.explore_correlation_params(velocity_m_yr=2.0)
+            session.prepare_pairs_correlation(**session._last_corr_params,
+                                              overwrite_scripts=True)
+
+        :param criterias: Passed to :meth:`get_pairs` to filter pairs.
+        :param pz_name: Restrict to one pzone; ``""`` for all.
+        :param view: Initial view — a key of
+            :data:`~geomulticorr.utils._corrparams_plotly.VIEW_BUILDERS`.
+        :param interactive: False returns ``(frame, fig)`` and imports no
+            ipywidgets, for scripts, batch jobs and CLI entry points.
+        :param savefig: In headless mode, also write the figure. Ignored when
+            interactive — there is a **Save figure** button instead.
+        :param formats: Any of ``html``, ``png``, ``jpg``, ``pdf``, ``svg``.
+        :param plan_name: Name of the correlation plan written.
+        :param write_plan: Write the plan JSON. False derives and plots only.
+        :param defaults: Initial values; only
+            :attr:`_CORRPARAMS_EXPLORER_DEFAULTS` keys are accepted, anything
+            else raises rather than being silently ignored.
+        :returns: A widget, or ``(frame, fig)`` when *interactive* is False.
+        :raises ValueError: On an unknown *view*.
+        :raises TypeError: On an unknown key in *defaults*.
+        """
+        from geomulticorr.correlation.corr_params import (
+            TEXTURE_FLOOR_PX,
+            geometric_dt_bins,
+            parse_search_box,
+            to_odd,
+        )
+        from geomulticorr.utils import _corrparams_plotly as corr_plotly
+        from geomulticorr.utils._corrparams_frame import (
+            corrparams_frame_from_pairs,
+            corrparams_stats,
+            empty_corrparams_frame,
+            format_corrparams_summary,
+            group_table,
+        )
+
+        if view not in corr_plotly.VIEW_BUILDERS:
+            raise ValueError(
+                f"Unknown view '{view}'. Valid options: "
+                f"{list(corr_plotly.VIEW_BUILDERS)}."
+            )
+        unknown = set(defaults) - self._CORRPARAMS_EXPLORER_DEFAULTS
+        if unknown:
+            raise TypeError(
+                f"Unknown keyword(s) {sorted(unknown)}. Accepted: "
+                f"{sorted(self._CORRPARAMS_EXPLORER_DEFAULTS)}."
+            )
+
+        # ── expensive setup, ONCE ─────────────────────────────────────────── #
+        facts = self._corrparams_pair_facts(criterias, pz_name)
+
+        initial = {
+            "velocity_m_yr": 1.0, "footprint_m": 60.0, "c_px": 0.15, "k": 3.0,
+            "coreg_px": 2.0, "margin_px": 2.0, "flow_azimuth_deg": None,
+            "strain_rate_per_yr": None, "corr_algorithm": "asp_bm",
+            "subpixel_mode": 2, "tau_days": None, "dt_bin_ratio": 3.0,
+            "explicit_search": True, "explicit_search_above_days": 365,
+            "uniform_kernel": False, "uniform_kernel_px": 21,
+            "uniform_search": False, "uniform_search_box": "20",
+            "sensor_filter": "", "max_dt_days": None, "min_dt_days": None,
+            "color_by": "group",
+        }
+        initial.update(defaults)
+        # "1Y"/"6M"/"30D" from a script, not only from the widget.
+        for _key in ("max_dt_days", "min_dt_days", "explicit_search_above_days"):
+            initial[_key] = parse_dt_days(initial[_key])
+
+        # ── pure closures, shared by both modes ───────────────────────────── #
+        def _selected(sfilter: str | None, max_dt, min_dt) -> list[dict]:
+            """Filter the cached facts. Pure — no I/O, no widget reads."""
+            rows = facts
+            if sfilter:
+                needle = str(sfilter).lower()
+                rows = [
+                    f for f in rows
+                    if needle in str(f["sensor_i"]).lower()
+                    or needle in str(f["sensor_j"]).lower()
+                ]
+            if max_dt is not None:
+                rows = [f for f in rows if f["dt_days"] <= float(max_dt)]
+            if min_dt is not None:
+                rows = [f for f in rows if f["dt_days"] >= float(min_dt)]
+            return rows
+
+        def _derive(rows, group_params, **assumptions) -> pd.DataFrame:
+            """One derivation pass over *rows*. Pure."""
+            return corrparams_frame_from_pairs(
+                [f["pa_key"] for f in rows],
+                [f["dt_days"] for f in rows],
+                [f["resolution_m"] for f in rows],
+                pz=[f["pz"] for f in rows],
+                sensor_i=[f["sensor_i"] for f in rows],
+                sensor_j=[f["sensor_j"] for f in rows],
+                group_params=group_params,
+                **assumptions,
+            )
+
+        def _build_frame(sfilter, max_dt, min_dt, uniform=None, **assumptions):
+            """Derive the frame **and** the group parameters it commits to. Pure.
+
+            Two passes, and the second one matters: the first derives each
+            pair's ideal parameters, then those are reduced to one set per
+            group, and the frame is rebuilt with the reduced values.
+
+            Without the second pass the figures would show the per-pair ideal
+            while the files on disk carried the group's reduction — the design
+            map and the group table would disagree with every
+            ``*_CorrParameters.txt``, and replaying the plan would not
+            reproduce the frame it came from.
+
+            :param uniform: Uniform overrides, or None for the pure derivation.
+            :returns: ``(frame, groups)``; the frame reflects what will run.
+            """
+            rows = _selected(sfilter, max_dt, min_dt)
+            if not rows:
+                return empty_corrparams_frame(), {}
+
+            ideal = _derive(rows, None, **assumptions)
+            groups = _group_params(ideal, assumptions, uniform or {})
+            return _derive(rows, groups, **assumptions), groups
+
+        def _group_params(frame: pd.DataFrame, assumptions: dict,
+                          uniform: dict) -> dict:
+            """One ASP parameter set per group, from the per-pair derivation.
+
+            Uniform overrides replace the derived value here rather than inside
+            ``suggest_parameters``: the derivation still runs in full, so its
+            warnings — and the per-pair conflicts the override creates — survive
+            into the frame's ``flags``.
+            """
+            if len(frame) == 0:
+                return {}
+
+            fixed_kernel = (
+                to_odd(int(uniform.get("uniform_kernel_px", 21)),
+                       minimum=TEXTURE_FLOOR_PX)
+                if uniform.get("uniform_kernel") else None
+            )
+            fixed_box = uniform.get("_parsed_search_box") if uniform.get(
+                "uniform_search") else None
+
+            def _kernel_for(row) -> int:
+                return fixed_kernel if fixed_kernel is not None else int(row.kernel_px)
+
+            def _box_for(row):
+                # The Δt threshold still gates WHETHER a box is used; the
+                # uniform value only decides WHAT it is.  A group entirely below
+                # the threshold stays on ASP auto even when uniform is on.
+                derived_box = _search_box(frame, row.group, assumptions)
+                if derived_box is None:
+                    return None
+                return fixed_box if fixed_box is not None else derived_box
+
+            return {
+                row.group: {
+                    "params": {
+                        "corr_kernel": (_kernel_for(row), _kernel_for(row)),
+                        "corr_search": _box_for(row),
+                        "corr_algorithm": assumptions["corr_algorithm"],
+                        "subpixel_mode": int(assumptions["subpixel_mode"]),
+                        "subpixel_kernel": (_kernel_for(row), _kernel_for(row)),
+                        # Seed mode moves with the box: 0 when an explicit range
+                        # is given, 1 when ASP is left to estimate it — that
+                        # stage is what produces the estimate (guide 6.1).
+                        "corr_seed_mode": 0 if _box_for(row) is not None else 1,
+                    },
+                    "n_pairs": int(row.n_pairs),
+                    "dt_days": [int(row.dt_min_days), int(row.dt_max_days)],
+                    "resolution_m": float(row.resolution_m),
+                }
+                for row in group_table(frame).itertuples()
+            }
+
+        def _view_defaults(view_key: str, assumptions: dict, color_by: str) -> dict:
+            """Figure options for *view_key*. The non-interactive twin of
+            ``_view_kwargs``; both must return the same shape or the two modes
+            would render differently."""
+            if view_key == "design_map":
+                return {
+                    "k": assumptions["k"], "c_px": assumptions["c_px"],
+                    "coreg_px": assumptions["coreg_px"],
+                    "margin_px": assumptions["margin_px"],
+                    "tau_days": assumptions["tau_days"], "color_by": color_by,
+                }
+            if view_key == "kernel_search":
+                return {"strain_rate_per_yr": assumptions["strain_rate_per_yr"]}
+            if view_key == "snr":
+                return {"k": assumptions["k"]}
+            return {}
+
+        def _title_for(frame: pd.DataFrame, view_key: str, assumptions: dict) -> str:
+            noun = self._CORR_DRAWN_NOUN.get(view_key, "pairs")
+            n = frame["group"].nunique() if view_key == "cost" else len(frame)
+            return (
+                f"Correlation parameters — {n} {noun} "
+                f"[v={assumptions['velocity_m_yr']:g} m/yr, "
+                f"L={assumptions['footprint_m']:g} m]"
+            )
+
+        def _assumptions_from(source: dict) -> dict:
+            return {key: source[key] for key in self._CORR_ASSUMPTION_KEYS}
+
+        def _uniform_from(source: dict) -> dict:
+            """The uniform overrides from a defaults dict, box already parsed.
+
+            Headless callers get the ``ValueError`` — only the widget degrades,
+            because only there would an exception be swallowed by a hidden log.
+            """
+            out = {key: source[key] for key in self._CORR_UNIFORM_KEYS}
+            out["_parsed_search_box"] = (
+                parse_search_box(source["uniform_search_box"])
+                if source["uniform_search"] else None
+            )
+            return out
+
+        def _stash_params(frame: pd.DataFrame, groups: dict, assumptions: dict,
+                          sfilter, max_dt, min_dt, uniform: dict | None = None) -> dict:
+            """Write the stash and the plan. Returns the plan document.
+
+            NOTE: ``_last_corr_params`` carries exactly ``_CORR_PARAM_KEYS`` —
+            the keys ``prepare_pairs_correlation(**params)`` accepts.  The
+            derivation inputs live in ``_last_corr_assumptions`` and in the plan
+            instead: ``prepare_pairs_correlation`` knows nothing about
+            velocities, and adding one here would make the documented commit
+            workflow raise ``TypeError``.
+            """
+            from geomulticorr.correlation._correlation_plan import (
+                build_correlation_plan,
+            )
+            from geomulticorr.utils._corrparams_frame import relevant_corr_keys
+
+            edges, _labels = geometric_dt_bins(
+                frame["dt_days"].tolist(), ratio=assumptions["dt_bin_ratio"]
+            ) if len(frame) else ([], [])
+
+            # Only claim a pzone when the frame really holds exactly one, the
+            # same test save_correlation_figure applies.  Taking .iloc[0] filed
+            # a multi-pzone plan under whichever pzone happened to sort first,
+            # and made the "no single pzone" guard in _maybe_write_plan
+            # unreachable for any non-empty frame.
+            distinct_pz = (
+                [p for p in frame["pz"].unique() if p] if len(frame) else []
+            )
+            # The uniform flags belong in the trace: a plan that recorded only
+            # the resolved numbers would not say WHY every group shares them.
+            recorded = dict(assumptions)
+            recorded.update({
+                key: value for key, value in (uniform or {}).items()
+                if not key.startswith("_")
+            })
+            plan = build_correlation_plan(
+                name=plan_name,
+                pzone=pz_name or (distinct_pz[0] if len(distinct_pz) == 1 else ""),
+                assumptions=recorded,
+                groups=groups,
+                pairs=[
+                    {
+                        "pa_key": row.pa_key, "pz": row.pz,
+                        "dt_days": int(row.dt_days),
+                        "resolution_m": float(row.resolution_m),
+                        "sensor_i": row.sensor_i, "sensor_j": row.sensor_j,
+                        "group": row.group,
+                    }
+                    for row in frame.itertuples()
+                ],
+                relevant_params=sorted(
+                    relevant_corr_keys(
+                        assumptions["corr_algorithm"],
+                        flow_azimuth_deg=assumptions["flow_azimuth_deg"],
+                        strain_rate_per_yr=assumptions["strain_rate_per_yr"],
+                        explicit_search=bool(assumptions["explicit_search"]),
+                        uniform_kernel=bool((uniform or {}).get("uniform_kernel")),
+                        uniform_search=bool((uniform or {}).get("uniform_search")),
+                    )
+                ),
+                dt_bin_edges=edges,
+            )
+
+            self._last_corr_assumptions = dict(recorded)
+            self._last_corr_filters = {
+                "sensor_filter": sfilter, "max_dt_days": max_dt,
+                "min_dt_days": min_dt,
+            }
+            self._last_corr_plan = plan
+            self._last_corr_params = {"plan": plan, "params_by_pair": None}
+            return plan
+
+        def _search_box(frame: pd.DataFrame, group: str,
+                        assumptions: dict) -> tuple[int, int, int, int]:
+            """The group's search box: sized for its widest-reaching pair.
+
+            A box sized for the median pair in the bin would rail on the longest
+            baseline sharing that bin.
+
+            Returns ``None`` when **no** pair in the group reached the explicit
+            threshold — the whole group stays on ASP's automatic range, and
+            fabricating a box for it would substitute a guessed velocity for
+            ASP's own estimate.
+
+            Takes *assumptions* explicitly rather than closing over ``initial``:
+            reading the initial values here would silently ignore every
+            allowance the user changed after opening the explorer, and the
+            plan's boxes would then disagree with the frame's ``search_px``.
+            """
+            from geomulticorr.correlation.corr_params import required_search_px
+
+            sub = frame[frame["group"] == group]
+            if len(sub) == 0:
+                return None
+            # search_px is nan for pairs left on auto; a group with none left is
+            # entirely below the threshold.
+            explicit = sub[np.isfinite(sub["search_px"].to_numpy(dtype="float64"))]
+            if len(explicit) == 0:
+                return None
+            worst = explicit.loc[explicit["dt_days"].idxmax()]
+            return required_search_px(
+                float(worst["velocity_m_yr"]), float(worst["dt_days"]),
+                float(worst["resolution_m"]),
+                coreg_px=assumptions["coreg_px"],
+                margin_px=assumptions["margin_px"],
+                flow_azimuth_deg=assumptions["flow_azimuth_deg"],
+            )
+
+        def _maybe_write_plan(plan: dict) -> None:
+            """Write the plan JSON when asked and a destination is resolvable."""
+            if not write_plan:
+                return
+            from geomulticorr.correlation._correlation_plan import (
+                plan_path,
+                write_correlation_plan,
+            )
+
+            target_pz = plan.get("pzone") or ""
+            if not target_pz:
+                logger.info("No single pzone in the frame — correlation plan not written.")
+                return
+            try:
+                directory = self.pz_dir(target_pz, PZ_KIND_IMAGE_CORRELATION)
+            except (ValueError, KeyError) as exc:
+                logger.warning(f"Could not resolve a plan directory: {exc}")
+                return
+            write_correlation_plan(plan_path(directory, plan_name), plan)
+
+        # ── headless path — imports no ipywidgets, needs no display ───────── #
+        if not interactive:
+            assumptions = _assumptions_from(initial)
+            uniform = _uniform_from(initial)
+            frame, groups = _build_frame(
+                initial["sensor_filter"], initial["max_dt_days"],
+                initial["min_dt_days"], uniform=uniform, **assumptions,
+            )
+            plan = _stash_params(
+                frame, groups, assumptions, initial["sensor_filter"],
+                initial["max_dt_days"], initial["min_dt_days"], uniform,
+            )
+            _maybe_write_plan(plan)
+
+            view_kwargs = _view_defaults(view, assumptions, initial["color_by"])
+            title = _title_for(frame, view, assumptions)
+            fig = corr_plotly.VIEW_BUILDERS[view](frame, title=title, **view_kwargs)
+            if savefig and len(frame):
+                self.save_correlation_figure(
+                    view=view, frame=frame, formats=formats, title=title,
+                    **view_kwargs,
+                )
+            logger.info(format_corrparams_summary(
+                corrparams_stats(frame, k=assumptions["k"]), html=False))
+            return frame, fig
+
+        # ── widgets (imported only past the headless return) ──────────────── #
+        import ipywidgets as widgets
+
+        from IPython.display import clear_output, display as _ipy_display
+
+        from geomulticorr.utils._pairs_export import FIGURE_FORMATS
+
+        c_view = widgets.Dropdown(
+            options=[(label, key) for key, label in corr_plotly.VIEW_LABELS.items()],
+            value=view, description="View:",
+            style={"description_width": "initial"},
+        )
+        c_velocity = widgets.FloatText(
+            value=initial["velocity_m_yr"], description="velocity (m/yr):",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="200px"),
+        )
+        c_footprint = widgets.FloatText(
+            value=initial["footprint_m"], description="template L (m):",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="200px"),
+        )
+        c_c = widgets.FloatText(
+            value=initial["c_px"], step=0.01, description="precision c (px):",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="200px"),
+        )
+        c_k = widgets.FloatSlider(
+            value=initial["k"], min=1.0, max=5.0, step=0.5, description="k:",
+            style={"description_width": "initial"}, continuous_update=False,
+        )
+        c_coreg = widgets.FloatText(
+            value=initial["coreg_px"], description="coreg (px):",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="170px"),
+        )
+        c_margin = widgets.FloatText(
+            value=initial["margin_px"], description="margin (px):",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="170px"),
+        )
+        c_azimuth = widgets.FloatText(
+            value=initial["flow_azimuth_deg"] if initial["flow_azimuth_deg"] is not None else -1.0,
+            description="flow az (° from N, <0 = off):",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="290px"),
+        )
+        c_strain = widgets.FloatText(
+            value=initial["strain_rate_per_yr"] or 0.0, step=0.005,
+            description="strain (1/yr, 0 = off):",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="260px"),
+        )
+        c_tau = widgets.FloatText(
+            value=initial["tau_days"] or 0.0, description="τ (days, 0 = off):",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="230px"),
+        )
+        c_explicit = widgets.Checkbox(
+            value=bool(initial["explicit_search"]),
+            description="explicit --corr-search", indent=False,
+            layout=widgets.Layout(width="220px"),
+        )
+        c_explicit_above = widgets.Text(
+            value=format_dt_days(initial["explicit_search_above_days"]),
+            description="above Δt:", placeholder="e.g. 1Y (empty = all pairs)",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="250px"),
+        )
+        c_uniform_kernel = widgets.Checkbox(
+            value=bool(initial["uniform_kernel"]),
+            description="uniform kernel", indent=False,
+            layout=widgets.Layout(width="170px"),
+        )
+        c_uniform_kernel_px = widgets.IntText(
+            value=int(initial["uniform_kernel_px"]), description="px:",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="120px"),
+        )
+        c_uniform_search = widgets.Checkbox(
+            value=bool(initial["uniform_search"]),
+            description="uniform search box", indent=False,
+            layout=widgets.Layout(width="200px"),
+        )
+        c_uniform_search_box = widgets.Text(
+            value=str(initial["uniform_search_box"]),
+            description="box:", placeholder="20  or  -80 -2 20 2",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="230px"),
+        )
+        c_ratio = widgets.FloatSlider(
+            value=initial["dt_bin_ratio"], min=1.5, max=10.0, step=0.5,
+            description="Δt bin ratio:", style={"description_width": "initial"},
+            continuous_update=False,
+        )
+        c_algorithm = widgets.Dropdown(
+            options=["asp_bm", "asp_sgm", "asp_mgm", "asp_final_mgm"],
+            value=initial["corr_algorithm"], description="algorithm:",
+            style={"description_width": "initial"},
+        )
+        c_subpixel = widgets.Dropdown(
+            options=[("2 — Bayes EM (no pixel-locking)", 2), ("1 — parabola", 1),
+                     ("3 — affine", 3), ("0 — none", 0)],
+            value=initial["subpixel_mode"], description="subpixel:",
+            style={"description_width": "initial"},
+        )
+        c_sensor = widgets.Text(
+            value=initial["sensor_filter"] or "", description="sensor:",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="200px"),
+        )
+        # Text, not IntText: "1Y"/"6M"/"30D" as well as a bare number of days.
+        c_maxdt = widgets.Text(
+            value=format_dt_days(initial["max_dt_days"]),
+            description="max Δt:", placeholder="e.g. 1Y, 6M, 200 (empty = off)",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="260px"),
+        )
+        c_mindt = widgets.Text(
+            value=format_dt_days(initial["min_dt_days"]),
+            description="min Δt:", placeholder="e.g. 6M, 60 (empty = off)",
+            style={"description_width": "initial"}, layout=widgets.Layout(width="260px"),
+        )
+        c_colorby = widgets.Dropdown(
+            options=["group", "sensor", "none"], value=initial["color_by"],
+            description="colour by:", style={"description_width": "initial"},
+        )
+        c_formats = widgets.SelectMultiple(
+            options=list(FIGURE_FORMATS), value=("html", "png"),
+            rows=len(FIGURE_FORMATS), description="formats:",
+            style={"description_width": "initial"},
+        )
+        b_save = widgets.Button(description="Save figure", icon="save")
+        b_plan = widgets.Button(description="Write plan", icon="file-code")
+
+        # A plain go.Figure inside an Output, never go.FigureWidget: since
+        # plotly 6 the latter is an anywidget whose front-end JS is not bundled
+        # with the VSCode Jupyter extension ("No version of module anywidget is
+        # registered").
+        plot_out = widgets.Output()
+        summary = widgets.HTML()
+        status = widgets.HTML()
+        group_out = widgets.Output()
+        state: dict = {"syncing": False}
+
+        #: Control name → widget, for the per-view visibility pass.  Only
+        #: view-local options: a derivation input must never be hidden, or it
+        #: would keep shaping the committed parameters unseen.
+        tunables = {"color_by": c_colorby}
+
+        def _read_assumptions() -> dict:
+            return {
+                "velocity_m_yr": float(c_velocity.value),
+                "footprint_m": float(c_footprint.value),
+                "c_px": float(c_c.value),
+                "k": float(c_k.value),
+                "coreg_px": float(c_coreg.value),
+                "margin_px": float(c_margin.value),
+                # Sentinels rather than None-able widgets: ipywidgets has no
+                # nullable float input, and a checkbox per option would double
+                # the control count for three rarely-used refinements.
+                "flow_azimuth_deg": (
+                    float(c_azimuth.value) if c_azimuth.value >= 0 else None
+                ),
+                "strain_rate_per_yr": (
+                    float(c_strain.value) if c_strain.value > 0 else None
+                ),
+                "corr_algorithm": c_algorithm.value,
+                "subpixel_mode": int(c_subpixel.value),
+                "tau_days": float(c_tau.value) if c_tau.value > 0 else None,
+                "dt_bin_ratio": float(c_ratio.value),
+                "explicit_search": bool(c_explicit.value),
+                "explicit_search_above_days": float(
+                    _read_dt(c_explicit_above, "explicit above") or 0
+                ),
+            }
+
+        def _read_uniform() -> dict:
+            """The uniform overrides, with the box already parsed.
+
+            Parsing here rather than in ``_group_params`` keeps the failure
+            visible: a bad box writes a red status line and the last good value
+            is reused, instead of raising inside a widget callback where the
+            traceback would reach only the hidden kernel log.
+            """
+            box = None
+            if c_uniform_search.value:
+                try:
+                    box = parse_search_box(c_uniform_search_box.value)
+                    state["uniform_box"] = box
+                except ValueError as exc:
+                    status.value = (
+                        f"<span style='color:#c33'>✘ search box: {exc}</span>"
+                    )
+                    box = state.get("uniform_box")
+            return {
+                "uniform_kernel": bool(c_uniform_kernel.value),
+                "uniform_kernel_px": int(c_uniform_kernel_px.value),
+                "uniform_search": bool(c_uniform_search.value) and box is not None,
+                "uniform_search_box": c_uniform_search_box.value,
+                "_parsed_search_box": box,
+            }
+
+        def _read_dt(widget, label: str) -> int | None:
+            """Parse one Δt field, degrading rather than raising.
+
+            An exception inside a widget callback reaches only the kernel log,
+            which VSCode hides — the control would simply stop responding with no
+            visible cause. So a bad string writes a red status line and the last
+            good value is reused.
+
+            :returns: Days, or None when the field is empty.
+            """
+            text = (widget.value or "").strip()
+            if not text:
+                state.pop(f"dt_{label}", None)
+                return None
+            try:
+                days = parse_dt_days(int(text) if text.isdigit() else text)
+            except ValueError as exc:
+                status.value = f"<span style='color:#c33'>✘ {label}: {exc}</span>"
+                return state.get(f"dt_{label}")
+            state[f"dt_{label}"] = days
+            return days
+
+        def _read_filters() -> tuple:
+            return (
+                c_sensor.value.strip() or None,
+                _read_dt(c_maxdt, "max Δt"),
+                _read_dt(c_mindt, "min Δt"),
+            )
+
+        def _apply_visibility() -> None:
+            wanted = self._CORR_VIEW_CONTROLS.get(c_view.value, set())
+            for name, widget in tunables.items():
+                widget.layout.display = None if name in wanted else "none"
+
+        def _compute() -> tuple[pd.DataFrame, dict]:
+            sfilter, max_dt, min_dt = _read_filters()
+            return _build_frame(sfilter, max_dt, min_dt,
+                                uniform=_read_uniform(), **_read_assumptions())
+
+        def _stash() -> dict:
+            sfilter, max_dt, min_dt = _read_filters()
+            return _stash_params(
+                state["frame"], state["groups"], _read_assumptions(),
+                sfilter, max_dt, min_dt, _read_uniform(),
+            )
+
+        def _view_kwargs() -> dict:
+            return _view_defaults(c_view.value, _read_assumptions(), c_colorby.value)
+
+        def _fig_title() -> str:
+            return _title_for(state["frame"], c_view.value, _read_assumptions())
+
+        def _draw() -> None:
+            fig = corr_plotly.VIEW_BUILDERS[c_view.value](
+                state["frame"], title=_fig_title(), **_view_kwargs()
+            )
+            with plot_out:
+                clear_output(wait=True)
+                _ipy_display(fig)
+
+        def _render_summary() -> None:
+            summary.value = format_corrparams_summary(
+                corrparams_stats(state["frame"], k=float(c_k.value))
+            )
+            with group_out:
+                clear_output(wait=True)
+                table = group_table(state["frame"])
+                if len(table):
+                    _ipy_display(table.style.hide(axis="index"))
+
+        def _redraw(change=None) -> None:
+            """View-only change: reuse the cached frame, never re-derive."""
+            if state.get("syncing"):
+                return
+            _apply_visibility()
+            _draw()
+
+        def _update(_change=None) -> None:
+            """A derivation input changed: recompute, restash, redraw."""
+            if state.get("syncing"):
+                return
+            _apply_visibility()
+            state["frame"], state["groups"] = _compute()
+            _stash()
+            _draw()
+            _render_summary()
+
+        def _on_save(_button) -> None:
+            # Never raises: an uncaught exception in a widget callback reaches
+            # only the kernel log, which VSCode hides.
+            b_save.disabled = True
+            status.value = "<i>saving…</i>"
+            try:
+                paths = self.save_correlation_figure(
+                    view=c_view.value, frame=state["frame"],
+                    formats=tuple(c_formats.value) or ("html",),
+                    title=_fig_title(), **_view_kwargs(),
+                )
+                names = " ".join(f"<code>{p.name}</code>" for p in paths.values())
+                folder = next(iter(paths.values())).parent
+                status.value = (
+                    f"<span style='color:#2a7'>✔ saved to</span> "
+                    f"<code>{folder}</code>: {names}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"Saving the correlation figure failed: {exc}")
+                status.value = f"<span style='color:#c33'>✘ save failed — {exc}</span>"
+            finally:
+                b_save.disabled = False
+
+        def _on_write_plan(_button) -> None:
+            b_plan.disabled = True
+            status.value = "<i>writing plan…</i>"
+            try:
+                _maybe_write_plan(_stash())
+                status.value = (
+                    "<span style='color:#2a7'>✔ plan written</span> — commit with "
+                    "<code>prepare_pairs_correlation(**session._last_corr_params, "
+                    "overwrite_scripts=True)</code>"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"Writing the correlation plan failed: {exc}")
+                status.value = f"<span style='color:#c33'>✘ plan failed — {exc}</span>"
+            finally:
+                b_plan.disabled = False
+
+        for widget in (c_velocity, c_footprint, c_c, c_k, c_coreg, c_margin,
+                       c_azimuth, c_strain, c_tau, c_ratio, c_algorithm,
+                       c_subpixel, c_sensor, c_maxdt, c_mindt,
+                       c_explicit, c_explicit_above,
+                       c_uniform_kernel, c_uniform_kernel_px,
+                       c_uniform_search, c_uniform_search_box):
+            widget.observe(_update, "value")
+        for widget in (c_view, c_colorby):
+            widget.observe(_redraw, "value")
+        b_save.on_click(_on_save)
+        b_plan.on_click(_on_write_plan)
+
+        _update()
+
+        row1 = widgets.HBox([c_view, c_colorby, c_algorithm, c_subpixel])
+        row2 = widgets.HBox([c_velocity, c_footprint, c_c, c_k])
+        row3 = widgets.HBox([c_coreg, c_margin, c_azimuth, c_strain, c_tau])
+        row4 = widgets.HBox([c_ratio, c_sensor, c_mindt, c_maxdt])
+        row5 = widgets.HBox([c_explicit, c_explicit_above,
+                             c_uniform_kernel, c_uniform_kernel_px,
+                             c_uniform_search, c_uniform_search_box])
+        row6 = widgets.HBox([c_formats, widgets.VBox([b_save, b_plan])])
+        return widgets.VBox(
+            [row1, row2, row3, row4, row5, plot_out, summary, group_out, status, row6]
+        )
+
+    def _corr_params_changed(
+        self,
+        params_file: pathlib.Path,
+        asp,
+        effective: Mapping[str, Any],
+        *,
+        save_disparity_difference: bool = True,
+    ) -> bool:
+        """Whether *effective* differs from the parameters already on disk.
+
+        Thin wrapper over
+        :func:`~geomulticorr.correlation._correlation_plan.params_differ_from_file`,
+        kept as a method so the reuse guard in
+        :meth:`prepare_pairs_correlation` reads as one decision rather than an
+        import plus a call.
+
+        :param params_file: The pair's ``<pa_key>_CorrParameters.txt``.
+        :param asp: The :class:`~geomulticorr.correlation.correlation.ASP`
+            instance (unused today; accepted so a future format change can be
+            resolved through it rather than reparsed here).
+        :param effective: Resolved per-pair parameters.
+        :param save_disparity_difference: Whether the bare flag is expected.
+        :returns: True when the script and settings file must be regenerated.
+        """
+        from geomulticorr.correlation._correlation_plan import params_differ_from_file
+
+        return params_differ_from_file(
+            params_file, effective,
+            save_disparity_difference=save_disparity_difference,
+        )
+
     def prepare_pairs_correlation(
         self,
         criterias: str | list[str] = "",
@@ -3411,6 +4621,8 @@ class Session:
         metric: str = "ncc",
         overwrite_scripts: bool = False,
         print_summary: bool = True,
+        plan: str | pathlib.Path | dict | None = None,
+        params_by_pair: Mapping[str, dict] | None = None,
     ) -> list[pathlib.Path]:
         """Prepare the output directory and bash script for each pair.
 
@@ -3421,6 +4633,18 @@ class Session:
         3. Clip left and right images to their spatial intersection if not done yet.
         4. Write ``correlation_job.sh`` with the full ASP command.
 
+        Parameters are resolved **per pair**, with the precedence
+        ``scalar arguments -> plan group -> per-pair override``.  Each pair
+        already receives its own ``<pa_key>_CorrParameters.txt``; the only thing
+        that used to force a uniform setting was that the scalar arguments were
+        constant across the loop.  With neither *plan* nor *params_by_pair*,
+        behaviour is identical to passing the scalars alone.
+
+        Why per-pair parameters matter: a pair measures ``v * dt``, and one ASP
+        parameter set spans only ``S / (k * c)`` — roughly 30-100x — so a single
+        setting cannot serve both a 12-day and a 6-year baseline.  See
+        ``docs/correlation_parameters.md``.
+
         Args:
             criterias: Passed to :meth:`get_pairs` to filter pairs.
             cluster: ``None`` / ``"local"`` / ``"gricad"`` / ``"isterre"``.
@@ -3428,11 +4652,20 @@ class Session:
             asp_bin_dir: Optional path to the ASP bin directory.
             nodes / cores / walltime / besteffort / conda_env: OAR cluster options.
             processes / threads_* / corr_* / etc: ``parallel_stereo`` parameters.
+            plan: A correlation plan — a path to a ``correlation_plan_*.json``,
+                or the already-loaded mapping.  Supplies per-group parameters
+                and the pair-to-group assignment.
+            params_by_pair: ``{pa_key: {...}}`` pinning individual pairs, which
+                wins over both the scalars and the plan.
 
         Returns:
             List of paths to the generated bash scripts.
         """
         from geomulticorr.correlation import ASP
+        from geomulticorr.correlation._correlation_plan import (
+            read_correlation_plan,
+            resolve_pair_params,
+        )
 
         asp = ASP(session=self, asp_bin_dir=asp_bin_dir)
         pairs = self.get_pairs(criterias)
@@ -3446,6 +4679,35 @@ class Session:
             f"Preparing {len(pairs)} pair(s) for correlation "
             f"[cluster={cluster_label}]"
         )
+
+        # Resolve the plan once: reading it per pair would re-parse the same
+        # JSON for every row.
+        plan_document: dict = {}
+        if plan is not None:
+            plan_document = (
+                dict(plan) if isinstance(plan, dict) else read_correlation_plan(plan)
+            )
+        plan_groups = plan_document.get("groups") or {}
+        pair_group = {
+            str(row.get("pa_key")): str(row.get("group", ""))
+            for row in (plan_document.get("pairs") or [])
+        }
+        plan_overrides = dict(plan_document.get("overrides") or {})
+        if params_by_pair:
+            plan_overrides.update({str(k): dict(v) for k, v in params_by_pair.items()})
+
+        #: The scalar arguments, as the floor of the precedence chain.
+        scalar_params = {
+            "corr_algorithm": corr_algorithm,
+            "corr_kernel": corr_kernel,
+            "corr_search": corr_search,
+            "corr_xthreshold": corr_xthreshold,
+            "corr_seed_mode": corr_seed_mode,
+            "subpixel_mode": subpixel_mode,
+            "subpixel_kernel": subpixel_kernel,
+            "prefilter_mode": prefilter_mode,
+            "cost_mode": cost_mode,
+        }
 
         summary_rows: list[dict] = []
         bash_scripts: list[pathlib.Path] = []
@@ -3469,8 +4731,21 @@ class Session:
         ) as live:
             for pair in pairs:
                 pair_name.plain = pair.pa_key
-                rec = {"pair": pair.pa_key, "directory": "—", "symlink": "—", "params": "—", "script": "—"}
+                rec = {"pair": pair.pa_key, "directory": "—", "symlink": "—",
+                       "group": "—", "params": "—", "script": "—"}
                 status = pair.get_status()
+
+                # Resolve this pair's effective parameters up front: the reuse
+                # decision below depends on whether they differ from what is
+                # already on disk.
+                group = pair_group.get(pair.pa_key, "")
+                effective, source = resolve_pair_params(
+                    pair.pa_key, group, scalar_params,
+                    groups=plan_groups, overrides=plan_overrides,
+                )
+                rec["group"] = group if source != "scalar" else "scalar"
+                if source == "override":
+                    rec["group"] = f"{group or '—'} (override)"
 
                 if all(pair.check_corr_outputs().values()) and not overwrite:
                     rec["script"] = "skipped (complete)"
@@ -3490,30 +4765,36 @@ class Session:
                 else:
                     rec["symlink"] = "exists"
 
-                # 3. Reuse existing script if allowed
+                # 3. Reuse the existing script only when the parameters it was
+                #    built from still match.  Skipping on mere existence made a
+                #    parameter change a SILENT no-op: the `continue` below
+                #    returned before step 4 could regenerate the params file, so
+                #    a freshly tuned setting was discarded and the old one re-run
+                #    with nothing in the log to say so.
                 bash_path = pair.pa_path / f"{pair.pa_key}_CorrelationJob.sh"
+                params_file = pair.pa_path / f"{pair.pa_key}_CorrParameters.txt"
                 if bash_path.exists() and not overwrite_scripts:
-                    bash_scripts.append(bash_path)
-                    rec["script"] = "reused"
-                    summary_rows.append(rec)
-                    progress.advance(task)
-                    live.refresh()
-                    continue
+                    changed = self._corr_params_changed(
+                        params_file, asp, effective,
+                        save_disparity_difference=save_disparity_difference,
+                    )
+                    if not changed:
+                        bash_scripts.append(bash_path)
+                        rec["script"] = "reused"
+                        summary_rows.append(rec)
+                        progress.advance(task)
+                        live.refresh()
+                        continue
+                    logger.info(
+                        f"{pair.pa_key}: correlation parameters changed — "
+                        f"regenerating the script and parameters file"
+                    )
 
                 # 4. Write correlation parameters settings file
-                params_file = pair.pa_path / f"{pair.pa_key}_CorrParameters.txt"
                 asp.build_correlation_params(
-                    corr_algorithm=corr_algorithm,
-                    corr_kernel=corr_kernel,
-                    corr_search=corr_search,
-                    corr_xthreshold=corr_xthreshold,
-                    corr_seed_mode=corr_seed_mode,
-                    subpixel_refinement_mode=subpixel_mode,
-                    subpixel_kernel=subpixel_kernel,
-                    prefilter_mode=prefilter_mode,
-                    cost_mode=cost_mode,
                     save_disparity_difference=save_disparity_difference,
                     params_file_path=params_file,
+                    **_asp_param_kwargs(effective),
                 )
                 rec["params"] = params_file.name
 
@@ -3533,8 +4814,8 @@ class Session:
                     corr_memory_limit_mb=corr_memory_limit_mb,
                     corr_tile_size=corr_tile_size,
                     correval=correval,
-                    corr_algorithm=corr_algorithm,
-                    corr_kernel=corr_kernel,
+                    corr_algorithm=effective["corr_algorithm"],
+                    corr_kernel=effective["corr_kernel"],
                     metric=metric,
                 )
                 bash_scripts.append(bash_path)
