@@ -9,7 +9,7 @@
 - TD and DC both agree on Joss as an appropriate journal to publish our software GeoMultiCorr
 ## Development strategy
 ### Version conflicts
-- The code of GeoMultiCorr is currently existing in both versions which are very different one to the other. Each of it have its own logic, pros, and cons,
+- The code of GeoMultiCorr is currently existing in both versions which are very different one to the other. Each of it have its own logic, pros, and cons.
 - Our **principal objective** in order to publish the software is to merge these versions into one. In this order, TD have created the note [[issues]]. 
 ### GeoMultiCorr project's scope
 - Should we integrate the part which download the images in GeoMultiCorr or not ? 
@@ -21,15 +21,14 @@
 - Simple usage
 	- One displacement field per pzone
 	- Simple pair creation strategy
-	- No Temporal Inversion
-	- Correspond to specific research objectives
+	- Evaluation of the disp fields only through mono-pair techniques 
 - Advanced usage
 	- Many displacement fields per pzone
-	- Needs to elaborate a complex strategy to create the pair (images apparaiment)
-	- The disp fields are then evaluated through both the mono metrics and the multi metrics
-	- Time series are generated
+	- Needs to elaborate a complex strategy to create the pairs (images apparaiment)
+	- The disp fields are then evaluated through both the mono pair metrics and the multi pair metrics
+	- Time series are generated and analysed
 - The choice of the level os usage depends on
-	- The images we have
+	- The available images
 	- The research objectives
 ## TODO
 - The first step is to be aware of what we have in hands. Therefore, TD must try the DC version, and vice versa.
@@ -54,7 +53,7 @@
 		- Forked from https://github.com/rgdyn-toolbox/GeoMultiCorr/
 			- <mark style="background: #FF5582A6;">Seems not updated : to delete ?</mark>
 	- https://github.com/duvanelt?tab=repositories/GeoMultiCorr
-		- <mark style="background: #FF5582A6;">Just deleted</mark>
+		- <mark style="background: #FF5582A6;">Deleted</mark>
 - [x] Gather everything on the same repository
 	- I made a git clone from https://github.com/rgdyn-toolbox/GeoMultiCorr/
 	- I replaced the .git/ of my own local repo by the one of this repo
