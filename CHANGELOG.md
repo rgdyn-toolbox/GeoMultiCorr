@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.7.0] — 2026-09-29
+
+### Fixed
+- **Pair weights never reached the solver.** `input_tio` hard-coded the *"weighting by
+  interferogram variance"* line to `0`, and `invers_pixel_omp` reads the third column of
+  `liste_couple` only when that line is `2` — every `weight_mode` ever written was ignored
+  and the solver used its own 1/σ per map. `TIOConfig(weight_mode="file")` is the new
+  default, so **re-running an inversion changes its result**; `TIOConfig.legacy()`
+  reproduces the earlier block byte-for-byte for comparison.
+
+### Added
+- **`geomulticorr.inversion.pytio`** — the Python port of `invers_pixel_brit_omp.f90`
+  (M.-P. Doin, CNRS/ISTerre; optical variant Bontemps et al. 2018) and
+  `lect_depl_cumule_lin.f`, vendored with a test suite (`tests/inversion/pytio/`).
+  Validated against the Fortran to float32 rounding.
+- **`TIOInversion.launch(mode="python")`** — runs the inversion in-process with no
+  Fortran binaries, writes `TOT_<date>_<dir>.tif` directly plus `diagnostics/`
+  (rms, rank defect, pairs per pixel, velocity fit; per-pair residuals on request) and
+  returns the solver's xarray datasets. `tio_binaries_dir=None` is now accepted.
+- **`TIOConfig`** as the single solver configuration: `prepare_inversion(solver=…)`,
+  `input_tio` rendered from it (`input_tio_text`), recorded in the run-parameters
+  trace (`solver`, `weights.applied_by_solver`). A warning fires when non-uniform
+  weights are written under a mode the solver will not read.
+- **`TIOInversion.network_components()`** — connected components of the pair graph
+  with dates and sensors; `prepare_inversion` warns when there is more than one
+  (no pair links them, so the offset between them is decided by the smoothing prior)
+  and records them in the trace (`network`).
+- **`sensor_weights`** — thirteenth weighting parameter: `{"spot": 1.0, "planetscope": 0.5}`
+  multiplied into every mode's weights per sensor (substring match, longest key wins,
+  min of the two sides). Explorer text field, figure stem fragment, `sensor` column in
+  the weights frame, per-sensor colouring in both figure backends.
+- **`geomulticorr.inversion._stack`** — `load_cumulative_stack` / `write_cumulative_stack`
+  / `TIOInversion.to_xarray()`: the `TOT_*.tif` series as one `(time, y, x)` dataset and
+  back. `InversionExtractor` now also accepts an inversion directory.
+- **`geomulticorr.inversion.fusion`** — `pair_closure_against_series` + `closure_summary`
+  (which sensor disagrees with which, per pair and per pixel), `calibrate_to_reference`
+  (per-pixel offset + rate over the overlap), `fuse_series`, and the `fuse_inversions`
+  orchestrator writing the `TOT_*.tif` layout, `calibration/*.tif` and
+  `fusion_parameters.json`. `resolve_inversion_dir(session, pzone, name)` for its output.
+- **`plot_cumulative_time_series`** — per-point EW/NS/magnitude panels with one line per
+  inversion (e.g. SPOT, PlanetScope, fused) and a buffer-std band.
+- Docs: `multi_sensor_fusion.md`, `tio_algorithm_guide.md`, `tio_inversion_by_hand.md`;
+  `dask` added to `gmc_env.yml`.
+
+### Changed
+- `_WEIGHT_PARAM_KEYS` has thirteen entries; `WEIGHTS_FRAME_COLUMNS` gains `sensor`;
+  `run-parameters` JSON gains `solver` and `network` and no longer lists `input_tio` as
+  unrecorded.
+- The Python backend writes full-height rasters where the Fortran post-processor drops
+  the last row; do not fuse runs from different backends (`xr.align(join="exact")` refuses).
+
+### Future
+- A joint two-sensor inversion with cross-sensor bias terms on the vendored kernel; HPC
+  submission of the Python backend.
+
+## [0.6.2] — 2026-09-14
+
+### Updates
+
+Updates on email. No important changes.
+
 ## [0.6.1] — 2026-09-14
 
 ### Added
