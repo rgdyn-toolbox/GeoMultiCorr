@@ -21,6 +21,7 @@ dependencies:
   - jupyterlab
   - xarray
   - rioxarray
+  - dask
   - gdal
   - libgdal
   - rasterstats

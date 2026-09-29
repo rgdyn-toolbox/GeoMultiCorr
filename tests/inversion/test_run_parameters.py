@@ -32,7 +32,7 @@ The run-parameters JSON is the only record of *how* an inversion was weighted:
 ``liste_couple`` holds the resulting numbers, not the recipe.
 
 Two properties matter most. ``weights.params`` must be the **full unpruned**
-twelve, so ``write_liste_couple(**params)`` reproduces the run from the file
+thirteen, so ``write_liste_couple(**params)`` reproduces the run from the file
 alone; and a failure to write must **never** abort an otherwise fully prepared
 inversion.
 """
@@ -95,10 +95,10 @@ def inv(monkeypatch, tmp_path):
     return obj
 
 
-PARAMS_12 = dict(
+PARAMS_13 = dict(
     weight_mode="quality", slope=2.0, min_weight=0.1, dt_range=None,
     sharpness=5.0, w_min=0.0, invert=False, combine="wmean",
-    alpha=1 / 3, beta=1 / 3, gamma=1 / 3, cc_gamma=1.5,
+    alpha=1 / 3, beta=1 / 3, gamma=1 / 3, cc_gamma=1.5, sensor_weights=None,
 )
 
 
@@ -110,7 +110,7 @@ class TestBuildDocument:
             direction="EW", inversion_name="PDL", pzone="PasDeLours",
             inversion_dir="/tmp/x", raster_shape=(2048, 1536),
             pair_keys=["a", "b"], n_images=3, weight_mode="quality",
-            combine="wmean", weight_source="explorer", weight_params=PARAMS_12,
+            combine="wmean", weight_source="explorer", weight_params=PARAMS_13,
             relevant_params=["alpha", "beta", "cc_gamma", "combine", "gamma"],
             weight_summary={"n": 2, "min": 0.2, "max": 1.0, "mean": 0.6},
         )
@@ -122,7 +122,7 @@ class TestBuildDocument:
 
     def test_records_the_full_unpruned_params(self):
         """Pruned params could not be splatted back into write_liste_couple."""
-        assert set(self._doc()["weights"]["params"]) == set(PARAMS_12)
+        assert set(self._doc()["weights"]["params"]) == set(PARAMS_13)
 
     def test_relevant_params_sits_alongside_not_instead(self):
         weights = self._doc()["weights"]
@@ -147,19 +147,51 @@ class TestBuildDocument:
         assert doc["pairs"]["count"] == 2
 
     def test_notes_what_it_deliberately_omits(self):
-        assert "liste_couple" in self._doc()["not_recorded_here"]
+        note = self._doc()["not_recorded_here"]
+        assert "liste_couple" in note
+        # the solver settings ARE recorded now — input_tio is rendered from them
+        assert "input_tio" not in note
+
+    def test_records_the_solver_block(self):
+        solver = {"weight_mode": "file", "gamma": 0.003, "iponder": 2,
+                  "weights_applied_by_solver": True}
+        doc = self._doc(solver=solver)
+        assert doc["solver"]["iponder"] == 2
+        assert doc["solver"]["gamma"] == 0.003
+        assert doc["weights"]["applied_by_solver"] is True
+        json.dumps(doc)
+
+    def test_legacy_solver_says_the_weights_were_not_applied(self):
+        solver = {"weight_mode": "variance", "iponder": 0,
+                  "weights_applied_by_solver": False}
+        assert self._doc(solver=solver)["weights"]["applied_by_solver"] is False
+
+    def test_without_solver_the_flag_is_unknown(self):
+        doc = self._doc()
+        assert doc["solver"] is None
+        assert doc["weights"]["applied_by_solver"] is None
+
+    def test_records_the_network(self):
+        network = {"n_components": 2, "components": [
+            {"start": "20160816", "end": "20250716", "sensors": ["planetscope"]},
+            {"start": "20180927", "end": "20240717", "sensors": ["spot6", "spot7"]},
+        ]}
+        doc = self._doc(network=network)
+        assert doc["network"]["n_components"] == 2
+        assert doc["network"]["components"][1]["sensors"] == ["spot6", "spot7"]
+        json.dumps(doc)
 
     def test_missing_raster_shape_is_none_not_a_crash(self):
         doc = self._doc(raster_shape=None)
         assert doc["raster"] == {"width": None, "height": None}
 
     def test_numpy_values_are_coerced(self):
-        doc = self._doc(weight_params={**PARAMS_12, "cc_gamma": np.float64(1.5)})
+        doc = self._doc(weight_params={**PARAMS_13, "cc_gamma": np.float64(1.5)})
         json.dumps(doc)
         assert isinstance(doc["weights"]["params"]["cc_gamma"], float)
 
     def test_tuples_become_lists(self):
-        doc = self._doc(weight_params={**PARAMS_12, "dt_range": (300, 400)})
+        doc = self._doc(weight_params={**PARAMS_13, "dt_range": (300, 400)})
         assert doc["weights"]["params"]["dt_range"] == [300, 400]
 
     def test_stamps_the_version_and_a_timestamp(self):
@@ -200,7 +232,7 @@ class TestDescribeFilterPipeline:
 class TestWriteRunParameters:
     def test_writes_both_directions(self, inv):
         written = inv.write_run_parameters(
-            "quality", "wmean", "explorer", PARAMS_12,
+            "quality", "wmean", "explorer", PARAMS_13,
             {"EW": [0.9, 0.5, 0.2], "NS": [0.8, 0.4, 0.1]},
         )
         assert set(written) == {"EW", "NS"}
@@ -211,7 +243,7 @@ class TestWriteRunParameters:
 
     def test_each_file_is_self_contained(self, inv):
         written = inv.write_run_parameters(
-            "quality", "wmean", "explorer", PARAMS_12,
+            "quality", "wmean", "explorer", PARAMS_13,
             {"EW": [0.9, 0.5, 0.2], "NS": [0.8, 0.4, 0.1]},
         )
         for direction, path in written.items():
@@ -220,12 +252,12 @@ class TestWriteRunParameters:
             assert doc["inversion_name"] == "PDL_spot"
             assert doc["pzone"] == "PasDeLours"
             assert doc["pairs"]["count"] == 3
-            assert set(doc["weights"]["params"]) == set(PARAMS_12)
+            assert set(doc["weights"]["params"]) == set(PARAMS_13)
 
     def test_the_two_files_differ_where_they_should(self, inv):
         """Otherwise the per-direction split is theatre."""
         written = inv.write_run_parameters(
-            "quality", "wmean", "explorer", PARAMS_12,
+            "quality", "wmean", "explorer", PARAMS_13,
             {"EW": [0.9, 0.5, 0.2], "NS": [0.1, 0.1, 0.1]},
         )
         ew = json.loads(written["EW"].read_text())
@@ -236,7 +268,7 @@ class TestWriteRunParameters:
     def test_date_based_modes_give_matching_summaries(self, inv):
         """Which is itself informative, not a bug."""
         written = inv.write_run_parameters(
-            "uniform", None, "computed", {**PARAMS_12, "weight_mode": "uniform"},
+            "uniform", None, "computed", {**PARAMS_13, "weight_mode": "uniform"},
             {"EW": [1.0, 1.0, 1.0], "NS": [1.0, 1.0, 1.0]},
         )
         ew = json.loads(written["EW"].read_text())
@@ -246,7 +278,7 @@ class TestWriteRunParameters:
     def test_records_the_filter_pipeline(self, inv):
         inv.filter_pipeline = CCFilter(0.6) + OutlierFilter((-5, 5))
         written = inv.write_run_parameters(
-            "quality", "wmean", "explorer", PARAMS_12,
+            "quality", "wmean", "explorer", PARAMS_13,
             {"EW": [1, 1, 1], "NS": [1, 1, 1]})
         doc = json.loads(written["EW"].read_text())
         assert [f["filter"] for f in doc["filter_pipeline"]] == [
@@ -257,17 +289,38 @@ class TestWriteRunParameters:
         inv._last_launch = {"cluster": "isterre", "nodes": 1, "cores": 8,
                             "walltime": "12:00:00"}
         written = inv.write_run_parameters(
-            "uniform", None, "computed", PARAMS_12,
+            "uniform", None, "computed", PARAMS_13,
             {"EW": [1, 1, 1], "NS": [1, 1, 1]})
         doc = json.loads(written["EW"].read_text())
         assert doc["nmad_filter"]["removed"] == 1
         assert doc["launch"]["cluster"] == "isterre"
 
+    def test_sensor_weights_survive_the_round_trip(self, inv):
+        """The dict must come back from the file and be a legal splat."""
+        params = {**PARAMS_13, "weight_mode": "uniform",
+                  "sensor_weights": {"spot": 1.0, "planetscope": 0.5}}
+        written = inv.write_run_parameters(
+            "uniform", None, "computed", params, {"EW": [1, 1, 1], "NS": [1, 1, 1]})
+        doc = json.loads(written["EW"].read_text())
+        assert doc["weights"]["params"]["sensor_weights"] == {"spot": 1.0, "planetscope": 0.5}
+        assert "sensor_weights" in doc["weights"]["relevant_params"]
+        replay = dict(doc["weights"]["params"])
+        replay.pop("weight_mode")
+        inv.write_liste_couple(weight_mode="uniform", sync_geodb=False, **replay)
+
+    def test_relevant_params_omit_sensor_weights_when_unset(self, inv):
+        written = inv.write_run_parameters(
+            "uniform", None, "computed", {**PARAMS_13, "weight_mode": "uniform"},
+            {"EW": [1, 1, 1], "NS": [1, 1, 1]})
+        doc = json.loads(written["EW"].read_text())
+        assert "sensor_weights" not in doc["weights"]["relevant_params"]
+        assert doc["weights"]["params"]["sensor_weights"] is None
+
     def test_a_missing_raster_is_logged_not_raised(self, inv, caplog_gmc):
         inv._raster_width = None
         inv.pairs[0].pa_ew_path = "/nonexistent/nope.tif"
         written = inv.write_run_parameters(
-            "uniform", None, "computed", PARAMS_12,
+            "uniform", None, "computed", PARAMS_13,
             {"EW": [1, 1, 1], "NS": [1, 1, 1]})
         assert json.loads(written["EW"].read_text())["raster"]["width"] is None
 
@@ -275,7 +328,7 @@ class TestWriteRunParameters:
         """The point of storing the unpruned twelve: the run can be replayed."""
         monkeypatch.setattr(inv, "_sync_pair_weights", lambda *a, **k: None)
         written = inv.write_run_parameters(
-            "quality", "wmean", "explorer", PARAMS_12,
+            "quality", "wmean", "explorer", PARAMS_13,
             {"EW": [1, 1, 1], "NS": [1, 1, 1]})
         params = json.loads(written["EW"].read_text())["weights"]["params"]
         if params["dt_range"] is not None:
@@ -286,7 +339,7 @@ class TestWriteRunParameters:
 
     def test_the_file_is_indented_json(self, inv):
         written = inv.write_run_parameters(
-            "uniform", None, "computed", PARAMS_12,
+            "uniform", None, "computed", PARAMS_13,
             {"EW": [1, 1, 1], "NS": [1, 1, 1]})
         assert "\n  " in written["EW"].read_text()
 
@@ -303,7 +356,7 @@ class TestFailureIsNeverFatal:
             "geomulticorr.inversion._run_parameters.write_run_parameters", _boom)
         # the guard lives in prepare_inversion, so emulate its call shape
         try:
-            inv.write_run_parameters("uniform", None, "computed", PARAMS_12,
+            inv.write_run_parameters("uniform", None, "computed", PARAMS_13,
                                      {"EW": [1], "NS": [1]})
         except OSError as exc:
             from geomulticorr._logging import logger
