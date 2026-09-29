@@ -2521,6 +2521,162 @@ def plot_inversion_weights(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Cumulative displacement time series at points — one line per inversion
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Default series colours, by label position (a label may override via ``colors=``).
+_SERIES_PALETTE: tuple[str, ...] = (
+    "#000000", "#d62728", "#1f77b4", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b",
+)
+
+_COMPONENT_LABELS: dict[str, str] = {
+    "EW": "EW displacement (m)",
+    "NS": "NS displacement (m)",
+    "magn": "Magnitude (m)",
+}
+
+
+def _draw_cumulative_series_on_ax(
+    ax,
+    frames: dict,
+    *,
+    point_id,
+    component: str,
+    stat: str = "mean",
+    band: str | None = "std",
+    colors: dict | None = None,
+    markersize: float = 4.0,
+    alpha_band: float = 0.2,
+) -> dict:
+    """One line (+ optional band) per label for *point_id* / *component*. Returns an info dict.
+
+    *frames* maps a label (``"SPOT"``, ``"PlanetScope"``, ``"Fused"``) to a
+    **long** ``InversionExtractor.extract()`` frame. Each label draws exactly
+    one ``plot`` and at most one ``fill_between``; a frame that lacks the
+    component or the point contributes nothing and is listed in ``missing``.
+    """
+    colors = colors or {}
+    handles, missing = [], []
+    for i, (label, frame) in enumerate(frames.items()):
+        if frame is None or len(frame) == 0 or "component" not in frame.columns:
+            missing.append(label)
+            continue
+        sub = frame[(frame["component"] == component) & (frame["point_id"] == point_id)]
+        if sub.empty or stat not in sub.columns:
+            missing.append(label)
+            continue
+        sub = sub.sort_values("date")
+        t = pd.to_datetime(sub["date"])
+        y = sub[stat].to_numpy(dtype="float64")
+        color = colors.get(label, _SERIES_PALETTE[i % len(_SERIES_PALETTE)])
+        (line,) = ax.plot(t, y, "-o", color=color, markersize=markersize,
+                          linewidth=1.5, label=label)
+        handles.append(line)
+        if band and band in sub.columns:
+            s = sub[band].to_numpy(dtype="float64")
+            if np.isfinite(s).any():
+                ax.fill_between(t, y - s, y + s, color=color, alpha=alpha_band,
+                                linewidth=0)
+    ax.axhline(0.0, color="#888", linewidth=0.8, linestyle="--")
+    ax.grid(True, alpha=0.25, linestyle=":")
+    ax.set_axisbelow(True)
+    return {"legend_handles": handles, "missing": missing}
+
+
+def plot_cumulative_time_series(
+    frames: dict,
+    *,
+    components=("EW", "NS", "magn"),
+    point_ids=None,
+    stat: str = "mean",
+    band: str | None = "std",
+    colors: dict | None = None,
+    figsize: tuple[float, float] | None = None,
+    fig_name: str | None = None,
+    ax=None,
+    sharex: bool = True,
+    markersize: float = 4.0,
+    alpha_band: float = 0.2,
+):
+    """Cumulative displacement through time at sample points, one line per inversion.
+
+    A grid of panels — rows are *components*, columns are *point_ids* — with
+    one line per entry of *frames* in every panel, so a SPOT-only run, a
+    PlanetScope-only run and their fusion can be read against each other at
+    the same points. The band is ``stat ± band`` (by default the mean ± the
+    standard deviation within the extraction buffer).
+
+    :param frames: ``{label: frame}`` where each frame is the **long** output of
+        :meth:`~geomulticorr.stats.inversion_extractor.InversionExtractor.extract`
+        (columns ``point_id, date, component, mean, median, min, max, std,
+        count``). Labels become the legend entries.
+    :param components: Rows of the grid, in order; a frame lacking one leaves
+        that panel annotated rather than raising.
+    :param point_ids: Columns of the grid; default the sorted union over frames.
+    :param stat: Column drawn as the line (``"mean"`` or ``"median"``).
+    :param band: Column drawn as the half-width of the band; ``None`` for none.
+    :param colors: ``{label: colour}`` overrides.
+    :param figsize: Figure size; default scales with the grid.
+    :param fig_name: Optional super-title. Nothing is saved — the caller decides.
+    :param ax: A ``(n_components, n_points)`` array of Axes to draw into;
+        ``None`` creates the figure.
+    :param sharex: Share the time axis down each column.
+    :returns: The :class:`matplotlib.figure.Figure`.
+    """
+    if not frames:
+        raise ValueError("frames is empty — pass {label: extract() frame}")
+    components = list(components)
+    if point_ids is None:
+        ids = set()
+        for frame in frames.values():
+            if frame is not None and len(frame) and "point_id" in frame.columns:
+                ids.update(frame["point_id"].unique().tolist())
+        point_ids = sorted(ids, key=lambda v: (str(type(v)), v))
+    point_ids = list(point_ids)
+    if not point_ids:
+        raise ValueError("no point_id found in any frame")
+
+    n_rows, n_cols = len(components), len(point_ids)
+    if ax is None:
+        if figsize is None:
+            figsize = (max(4.0, 3.2 * n_cols), max(3.0, 2.6 * n_rows))
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, squeeze=False,
+                                 sharex="col" if sharex else False, sharey="row")
+    else:
+        axes = np.asarray(ax)
+        if axes.shape != (n_rows, n_cols):
+            raise ValueError(f"ax must be a ({n_rows}, {n_cols}) array of Axes, got {axes.shape}")
+        fig = axes[0, 0].get_figure()
+
+    legend_handles = None
+    for r, comp in enumerate(components):
+        for c, pid in enumerate(point_ids):
+            a = axes[r, c]
+            info = _draw_cumulative_series_on_ax(
+                a, frames, point_id=pid, component=comp, stat=stat, band=band,
+                colors=colors, markersize=markersize, alpha_band=alpha_band)
+            if info["missing"]:
+                a.annotate("n/a: " + ", ".join(map(str, info["missing"])),
+                           xy=(0.02, 0.95), xycoords="axes fraction", fontsize=7,
+                           color="#999", va="top")
+            if r == 0:
+                a.set_title(f"Point {pid}", fontsize=10, fontweight="bold")
+            if c == 0:
+                a.set_ylabel(_COMPONENT_LABELS.get(comp, comp))
+            if r == n_rows - 1:
+                a.tick_params(axis="x", labelrotation=45, labelsize=8)
+            if legend_handles is None and info["legend_handles"]:
+                legend_handles = info["legend_handles"]
+
+    if legend_handles:
+        axes[0, 0].legend(handles=legend_handles, loc="best", fontsize=8)
+    if fig_name:
+        fig.suptitle(fig_name)
+    fig.tight_layout()
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Correlation parameters — the matplotlib twins of _corrparams_plotly
 # ─────────────────────────────────────────────────────────────────────────────
 

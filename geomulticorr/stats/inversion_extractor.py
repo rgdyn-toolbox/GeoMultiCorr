@@ -60,6 +60,61 @@ if TYPE_CHECKING:
 _VALID_GEOM_TYPES = {"Point", "MultiPoint", "Polygon", "MultiPolygon"}
 _STATS = ["mean", "median", "min", "max", "std", "count"]
 
+#: Sub-folder of an inversion directory holding each component's TOT rasters.
+#: Shared with :mod:`geomulticorr.inversion._stack`, which imports from here
+#: (``stats`` initialises before ``inversion``; the reverse would be a cycle).
+COMP_DIR: dict[str, str] = {
+    "EW": "inverse_EW",
+    "NS": "inverse_NS",
+    "magn": "inverse_magn",
+}
+
+
+def resolve_inversion_dir(source) -> Path:
+    """The inversion directory behind *source*.
+
+    Accepts a path (``str``/``Path``) or anything with an ``inversion_dir``
+    attribute — a :class:`~geomulticorr.inversion.tio_inversion.TIOInversion`,
+    duck-typed so this module never imports it. A fused product written by
+    :mod:`geomulticorr.inversion.fusion` has no ``TIOInversion`` and is passed
+    as its folder.
+    """
+    inv_dir = getattr(source, "inversion_dir", None)
+    if inv_dir is None:
+        inv_dir = source
+    if not isinstance(inv_dir, (str, Path)):
+        raise TypeError(
+            "expected an inversion directory or an object with `.inversion_dir`, "
+            f"got {type(source).__name__}"
+        )
+    return Path(inv_dir)
+
+
+def discover_tot_rasters(
+    inversion_dir: str | Path, components=None
+) -> dict[str, dict[str, Path]]:
+    """``{component: {YYYYMMDD: path}}`` for every ``TOT_<date>_<comp>.tif`` on disk.
+
+    The date key strips the ``TOT_`` prefix and the ``_<comp>`` suffix, so EW,
+    NS and magn share identical keys (a no-op on a pre-suffix file left over
+    from before the rasters carried a component suffix). Components whose
+    folder is absent or empty are simply missing from the result.
+    """
+    inversion_dir = Path(inversion_dir)
+    comps = list(components) if components else list(COMP_DIR)
+    result: dict[str, dict[str, Path]] = {}
+    for comp in comps:
+        subdir = inversion_dir / COMP_DIR[comp]
+        if not subdir.exists():
+            continue
+        found = sorted(subdir.glob("TOT_*.tif"))
+        if found:
+            result[comp] = {
+                p.stem.removeprefix("TOT_").removesuffix(f"_{comp}"): p
+                for p in found
+            }
+    return result
+
 
 class InversionExtractor:
     """Compute statistics and extract values from TIO inversion TOT rasters.
@@ -74,7 +129,9 @@ class InversionExtractor:
 
     Args:
         inversion: A :class:`~geomulticorr.inversion.tio_inversion.TIOInversion`
-            instance **after** ``post_process()`` has been run.
+            instance **after** ``post_process()`` (or ``launch(mode="python")``)
+            has been run — or the inversion directory itself, which is how a
+            fused product (:mod:`geomulticorr.inversion.fusion`) is read.
         components: Subset of ``["EW", "NS", "magn"]`` to consider.
             Defaults to all available components.
 
@@ -83,23 +140,20 @@ class InversionExtractor:
             ``post_process()`` has not been run yet).
     """
 
-    _COMP_DIR: dict[str, str] = {
-        "EW": "inverse_EW",
-        "NS": "inverse_NS",
-        "magn": "inverse_magn",
-    }
+    _COMP_DIR: dict[str, str] = COMP_DIR
 
     def __init__(
         self,
-        inversion: TIOInversion,
+        inversion: TIOInversion | str | Path,
         components: list[str] | None = None,
     ) -> None:
         self.inversion = inversion
+        self.inversion_dir: Path = resolve_inversion_dir(inversion)
         self.tif_paths: dict[str, dict[str, Path]] = self._discover_tif_paths(components)
         if not self.tif_paths:
             raise FileNotFoundError(
-                f"No TOT_*.tif files found under '{inversion.inversion_dir}'. "
-                "Run TIOInversion.post_process() first."
+                f"No TOT_*.tif files found under '{self.inversion_dir}'. "
+                "Run TIOInversion.post_process() (or launch(mode='python')) first."
             )
         logger.info(
             f"InversionExtractor ready — {len(self.available_components)} component(s), "
@@ -111,23 +165,10 @@ class InversionExtractor:
     def _discover_tif_paths(
         self, components: list[str] | None
     ) -> dict[str, dict[str, Path]]:
-        comps = components or list(self._COMP_DIR.keys())
-        result: dict[str, dict[str, Path]] = {}
-        for comp in comps:
-            subdir = self.inversion.inversion_dir / self._COMP_DIR[comp]
-            if not subdir.exists():
-                continue
-            found = sorted(subdir.glob("TOT_*.tif"))
-            if found:
-                # Strip the "TOT_" prefix and the "_{comp}" component suffix
-                # (e.g. "TOT_20210901_EW" -> "20210901") so EW/NS/magn share
-                # identical date keys. A no-op on a pre-suffix file left over
-                # from before TOT_*.tif carried a component suffix.
-                result[comp] = {
-                    p.stem.removeprefix("TOT_").removesuffix(f"_{comp}"): p
-                    for p in found
-                }
-        return result
+        # Resolved from `self.inversion` each time rather than the cached
+        # `inversion_dir`: tests build instances via __new__ and set only
+        # `inversion`.
+        return discover_tot_rasters(resolve_inversion_dir(self.inversion), components)
 
     # ── properties ─────────────────────────────────────────────────────────────
 
