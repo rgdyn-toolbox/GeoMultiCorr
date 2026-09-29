@@ -55,10 +55,11 @@ import pandas as pd
 from geomulticorr.utils._weights_frame import (
     WEIGHT_DIRECTION_COLORS,
     WEIGHT_DIRECTION_MARKERS,
+    sensor_colors,
 )
 
 #: Hover fields shared by both series, in ``customdata`` column order.
-_CUSTOMDATA_COLUMNS: tuple[str, ...] = ("nmad", "cc", "corr_direction")
+_CUSTOMDATA_COLUMNS: tuple[str, ...] = ("nmad", "cc", "corr_direction", "sensor")
 
 #: Hover template shared by both series.  ``$DIRECTION`` is substituted rather
 #: than formatted: the template is full of plotly's own ``%{…}`` fields, which
@@ -68,6 +69,7 @@ _HOVER = (
     "<br>weight=%{y:.3f}"
     "<br>map=$DIRECTION"
     "<br>corr_dir=%{customdata[2]}"
+    "<br>sensor=%{customdata[3]}"
     "<br>NMAD=%{customdata[0]:.3f}"
     "<br>CC=%{customdata[1]:.2f}"
     "<br>Δt=%{x:.0f} d<extra></extra>"
@@ -98,7 +100,14 @@ def figure_weights(
     directions: str | tuple[str, ...] = ("EW", "NS"),
     height: int = 460,
 ):
-    """Weight-vs-Δt scatter, one series per direction.
+    """Weight-vs-Δt scatter, one series per direction (and per sensor when mixed).
+
+    With a single sensor group in *frame* (or none recorded) the figure is
+    exactly two traces, coloured by direction. With several groups each
+    direction gets one trace **per sensor**, coloured by
+    :func:`~geomulticorr.utils._weights_frame.sensor_colors` and still marked
+    by direction, in a legend group per direction — so a ``sensor_weights``
+    factor is visible as a level shift of one colour.
 
     :param frame: A weights frame (see :mod:`geomulticorr.utils._weights_frame`).
     :param title: Figure title.
@@ -118,30 +127,39 @@ def figure_weights(
     else:
         wanted = tuple(directions)
 
-    keys = frame["pa_key"].tolist()
-    dts = frame["dt_days"].tolist()
-    corr_dirs = frame["corr_direction"].tolist()
-    ccs = frame["cc"].tolist()
+    sensors = (frame["sensor"].fillna("").astype(str).tolist()
+               if "sensor" in frame.columns else [""] * len(frame))
+    groups = sorted(set(sensors))
+    by_sensor = len(groups) > 1
+    palette = sensor_colors(groups) if by_sensor else {}
 
     fig = go.Figure()
     for direction, w_col, nmad_col in (("EW", "w_ew", "nmad_ew"),
                                        ("NS", "w_ns", "nmad_ns")):
-        # list-of-lists rather than np.column_stack, so the float NMAD/CC keep
-        # their dtype alongside the string correlation direction.
-        customdata = [
-            [n, c, d] for n, c, d in zip(frame[nmad_col].tolist(), ccs, corr_dirs)
-        ]
         symbol, _ = WEIGHT_DIRECTION_MARKERS[direction]
-        fig.add_trace(
-            go.Scatter(
-                x=dts, y=frame[w_col].tolist(), mode="markers", name=direction,
-                text=keys, customdata=customdata, opacity=0.75,
-                visible=direction in wanted,
-                marker=dict(size=9, symbol=symbol,
-                            color=WEIGHT_DIRECTION_COLORS[direction]),
-                hovertemplate=_HOVER.replace("$DIRECTION", direction),
+        for group in (groups if by_sensor else [None]):
+            sub = frame if group is None else frame[[s == group for s in sensors]]
+            sub_sensors = [s for s in sensors if group is None or s == group]
+            # list-of-lists rather than np.column_stack, so the float NMAD/CC
+            # keep their dtype alongside the string columns.
+            customdata = [
+                [n, c, d, sen] for n, c, d, sen in zip(
+                    sub[nmad_col].tolist(), sub["cc"].tolist(),
+                    sub["corr_direction"].tolist(), sub_sensors)
+            ]
+            fig.add_trace(
+                go.Scatter(
+                    x=sub["dt_days"].tolist(), y=sub[w_col].tolist(), mode="markers",
+                    name=direction if group is None else f"{direction} · {group or '?'}",
+                    legendgroup=direction,
+                    text=sub["pa_key"].tolist(), customdata=customdata, opacity=0.75,
+                    visible=direction in wanted,
+                    marker=dict(size=9, symbol=symbol,
+                                color=(WEIGHT_DIRECTION_COLORS[direction]
+                                       if group is None else palette[group])),
+                    hovertemplate=_HOVER.replace("$DIRECTION", direction),
+                )
             )
-        )
 
     fig.update_layout(
         title=title or "TIO pair weights",

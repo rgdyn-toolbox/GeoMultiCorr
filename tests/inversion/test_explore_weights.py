@@ -34,7 +34,7 @@ a geodatabase or a display.
 
 The contracts worth not re-breaking:
 
-* ``_last_weights_params`` carries **exactly** the twelve keys both writers
+* ``_last_weights_params`` carries **exactly** the thirteen keys both writers
   accept, so ``prepare_inversion(**params)`` is a legal splat;
 * the weight vectors are computed **from that dict**, so the two cannot disagree;
 * one recompute per weighting change, and **zero** on a view-only change.
@@ -193,7 +193,7 @@ class TestDefaultsValidation:
     @pytest.mark.parametrize("key", TIOInversion._WEIGHTS_EXPLORER_DEFAULTS)
     def test_every_declared_default_is_accepted(self, inv, key):
         value = {"direction": "EW", "combine": "wmean", "invert": True,
-                 "dt_range": (10, 20)}.get(key, 1.0)
+                 "dt_range": (10, 20), "sensor_weights": {"spot": 0.5}}.get(key, 1.0)
         inv.explore_weights(interactive=False, savefig=False, **{key: value})
 
 
@@ -326,3 +326,82 @@ class TestQualityMetricsAreHoisted:
         inv.filter_pairs_by_nmad(threshold=0.1)  # drops everything
         assert inv.pairs == []
         assert len(inv.compute_pair_weights("quality")) == 0
+
+
+class TestSensorWeightsInTheExplorer:
+    """The thirteenth key: a Text control parsed in a try, stashed as a sorted dict."""
+
+    def test_headless_stashes_the_sorted_dict(self, inv):
+        inv.explore_weights(interactive=False, savefig=False,
+                            sensor_weights={"spot": 1.0, "planetscope": 0.5})
+        stashed = inv._last_weights_params["sensor_weights"]
+        assert stashed == {"planetscope": 0.5, "spot": 1.0}
+        assert list(stashed) == ["planetscope", "spot"]
+        import json
+        json.dumps(inv._last_weights_params)
+
+    def test_headless_empty_mapping_is_none(self, inv):
+        inv.explore_weights(interactive=False, savefig=False, sensor_weights={})
+        assert inv._last_weights_params["sensor_weights"] is None
+
+    def test_frame_carries_the_sensor_column(self, inv):
+        for i, p in enumerate(inv.pairs):
+            p.pa_left.th_sensor = p.pa_right.th_sensor = "spot6" if i % 2 else "planetscope"
+        frame, _ = inv.explore_weights(interactive=False, savefig=False)
+        assert list(frame["sensor"]) == ["planetscope", "spot6", "planetscope", "spot6"]
+
+    @pytest.fixture
+    def widget_inv(self, inv):
+        pytest.importorskip("ipywidgets")
+        for i, p in enumerate(inv.pairs):
+            p.pa_left.th_sensor = p.pa_right.th_sensor = "spot6" if i % 2 else "planetscope"
+        return inv
+
+    def _build(self, obj, **kwargs):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return obj.explore_weights(**kwargs)
+
+    def _controls(self, box):
+        import ipywidgets as widgets
+        found = {}
+        for row in box.children:
+            if isinstance(row, widgets.HBox):
+                for w in row.children:
+                    found[getattr(w, "description", "")] = w
+        return found
+
+    def test_text_control_is_present_and_prefilled(self, widget_inv):
+        box = self._build(widget_inv, sensor_weights={"spot": 0.5})
+        assert self._controls(box)["sensor w"].value == "spot=0.5"
+
+    def test_valid_text_triggers_exactly_one_recompute(self, widget_inv, monkeypatch):
+        box = self._build(widget_inv, weight_mode="uniform")
+        controls = self._controls(box)
+        calls = []
+        original = TIOInversion.compute_pair_weights
+        monkeypatch.setattr(
+            TIOInversion, "compute_pair_weights",
+            lambda self, *a, **k: calls.append(1) or original(self, *a, **k))
+        with contextlib.redirect_stdout(io.StringIO()):
+            controls["sensor w"].value = "planetscope=0.5"
+        assert len(calls) == 2                               # one pass, two directions
+        assert widget_inv._last_weights_params["sensor_weights"] == {"planetscope": 0.5}
+        assert widget_inv._last_weights["EW"] == [0.5, 1.0, 0.5, 1.0]
+
+    def test_bad_text_writes_status_and_keeps_the_last_good_value(self, widget_inv):
+        box = self._build(widget_inv, sensor_weights={"spot": 0.5})
+        controls = self._controls(box)
+        status = [w for w in box.children if type(w).__name__ == "HTML"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            controls["sensor w"].value = "spot=abc"
+        assert widget_inv._last_weights_params["sensor_weights"] == {"spot": 0.5}
+        assert any("✘ sensor w" in w.value for w in status)
+
+    def test_clearing_the_text_removes_the_factor(self, widget_inv):
+        box = self._build(widget_inv, weight_mode="uniform", sensor_weights={"spot": 0.5})
+        controls = self._controls(box)
+        assert widget_inv._last_weights["EW"] == [1.0, 0.5, 1.0, 0.5]
+        with contextlib.redirect_stdout(io.StringIO()):
+            controls["sensor w"].value = ""
+        assert widget_inv._last_weights_params["sensor_weights"] is None
+        assert widget_inv._last_weights["EW"] == [1.0] * len(widget_inv.pairs)

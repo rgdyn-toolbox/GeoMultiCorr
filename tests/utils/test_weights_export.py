@@ -215,3 +215,30 @@ class TestKaleidoIsNeverNeeded:
         save_weights_figure(frame, tmp_path, formats=("html", "png", "pdf", "svg"),
                             stem="fig")
         assert "kaleido" not in sys.modules
+
+
+class TestSensorWeightsInTheStem:
+    """The thirteenth key: relevant for every mode whenever set, sorted, filesystem-safe."""
+
+    @pytest.mark.parametrize("mode", ["uniform", "temporal", "quality", "sigmoid"])
+    def test_changes_the_stem_for_every_mode(self, quality_params, mode):
+        params = {**quality_params, "weight_mode": mode}
+        plain = weights_figure_stem(inversion_name="i", pz_name="pz", **params)
+        with_sw = weights_figure_stem(inversion_name="i", pz_name="pz",
+                                      **{**params, "sensor_weights": {"spot": 0.5}})
+        assert with_sw != plain
+        assert with_sw.endswith("_swspot0.5")
+
+    def test_order_independent(self, quality_params):
+        a = weights_figure_stem(inversion_name="i", pz_name="pz", **{
+            **quality_params, "sensor_weights": {"spot": 1.0, "planetscope": 0.5}})
+        b = weights_figure_stem(inversion_name="i", pz_name="pz", **{
+            **quality_params, "sensor_weights": {"planetscope": 0.5, "spot": 1.0}})
+        assert a == b
+        assert a.endswith("_swplanetscope0.5-spot1")
+
+    def test_none_and_empty_add_nothing(self, quality_params):
+        plain = weights_figure_stem(inversion_name="i", pz_name="pz", **quality_params)
+        for value in (None, {}):
+            assert weights_figure_stem(inversion_name="i", pz_name="pz",
+                                       **{**quality_params, "sensor_weights": value}) == plain

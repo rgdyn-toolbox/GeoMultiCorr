@@ -2424,6 +2424,7 @@ def _draw_inversion_weights_on_ax(
     from geomulticorr.utils._weights_frame import (
         WEIGHT_DIRECTION_COLORS,
         WEIGHT_DIRECTION_MARKERS,
+        sensor_colors,
     )
 
     if isinstance(directions, str):
@@ -2431,20 +2432,32 @@ def _draw_inversion_weights_on_ax(
     else:
         wanted = tuple(directions)
 
+    # Same grouping rule as the plotly twin: one artist per direction, or one
+    # per (direction, sensor) when the frame mixes sensors — still batched.
+    sensors = (frame["sensor"].fillna("").astype(str).to_numpy()
+               if "sensor" in frame.columns else np.array([""] * len(frame)))
+    groups = sorted(set(sensors.tolist()))
+    by_sensor = len(groups) > 1
+    palette = sensor_colors(groups) if by_sensor else {}
+
     dts = frame["dt_days"].to_numpy()
     handles = []
     for direction, column in (("EW", "w_ew"), ("NS", "w_ns")):
         if direction not in wanted:
             continue
         _, marker = WEIGHT_DIRECTION_MARKERS[direction]
-        handles.append(
-            ax.scatter(
-                dts, frame[column].to_numpy(),
-                s=markersize, marker=marker, alpha=alpha,
-                color=WEIGHT_DIRECTION_COLORS[direction],
-                edgecolors="none", label=direction,
+        for group in (groups if by_sensor else [None]):
+            sel = slice(None) if group is None else (sensors == group)
+            handles.append(
+                ax.scatter(
+                    dts[sel], frame[column].to_numpy()[sel],
+                    s=markersize, marker=marker, alpha=alpha,
+                    color=(WEIGHT_DIRECTION_COLORS[direction] if group is None
+                           else palette[group]),
+                    edgecolors="none",
+                    label=direction if group is None else f"{direction} · {group or '?'}",
+                )
             )
-        )
 
     ax.set_xlabel("Temporal baseline Δt (days)")
     ax.set_ylabel("weight")
@@ -2456,7 +2469,7 @@ def _draw_inversion_weights_on_ax(
         "n_pairs": len(frame),
         "directions": wanted,
         "legend_handles": handles,
-        "legend_title": "Map direction",
+        "legend_title": "Map direction" + (" · sensor" if by_sensor else ""),
     }
 
 
