@@ -210,6 +210,6 @@ For any question, bug, or issue regarding this pipeline/package, please report i
 - [thibaut.duvanel@unil.ch](mailto:thibaut.duvanel@unil.ch)
 
 > [!IMPORTANT]
-> If you use this tool, please cite it using the following [DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079419.svg). This will help recognise the time invested and keep the tool open and accessible.
+> If you use this tool, please cite it using the following [DOI](https://doi.org/10.5281/zenodo.17079419). This will help recognize the time invested and keep the tool open and accessible.
 
 ![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079419.svg)
