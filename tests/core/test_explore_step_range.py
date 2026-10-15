@@ -36,8 +36,12 @@ class _Pzone:
         self.pz_name = name
         self._thumbs = thumbs
 
-    def get_valid_thumbs(self):
-        return self._thumbs
+    def get_valid_thumbs(self, sensor_filter=None, image_type="opt"):
+        # Fake thumbs carry no th_type: they read as optical, as in real
+        # geodatabases written before image types existed.
+        if image_type is None:
+            return self._thumbs
+        return [t for t in self._thumbs if getattr(t, "th_type", "opt") == image_type]
 
 
 class _StubSession:
@@ -86,7 +90,7 @@ class _Controls:
 
     def __init__(self, box):
         self.box = box
-        self.view, self.strategy, self.step, self.pz = box.children[0].children
+        self.view, self.strategy, self.step, self.pz, self.type = box.children[0].children
         self.maxdt, self.mindt, self.sensor = box.children[1].children
         (self.colorby, self.bins, self.dedupe,
          self.arrows, self.mirror) = box.children[2].children

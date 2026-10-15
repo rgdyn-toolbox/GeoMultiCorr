@@ -69,10 +69,19 @@ class TestFigureStem:
         assert len(seen) == 2 * 2 * 2 * 2
 
     def test_accepts_last_pairs_params_splat(self):
-        """The six keys of Session._last_pairs_params must splat in unchanged."""
+        """The seven keys of Session._last_pairs_params must splat in unchanged."""
         params = dict(strategy="redundancy", max_step=3, max_dt_days=None,
-                      min_dt_days=None, sensor_filter=None, pz_name="PZ1")
+                      min_dt_days=None, sensor_filter=None, pz_name="PZ1",
+                      image_type="opt")
         assert pairs_figure_stem("chord", **params) == "PZ1_chord_redundancy_maxstep3"
+
+    def test_image_type_segment_only_for_non_optical(self):
+        """Optical names stay byte-identical; other types get their own file set."""
+        base = dict(strategy="step", max_step=2, pz_name="PZ1")
+        assert pairs_figure_stem("chord", **base) == "PZ1_chord_step_maxstep2"
+        assert pairs_figure_stem("chord", image_type="opt", **base) == "PZ1_chord_step_maxstep2"
+        assert (pairs_figure_stem("chord", image_type="mdhillshade", **base)
+                == "PZ1_mdhillshade_chord_step_maxstep2")
 
 
 class TestUniquePath:

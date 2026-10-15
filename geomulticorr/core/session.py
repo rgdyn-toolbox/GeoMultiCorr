@@ -34,6 +34,7 @@ It provides methods to initialize a session, access project data such as process
 """
 from __future__ import annotations
 
+import collections
 import copy
 import pathlib
 import warnings
@@ -98,6 +99,21 @@ from geomulticorr.core.console import (
 )
 
 from geomulticorr._logging import logger
+from geomulticorr.utils._image_types import (
+    ELEVATION_DIRNAME,
+    ELEVATION_IMAGE_TYPES,
+    IMAGE_TYPE_OPTICAL,
+    IMAGE_TYPES,
+    normalise_image_type,
+    pair_subdir,
+    type_column,
+)
+from geomulticorr.utils._terrain import (
+    DEFAULT_MD_AZIMUTHS,
+    TERRAIN_PRODUCTS,
+    shade_to_uint8,
+    terrain_product,
+)
 from geomulticorr.utils._durations import (
     DT_UNIT_TO_DAYS,
     format_dt_days,
@@ -126,6 +142,8 @@ PZ_KIND_REFERENCE_RASTER = "reference_raster"
 PZ_KIND_VECTOR = "vector"
 PZ_KIND_INVERSION = "inversion"
 PZ_KIND_FIGURES = "figures"
+#: DEM-derived thumbs, one subfolder per image type (elevation/<type>/).
+PZ_KIND_ELEVATION = ELEVATION_DIRNAME
 
 NEW_LAYOUT_PZ_SUBDIRS = (
     PZ_KIND_OPTICAL,
@@ -135,6 +153,7 @@ NEW_LAYOUT_PZ_SUBDIRS = (
     PZ_KIND_VECTOR,
     PZ_KIND_INVERSION,
     PZ_KIND_FIGURES,
+    PZ_KIND_ELEVATION,
 )
 
 #: Backwards-compatible aliases — the implementation now lives in
@@ -159,6 +178,27 @@ PLOT_LEVELS: dict[str, dict] = {
 # ``geomulticorr.stats.stats.resolve_stat_columns``. Column names are defined
 # here so they live in a single place (the sync is a derived cache; these columns
 # are intentionally NOT part of ``Pair.to_pdserie()``).
+#: ASP input-encoding defaults per image type, used by
+#: ``prepare_pairs_correlation`` when the caller passes ``None``.  Optical keeps
+#: ASP's own defaults (no line written), so its settings files are unchanged.
+#: Elevation products carry an explicit nodata (see ``sieve_bulk``'s encoding)
+#: and are normalised per image: slope and shading ranges differ between dates.
+CORR_INPUT_DEFAULTS: dict[str, dict[str, Any]] = {
+    "opt": {"nodata_value": None, "individual_normalization": False, "pre_normalization": False},
+    "hillshade": {"nodata_value": 0, "individual_normalization": True, "pre_normalization": False},
+    "mdhillshade": {"nodata_value": 0, "individual_normalization": True, "pre_normalization": False},
+    "slope": {"nodata_value": -9999.0, "individual_normalization": True, "pre_normalization": False},
+    "dem": {"nodata_value": -9999.0, "individual_normalization": True, "pre_normalization": False},
+}
+
+
+def _corr_input_params(pa_type: str, explicit: Mapping[str, Any]) -> dict:
+    """Input-encoding settings for one pair: its type's defaults, explicit values winning."""
+    params = dict(CORR_INPUT_DEFAULTS.get(pa_type or "opt", CORR_INPUT_DEFAULTS["opt"]))
+    params.update({k: v for k, v in explicit.items() if v is not None})
+    return params
+
+
 def _asp_param_kwargs(effective: Mapping[str, Any]) -> dict:
     """Rename resolved parameters to ``build_correlation_params``' argument names.
 
@@ -425,6 +465,13 @@ class Session:
                 return pz_root
             elif kind == PZ_KIND_FIGURES:
                 return self.path_figures
+            elif kind == PZ_KIND_ELEVATION:
+                # Deliberately no fallback to the pzone root: DEM-derived
+                # thumbs need the per-type subfolders of the new layout.
+                raise ValueError(
+                    "DEM-derived thumbs (elevation/<type>/) need the new folder "
+                    "layout; run session.migrate_to_new_structure() first"
+                )
             else:
                 raise ValueError(f"Unknown pzone subdirectory kind: {kind}")
         else:
@@ -435,6 +482,29 @@ class Session:
                 return pz_root / kind
             else:
                 raise ValueError(f"Unknown pzone subdirectory kind: {kind}")
+
+    def thumb_dir(self, pz_name: str, image_type: str = IMAGE_TYPE_OPTICAL) -> pathlib.Path:
+        """Folder holding the thumbs of *image_type* in pzone *pz_name*.
+
+        ``"opt"`` → ``pz_dir(pz, "optical")`` (both layouts); an elevation type
+        → ``pz_dir(pz, "elevation") / <type>`` (new layout only — the legacy
+        layout raises, pointing to ``migrate_to_new_structure()``).
+        """
+        t = normalise_image_type(image_type)
+        if t == IMAGE_TYPE_OPTICAL:
+            return self.pz_dir(pz_name, PZ_KIND_OPTICAL)
+        return self.pz_dir(pz_name, PZ_KIND_ELEVATION) / t
+
+    def pair_dir(self, pz_name: str, image_type: str = IMAGE_TYPE_OPTICAL) -> pathlib.Path:
+        """Folder holding the pair directories of *image_type* in pzone *pz_name*.
+
+        ``"opt"`` → ``image_correlation/`` (unchanged); any other type →
+        ``image_correlation/<type>/``. Mirrors how ``Pair`` builds ``pa_path``.
+        """
+        t = normalise_image_type(image_type)
+        if t != IMAGE_TYPE_OPTICAL:
+            self.thumb_dir(pz_name, t)  # legacy layout raises here, not later
+        return self.pz_dir(pz_name, PZ_KIND_IMAGE_CORRELATION) / pair_subdir(t)
 
     # * Works properly
     def find_qgis_binary(self,
@@ -528,24 +598,34 @@ class Session:
         # return [gmc_thumb.Thumb(r.th_path) for r in selected_thumbs.itertuples(index=False)]
     
     # * Works properly
-    def get_pairs_overview(self, criterias: str | list[str] = "") -> gpd.GeoDataFrame:
+    def get_pairs_overview(self, criterias: str | list[str] = "",
+                           image_type: str | None = None) -> gpd.GeoDataFrame:
         """Get pairs overview informations
 
         Args:
             criterias (str | list[str], optional): criterias to filter data. Defaults to "".
+            image_type (str | None, optional): keep only pairs of this image type
+                (``pa_type`` column; rows predating it read as ``"opt"``).
+                ``None`` (default) keeps every type.
 
         Returns:
             gpd.GeoDataFrame: Send a dataframe with each possible Pair according to the Thumbs
         # TODO: Implement unittests.
         """
-        return self._search_engine("Pairs", criterias)
+        overview = self._search_engine("Pairs", criterias)
+        if image_type is not None and overview is not None:
+            overview = overview[type_column(overview, "pa_type") == normalise_image_type(image_type)]
+        return overview
     
     # * Works properly
-    def get_pairs(self, criterias: str | list[str] = "") -> list[gmc_pair.Pair]:
+    def get_pairs(self, criterias: str | list[str] = "",
+                  image_type: str | None = None) -> list[gmc_pair.Pair]:
         """Get pairs informations
 
         Args:
             criterias (str | list[str], optional): criterias to filter data. Defaults to "".
+            image_type (str | None, optional): keep only pairs of this image type;
+                ``None`` (default) keeps every type.
 
         Returns:
             pd.DataFrame: Send a list of pair.Pairs objects meeting the criterias
@@ -554,11 +634,12 @@ class Session:
         """
         # selected_pairs = self.get_pairs_overview(criterias)
         # return [gmc_pair.Pair(self, target_path=x.pa_path) for x in selected_pairs.iloc]
-        selected_pairs = self.get_pairs_overview(criterias)
+        selected_pairs = self.get_pairs_overview(criterias, image_type=image_type)
         # return [gmc_pair.Pair(self, target_path=x.pa_path) for x in selected_pairs]
         return [gmc_pair.Pair(self, target_path=row['pa_path']) for _, row in selected_pairs.iterrows()]
 
-    def get_failed_pairs(self, criterias: str | list[str] = "") -> list[gmc_pair.Pair]:
+    def get_failed_pairs(self, criterias: str | list[str] = "",
+                         image_type: str | None = None) -> list[gmc_pair.Pair]:
         """Return pairs where one or more ASP output files are missing.
 
         Checks all files listed in ``ASP._KEEP_SUFFIXES`` inside each pair's
@@ -566,11 +647,12 @@ class Session:
 
         Args:
             criterias: Same filter syntax as :meth:`get_pairs`.
+            image_type: Keep only pairs of this image type (``"opt"``, ``"hillshade"``, ``"mdhillshade"``, ``"slope"``, ``"dem"``); ANDed with *criterias*. Prefer it over a criterias string: ``"hillshade"`` is also a substring of ``"mdhillshade"``.
 
         Returns:
             List of ``Pair`` objects with at least one missing output file.
         """
-        pairs = self.get_pairs(criterias)
+        pairs = self.get_pairs(criterias, image_type=image_type)
         failed = []
         for pair in pairs:
             outputs = pair.check_corr_outputs()
@@ -1140,10 +1222,29 @@ class Session:
             gpd.read_file(str(path), engine="pyogrio", layer=f"{pz_name}_moving-areas")
         )
 
+    @staticmethod
+    def _protomap_layer(image_type: str | Sequence[str] = "opt") -> str:
+        """Geodatabase layer holding the raster-bank map of *image_type*.
+
+        ``"opt"`` keeps the historical ``Protomap`` name, so existing projects
+        read unchanged; ``"dem"`` gets ``Protomap_dem``, so mapping a DEM bank no
+        longer overwrites the optical map.
+        """
+        types = ({str(image_type).lower()} if isinstance(image_type, str)
+                 else {str(t).lower() for t in image_type})
+        if types == {"dem"}:
+            return "Protomap_dem"
+        if types <= {"opt"}:
+            return "Protomap"
+        raise ValueError(
+            f"Unsupported raster-bank image_type {image_type!r}; use 'opt' or 'dem' "
+            f"(hillshade/slope are derived from 'dem' by sieve_bulk)"
+        )
+
     def get_georasters_map(self,
                            image_type: str | list[str] = "opt",
                            suffix: str = "") -> gpd.GeoDataFrame:
-        layername = f"Protomap"
+        layername = self._protomap_layer(image_type)
         try:
             return gpd.read_file(self.path_geodb, layer=layername, engine="pyogrio")
         except ValueError:
@@ -1322,17 +1423,38 @@ class Session:
         old = self._thumbs
         if self._legacy_layout:
             opt_root = pathlib.Path(self.path_raster_data)
-            glob_pattern = "**/opticals/*.tif"
+            glob_patterns = ["**/opticals/*.tif"]
         else:
             opt_root = self.path_root
-            glob_pattern = "*/optical/*.tif"
+            # Optical thumbs, then every DEM-derived type (elevation/<type>/).
+            glob_patterns = ["*/optical/*.tif"] + [
+                f"*/{ELEVATION_DIRNAME}/{t}/*.tif" for t in ELEVATION_IMAGE_TYPES
+            ]
 
+        candidates = [
+            target_path
+            for pattern in glob_patterns
+            for target_path in opt_root.glob(pattern=pattern)
+            if gmc_thumb.THUMBNAME_PATTERN.match(target_path.name)
+        ]
         new = gpd.GeoDataFrame([gmc_thumb.Thumb(target_path).to_pdserie()
-                                for target_path in filter(lambda x:
-                                                          gmc_thumb.THUMBNAME_PATTERN.match(x.name),
-                                                          list(opt_root.glob(pattern=glob_pattern)),)])
+                                for target_path in candidates])
 
-        # Comparison
+        # Rows written before th_type existed are optical by construction.
+        old = old.copy()
+        old["th_type"] = type_column(old, "th_type")
+
+        # Comparison.  An empty scan (no thumb on disk yet, or none matching
+        # THUMBNAME_PATTERN) has no th_path column to merge on — guard it
+        # rather than dying on an opaque KeyError('th_path').
+        if new.empty:
+            logger.warning(
+                f"update_thumbs: no thumb matching <pzone>_YYYY-MM-DD_<sensor>.tif "
+                f"found under {opt_root} ({', '.join(glob_patterns)}); pzone names "
+                f"may not contain '_'"
+            )
+            new = gpd.GeoDataFrame(columns=list(old.columns), geometry="geometry",
+                                   crs=old.crs)
         common = new.merge(old, on=["th_path"])
         stables = old[old.th_path.isin(common.th_path)]
         addeds = new[~new.th_path.isin(common.th_path)]
@@ -1730,6 +1852,7 @@ class Session:
         sensor_filter: str | None = None,
         pz_name: str = "",
         append: bool = False,
+        image_type: str = IMAGE_TYPE_OPTICAL,
     ) -> gpd.GeoDataFrame:
         """Build pairs for all pzones using the specified strategy and persist to geodatabase.
 
@@ -1751,17 +1874,24 @@ class Session:
             append: If ``True``, new pairs are concatenated with the existing
                 ``Pairs`` layer (duplicates resolved by ``pa_path``). If ``False``
                 (default), the layer is fully replaced.
+            image_type: Thumb image type to pair — ``"opt"`` (default),
+                ``"dem"``, ``"hillshade"``, ``"mdhillshade"`` or ``"slope"``.
+                Filters on the Thumbs layer's ``th_type`` column; pairs never
+                cross types. Pass ``append=True`` when adding a second type, or
+                the first type's pairs are replaced.
 
         Returns:
             GeoDataFrame of all pairs written to the ``Pairs`` layer.
         """
+        image_type = normalise_image_type(image_type)
         max_dt_days = _parse_dt_days(max_dt_days)
         min_dt_days = _parse_dt_days(min_dt_days)
         updated_frames = []
         for pz in self.get_pzones(pz_name):
             logger.info(f"Updating pairs for PZone: '{pz.pz_name}'")
             pairs_gdf = pz.get_valid_pairs_with_strategy_overview(
-                strategy, max_step, max_dt_days, min_dt_days=min_dt_days, sensor_filter=sensor_filter
+                strategy, max_step, max_dt_days, min_dt_days=min_dt_days,
+                sensor_filter=sensor_filter, image_type=image_type,
             )
             if not pairs_gdf.empty:
                 updated_frames.append(pairs_gdf)
@@ -1775,7 +1905,9 @@ class Session:
             new_pairs = gpd.GeoDataFrame(geometry=[], crs=self.epsg)
 
         if append and not self._pairs.empty:
-            combined = pd.concat([self._pairs, new_pairs], ignore_index=True)
+            existing = self._pairs.copy()
+            existing["pa_type"] = type_column(existing, "pa_type")
+            combined = pd.concat([existing, new_pairs], ignore_index=True)
             combined = combined.drop_duplicates(subset=["pa_path"]).reset_index(drop=True)
             updated = gpd.GeoDataFrame(combined, geometry="geometry", crs=self.epsg)
         else:
@@ -2043,9 +2175,19 @@ class Session:
                 sensor = re_searcher(ta.name.lower(), gmc_sensors.sensors(gmc_sensors.supported_sensors))
                 if sensor == "unknown":
                     sensor = re_searcher(ta.parent.name.lower(), gmc_sensors.sensors(gmc_sensors.supported_sensors))
+                sensor_normalized = gmc_sensors.sensor_normalize(sensor)
+            elif "dem" in image_types:
+                # A DEM carries no readable sensor metadata: the source
+                # (pleiades, spot6, lidar, uav, aerial, … or "dem") is inferred
+                # from the file then folder name.  Kept verbatim — the token
+                # becomes the thumb's filename field, so it must stay free of
+                # "_" and "-", which sensor_normalize would not guarantee.
+                sensor = gmc_sensors.infer_dem_sensor(ta)
+                sensor_normalized = {"sensor": sensor, "platform": sensor, "family": "dem"}
             else:
-                sensor = "dem" if "dem" in image_types else "unknown"
-            sensor_normalized = gmc_sensors.sensor_normalize(sensor)
+                sensor = "unknown"
+                sensor_normalized = gmc_sensors.sensor_normalize(sensor)
+            georaster_metadata['image_type'] = "dem" if "dem" in image_types and "opt" not in image_types else "opt"
             georaster_metadata['sensor'] = sensor_normalized['sensor']
             georaster_metadata['sensor_platform'] = sensor_normalized['platform']
             georaster_metadata['sensor_family'] = sensor_normalized['family']
@@ -2056,11 +2198,17 @@ class Session:
                 # Raising here would surface as "'NoneType' object has no attribute
                 # 'date'" from the generic handler below, which points nowhere near
                 # the cause. Name the file and what was searched instead.
+                hint = (
+                    "a multi-temporal DEM needs its acquisition date in the file "
+                    "name (e.g. 'site_2019-08-14_pleiades_dem.tif') — undated "
+                    "mosaics such as Copernicus or SRTM cannot be placed in time."
+                    if georaster_metadata['image_type'] == "dem" else
+                    "for a band-scoped filename (e.g. Sentinel-2 'B08.tif') the date "
+                    "can only come from the metadata, so check it was downloaded."
+                )
                 logger.warning(
                     f"Skip {ta.name}: no acquisition date found. Neither the filename nor "
-                    f"any .xml/.dim sidecar in {ta.parent.name}/ yielded one — for a "
-                    f"band-scoped filename (e.g. Sentinel-2 'B08.tif') the date can only "
-                    f"come from the metadata, so check it was downloaded."
+                    f"any .xml/.dim sidecar in {ta.parent.name}/ yielded one — {hint}"
                 )
                 return None
             georaster_metadata["acq_datetime"] = acq_datetime
@@ -2105,7 +2253,12 @@ class Session:
         Args:
             georasters_bank_path (str | pathlib.Path): Path to the georaster bank directory.
             extensions (str | Sequence[str], optional): File extensions to include. Defaults to None.
-            image_type (str, optional): Type of image to process. Defaults to "opt".
+            image_type (str, optional): ``"opt"`` (default) or ``"dem"``. With
+                ``"dem"`` the sensor is inferred from the file/folder name by
+                :func:`~geomulticorr.correlation.supported_sensors.infer_dem_sensor`
+                (``pleiades``, ``spot6``, ``lidar``, ``uav``, ``aerial``… or
+                ``dem``), and the map is written to ``Protomap_dem`` instead of
+                ``Protomap``. A DEM still needs a date in its name or sidecar.
             epsg_code (str | int | None, optional): EPSG code for the target CRS. Defaults to None.
             suffix (str, optional): Suffix to append to output files. Defaults to "".
             max_workers (int, optional): Maximum number of workers for parallel processing. Defaults to None.
@@ -2148,6 +2301,7 @@ class Session:
         if not targets:
             raise FileNotFoundError(f"No raster files with extensions {extensions} found in {georasters_bank_path}")
         _image_types = {image_type.lower()} if isinstance(image_type, str) else {str(t).lower() for t in image_type}
+        protomap_layer = self._protomap_layer(image_type)  # validates early
         # Choose a project/target CRS (prefer your session's EPSG)
         target_crs = f"EPSG:{epsg_code}" if epsg_code is not None else f"EPSG:{self.epsg}"
         
@@ -2194,7 +2348,7 @@ class Session:
         df = pd.DataFrame(rows)
         layer_crs = target_crs or (df["src_crs"].dropna().iloc[0] if not df["src_crs"].dropna().empty else None)
         features_gdf = gpd.GeoDataFrame(df, geometry="geometry", crs=layer_crs)
-        features_gdf.to_file(self.path_geodb, layer=f"Protomap")
+        features_gdf.to_file(self.path_geodb, layer=protomap_layer)
         if save_georaster_bank:
             self.save_georaster_bank(features_gdf)
         return features_gdf
@@ -2548,7 +2702,7 @@ class Session:
             out_dir = self.path_figures / subdir
 
         if stem is None:
-            # _last_pairs_params holds exactly the six keys pairs_figure_stem takes
+            # _last_pairs_params holds exactly the seven keys pairs_figure_stem takes
             # (and that update_pairs accepts) — see the note in _stash().
             params = getattr(self, "_last_pairs_params", None) or {"strategy": "committed"}
             stem = pairs_figure_stem(view, **params)
@@ -2597,7 +2751,7 @@ class Session:
     #: Keyword arguments ``explore_pairs_strategy`` accepts through ``**defaults``.
     #: Anything else is a typo and raises, rather than being silently ignored.
     _EXPLORER_DEFAULTS: set[str] = {
-        "max_step", "max_dt_days", "min_dt_days", "sensor_filter",
+        "max_step", "max_dt_days", "min_dt_days", "sensor_filter", "image_type",
     }
 
     # ------------------------------------------------------------------ #
@@ -2776,8 +2930,10 @@ class Session:
         :param formats: Formats written when *savefig*; any of
             ``"html"``, ``"png"``, ``"jpg"``, ``"pdf"``, ``"svg"``.
         :param defaults: ``max_step``, ``max_dt_days``, ``min_dt_days``,
-            ``sensor_filter`` — initial control values when interactive, the actual
-            parameters when not.  ``max_step`` defaults to 2 in both modes and is
+            ``sensor_filter``, ``image_type`` — initial control values when
+            interactive, the actual parameters when not.  ``image_type``
+            (default ``"opt"``) picks which thumbs are paired; the dropdown only
+            appears when the Thumbs layer holds more than one type.  ``max_step`` defaults to 2 in both modes and is
             clamped to the largest useful value for the data.
         :returns: An ``ipywidgets.VBox`` when *interactive*, else
             ``(frame, fig)``.
@@ -2806,16 +2962,26 @@ class Session:
         pzones = self.get_pzones(pz_name)
         thumbs_by_pz: dict[str, list] = {}
         for pz in pzones:
-            ths = sorted(pz.get_valid_thumbs(), key=lambda t: t.th_date_datetime)
+            # Every image type is read once here; the type is then a pure
+            # in-memory filter, like the sensor substring.
+            ths = sorted(pz.get_valid_thumbs(image_type=None), key=lambda t: t.th_date_datetime)
             thumbs_by_pz[pz.pz_name] = ths
         pz_options = ["<all>"] + list(thumbs_by_pz.keys())
+        init_type = normalise_image_type(defaults.get("image_type"))
+        type_options = sorted(
+            {getattr(t, "th_type", IMAGE_TYPE_OPTICAL) for ths in thumbs_by_pz.values() for t in ths}
+            | {init_type},
+            key=IMAGE_TYPES.index,
+        )
 
-        def _selected_thumbs(sel_pz: str, sfilter: str) -> list[tuple[str, list]]:
+        def _selected_thumbs(sel_pz: str, sfilter: str,
+                             itype: str = IMAGE_TYPE_OPTICAL) -> list[tuple[str, list]]:
             """``(pzone name, thumbs)`` per pzone under the current filters.
 
             The sensor filter is a substring match on the thumb path — the same
             semantics as ``get_valid_thumbs(sensor_filter=…)``, applied here to the
-            list read once at setup so no raster is reopened.
+            list read once at setup so no raster is reopened.  *itype* keeps one
+            image type, since pairs never cross types.
             """
             out = []
             for pzn, ths in thumbs_by_pz.items():
@@ -2823,11 +2989,14 @@ class Session:
                     continue
                 out.append(
                     (pzn,
-                     [t for t in ths if (not sfilter or sfilter.lower() in t.th_path.lower())])
+                     [t for t in ths
+                      if getattr(t, "th_type", IMAGE_TYPE_OPTICAL) == itype
+                      and (not sfilter or sfilter.lower() in t.th_path.lower())])
                 )
             return out
 
-        def _max_useful_step(sel_pz: str | None = None, sfilter: str | None = None) -> int:
+        def _max_useful_step(sel_pz: str | None = None, sfilter: str | None = None,
+                             itype: str | None = None) -> int:
             """Largest ``max_step`` that still adds pairs for the current selection.
 
             Pairing runs per pzone, so with ``"<all>"`` the bound comes from the
@@ -2842,7 +3011,9 @@ class Session:
                 sel_pz = c_pz.value
             if sfilter is None:
                 sfilter = (c_sensor.value or "").strip()
-            counts = [len(sel) for _, sel in _selected_thumbs(sel_pz, sfilter)]
+            if itype is None:
+                itype = c_type.value
+            counts = [len(sel) for _, sel in _selected_thumbs(sel_pz, sfilter, itype)]
             return max(1, max(counts, default=1) - 1)
 
         def _step_tooltip(ceiling: int) -> str:
@@ -2852,14 +3023,15 @@ class Session:
             )
 
         def _build_frame(strat: str, max_step: int | None, max_dt: int | None,
-                         min_dt: int | None, sfilter: str, sel_pz: str) -> pd.DataFrame:
+                         min_dt: int | None, sfilter: str, sel_pz: str,
+                         itype: str = IMAGE_TYPE_OPTICAL) -> pd.DataFrame:
             """Candidate pairs for an explicit parameter set.
 
             Pure — no I/O, no ``Thumb``/``Pair`` construction — so it is equally
             usable from the interactive loop and from a headless call.
             """
             frames: list[pd.DataFrame] = []
-            for pzn, sel in _selected_thumbs(sel_pz, sfilter):
+            for pzn, sel in _selected_thumbs(sel_pz, sfilter, itype):
                 idx_pairs = gmc_pzone._strategy_pair_indices(len(sel), strat, max_step)
                 frames.append(
                     pairs_frame_from_indices(
@@ -2904,8 +3076,9 @@ class Session:
             return f"Pairing preview — {n_drawn} {noun}{suffix} [{strat}]"
 
         def _stash_params(strat: str, max_step: int | None, max_dt: int | None,
-                          min_dt: int | None, sfilter: str | None, pzn: str):
-            # NOTE: exactly the six keys update_pairs(**params) accepts — adding
+                          min_dt: int | None, sfilter: str | None, pzn: str,
+                          itype: str = IMAGE_TYPE_OPTICAL):
+            # NOTE: exactly the seven keys update_pairs(**params) accepts — adding
             # any view/style key here would raise TypeError at that call.
             self._last_pairs_params = dict(
                 strategy=strat,
@@ -2914,12 +3087,13 @@ class Session:
                 min_dt_days=min_dt or None,
                 sensor_filter=(sfilter or "").strip() or None,
                 pz_name=pzn,
+                image_type=itype,
             )
 
         # ── headless path: results only, no widgets, no display ──
         if not interactive:
             sfilter = str(defaults.get("sensor_filter", "") or "").strip()
-            ceiling = _max_useful_step("<all>", sfilter)
+            ceiling = _max_useful_step("<all>", sfilter, init_type)
             max_step = min(max(int(defaults.get("max_step", 2) or 1), 1), ceiling)
             # parse_dt_days, not int(): "1Y"/"6M"/"30D" are the forms
             # update_pairs already documents, so the same value works in both.
@@ -2929,9 +3103,9 @@ class Session:
             frame = _build_frame(
                 strategy,
                 max_step if strategy in ("step", "redundancy") else None,
-                max_dt, min_dt, sfilter, "<all>",
+                max_dt, min_dt, sfilter, "<all>", init_type,
             )
-            _stash_params(strategy, max_step, max_dt, min_dt, sfilter, pz_name)
+            _stash_params(strategy, max_step, max_dt, min_dt, sfilter, pz_name, init_type)
 
             view_kwargs = _view_defaults(view)
             title = _title_for(frame, view, strategy, view_kwargs.get("dedupe", False))
@@ -2963,7 +3137,7 @@ class Session:
         # is a no-op.  It is re-fitted by _sync_step_range() when the pzone or
         # sensor filter changes the number of acquisitions in play.
         _step_ceiling = _max_useful_step(
-            "<all>", str(defaults.get("sensor_filter", "") or "").strip()
+            "<all>", str(defaults.get("sensor_filter", "") or "").strip(), init_type
         )
         c_step = widgets.IntSlider(
             value=min(max(int(defaults.get("max_step", 2)), 1), _step_ceiling),
@@ -2984,6 +3158,9 @@ class Session:
         c_sensor = widgets.Text(value=str(defaults.get("sensor_filter", "") or ""),
                                 description="sensor")
         c_pz = widgets.Dropdown(options=pz_options, value="<all>", description="pzone")
+        # Image type: only worth showing when there is a choice to make.
+        c_type = widgets.Dropdown(options=type_options, value=init_type, description="type")
+        c_type.layout.display = None if len(type_options) > 1 else "none"
         # view-specific controls (hidden unless the active view uses them)
         c_colorby = widgets.Dropdown(options=["dt", "direction", "sensor", "pzone"],
                                      value="dt", description="colour")
@@ -3047,16 +3224,18 @@ class Session:
                 _read_dt(c_mindt, "min_dt"),
                 (c_sensor.value or "").strip(),
                 c_pz.value,
+                c_type.value,
             )
 
         def _stash():
             # Resolved integer days, never the typed string: the stash records
             # what was actually applied, and update_pairs(**params) is pinned by
-            # test to accept exactly these six keys.
+            # test to accept exactly these seven keys.
             _stash_params(
                 c_strategy.value, c_step.value,
                 _read_dt(c_maxdt, "max_dt"), _read_dt(c_mindt, "min_dt"),
                 c_sensor.value, "" if c_pz.value == "<all>" else c_pz.value,
+                c_type.value,
             )
 
         # A plain ``go.Figure`` redrawn inside an ``Output`` is used instead of a
@@ -3215,7 +3394,7 @@ class Session:
             finally:
                 b_save.disabled = False
 
-        for c in (c_strategy, c_step, c_maxdt, c_mindt, c_sensor, c_pz):
+        for c in (c_strategy, c_step, c_maxdt, c_mindt, c_sensor, c_pz, c_type):
             c.observe(_update, names="value")
         for c in (c_view, c_colorby, c_bins, c_dedupe, c_arrows, c_mirror):
             c.observe(_redraw, names="value")
@@ -3223,7 +3402,7 @@ class Session:
 
         _update()
 
-        row1 = widgets.HBox([c_view, c_strategy, c_step, c_pz])
+        row1 = widgets.HBox([c_view, c_strategy, c_step, c_pz, c_type])
         row2 = widgets.HBox([c_maxdt, c_mindt, c_sensor])
         row3 = widgets.HBox([c_colorby, c_bins, c_dedupe, c_arrows, c_mirror])
         row4 = widgets.HBox([c_formats, b_save])
@@ -3405,6 +3584,12 @@ class Session:
         canonical_bounds: "object | None" = None,
         canonical_grid_size: "tuple[int, int] | None" = None,
         print_summary: bool = True,
+        terrain_products: Sequence[str] = ("mdhillshade", "slope"),
+        keep_dem: bool = True,
+        hillshade_azimuth: float = 315.0,
+        hillshade_altitude: float = 45.0,
+        md_azimuths: Sequence[float] = DEFAULT_MD_AZIMUTHS,
+        z_factor: float = 1.0,
     ) -> dict[str, list[pathlib.Path]]:
         """Bulk sieve: crop all mosaics in ``georasters_map`` to each pzone AOI.
 
@@ -3416,7 +3601,22 @@ class Session:
         Args:
             georasters_map: Georasters map (as returned by ``get_georasters_map``).
                 If None, loaded from the session using ``image_type``/``suffix``.
-            image_type: 'opt' or 'dem'.
+            image_type: What the map holds and what is written:
+
+                - ``"opt"`` — optical thumbs, ``<pz>/optical/<pz>_<date>_<sensor>.tif``.
+                - ``"dem"`` — **multi-temporal DEMs**. Each ``(date, sensor)``
+                  group is cropped, reprojected and merged onto the pzone's
+                  canonical grid as float32, *then* each of *terrain_products*
+                  is derived from that merged DEM and written to
+                  ``<pz>/elevation/<product>/<pz>_<date>_<sensor>.tif`` (the DEM
+                  itself to ``elevation/dem/`` when *keep_dem*). Deriving after
+                  the merge, never per tile, keeps gradient artefacts off mosaic
+                  seams and computes slope/shading at the resolution that is
+                  correlated. Reads the ``Protomap_dem`` layer.
+                - ``"reference_dem"`` — the single static correction DEM,
+                  ``reference_dem/<pz>_dem.tif`` (what ``"dem"`` meant before
+                  multi-temporal DEMs; :meth:`build_reference_dem` is the
+                  usual route). Reads the ``Protomap_dem`` layer.
             suffix: Suffix on the georasters map name.
             target_resolution: Output pixel size in session CRS units.
             resampling_method: Rasterio resampling name.
@@ -3434,14 +3634,63 @@ class Session:
                 If provided, used for all pzones instead of computing per-pzone.
             canonical_grid_size: Optional exact output grid size (width, height).
                 If provided, used for all pzones instead of computing per-pzone.
+            terrain_products: ``"dem"`` only — products derived from each DEM,
+                any of ``"hillshade"`` (single light), ``"mdhillshade"``
+                (multidirectional) and ``"slope"`` (degrees). Hillshades are
+                written as uint8 ``1..255`` with nodata 0, slope as float32 with
+                nodata -9999.
+            keep_dem: ``"dem"`` only — also write the cropped float32 DEM thumb.
+            hillshade_azimuth: Light azimuth of ``"hillshade"`` (compass °).
+            hillshade_altitude: Light altitude of both hillshades (°).
+            md_azimuths: Light azimuths averaged by ``"mdhillshade"``.
+            z_factor: Vertical exaggeration applied to both hillshades.
 
         Returns:
-            Dict mapping pzone name to the list of thumb paths written.
+            Dict mapping pzone name to the list of thumb paths written (for
+            ``"dem"``: every product file, skipped ones included).
+
+        After sieving, run :meth:`update_thumbs` to register the thumbs, then
+        :meth:`update_pairs` with ``image_type=<product>``.
         """
         assert len(self.get_pzones_overview()) > 0, "no pzone registered for this project"
 
+        image_type = str(image_type).lower()
+        if image_type not in ("opt", "dem", "reference_dem"):
+            raise ValueError(
+                f"Unsupported image_type: {image_type!r}; use 'opt', 'dem' or 'reference_dem'"
+            )
+        if image_type == "dem":
+            terrain_products = tuple(terrain_products or ())
+            bad = set(terrain_products) - set(TERRAIN_PRODUCTS)
+            if bad:
+                raise ValueError(
+                    f"Unknown terrain product(s) {sorted(bad)}; expected any of {TERRAIN_PRODUCTS}"
+                )
+            if not terrain_products and not keep_dem:
+                raise ValueError("Nothing to write: terrain_products is empty and keep_dem=False")
+            logger.info(
+                "image_type='dem' writes dated DEM thumbs and their terrain products "
+                "under elevation/; use 'reference_dem' (or build_reference_dem) for "
+                "the correction DEM"
+            )
+            # Elevations must survive the crop/reproject/merge: a uint16 cast
+            # would truncate decimals and wrap negative values.
+            if not np.issubdtype(np.dtype(out_dtype), np.floating):
+                logger.settings(f"out_dtype {out_dtype!r} → 'float32' for DEM sieving")
+                out_dtype = "float32"
+            terrain_params = dict(azimuth=hillshade_azimuth, altitude=hillshade_altitude,
+                                  md_azimuths=tuple(md_azimuths), z_factor=z_factor)
+
         if georasters_map is None:
-            georasters_map = self.get_georasters_map(image_type, suffix)
+            georasters_map = self.get_georasters_map(
+                "dem" if image_type == "reference_dem" else image_type, suffix
+            )
+            if georasters_map is None:
+                raise ValueError(
+                    f"No raster-bank map for image_type={image_type!r}; run "
+                    f"map_georasters_bank(image_type="
+                    f"{'dem' if image_type != 'opt' else 'opt'!r}) first"
+                )
 
         logger.info(f"Map epsg : {georasters_map.crs}")
         logger.info(f"Target resolution: {target_resolution} (EPSG:{self.epsg})")
@@ -3474,11 +3723,17 @@ class Session:
                     if not p.exists():
                         p.mkdir(parents=True)
             elif image_type == "dem":
+                # (image type, folder) of every file one DEM group produces.
+                dem_outputs = ([("dem", self.thumb_dir(pz_name, "dem"))] if keep_dem else []) + [
+                    (prod, self.thumb_dir(pz_name, prod)) for prod in terrain_products
+                ]
+                for t, folder in dem_outputs:
+                    folder.mkdir(parents=True, exist_ok=True)
+                    self.pair_dir(pz_name, t).mkdir(parents=True, exist_ok=True)
+            else:  # reference_dem
                 pz_dem_dir = self.pz_dir(pz_name, PZ_KIND_REFERENCE_DEM)
                 if not pz_dem_dir.exists():
                     pz_dem_dir.mkdir(parents=True)
-            else:
-                raise ValueError(f"Unsupported image_type: {image_type}")
 
             selection = georasters_map[georasters_map["geometry"].intersects(pz["geometry"])]
             logger.info(f"Intersecting rasters: {len(selection)}")
@@ -3513,18 +3768,27 @@ class Session:
 
                     if image_type == "opt":
                         thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}.tif"
-                        thumb_path = pathlib.Path(pz_opticals, thumb_name)
+                        outputs = [(IMAGE_TYPE_OPTICAL, pathlib.Path(pz_opticals, thumb_name))]
                     elif image_type == "dem":
+                        # Same <pz>_<date>_<sensor> name in every product folder:
+                        # the folder carries the type.
+                        thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}.tif"
+                        outputs = [(t, pathlib.Path(folder, thumb_name)) for t, folder in dem_outputs]
+                    else:  # reference_dem
                         thumb_name = f"{pz['pz_name']}_dem.tif"
-                        thumb_path = pathlib.Path(pz_dem_dir, thumb_name)
-                    else:
-                        raise ValueError(f"Unsupported image_type: {image_type}")
+                        outputs = [("reference_dem", pathlib.Path(pz_dem_dir, thumb_name))]
 
                     thumb_name_text.plain = thumb_name
                     live.refresh()
 
-                    if skip_existing and thumb_path.exists():
-                        pz_written.append(thumb_path)
+                    # skip_existing is judged per output file: an existing DEM
+                    # whose slope is missing only computes the slope.
+                    todo = [(t, path) for t, path in outputs
+                            if not (skip_existing and path.exists())]
+                    for t, path in outputs:
+                        if (t, path) not in todo:
+                            pz_written.append(path)
+                    if not todo:
                         _summary_rows.append({"name": thumb_name, "sensor": sensor, "status": "↷ skipped"})
                         progress.advance(task)
                         live.refresh()
@@ -3569,9 +3833,18 @@ class Session:
                             use_ref_bounds=False,
                         )
 
-                    thumb.to_file(thumb_path, dtype=out_dtype)
-                    pz_written.append(thumb_path)
-                    _summary_rows.append({"name": thumb_name, "sensor": sensor, "status": "✓ done"})
+                    if image_type == "dem":
+                        pz_written.extend(
+                            self._write_dem_products(thumb, todo, terrain_params)
+                        )
+                        done = ", ".join(t for t, _ in todo)
+                        _summary_rows.append({"name": thumb_name, "sensor": sensor,
+                                              "status": f"✓ {done}"})
+                    else:
+                        thumb_path = todo[0][1]
+                        thumb.to_file(thumb_path, dtype=out_dtype)
+                        pz_written.append(thumb_path)
+                        _summary_rows.append({"name": thumb_name, "sensor": sensor, "status": "✓ done"})
                     del thumb, fully
                     progress.advance(task)
                     live.refresh()
@@ -3583,6 +3856,51 @@ class Session:
 
         return written
     
+    #: Nodata written into DEM-derived float thumbs (DEM and slope).  Hillshades
+    #: are uint8 and use 0, like the optical thumbs.
+    DEM_FLOAT_NODATA: float = -9999.0
+
+    @classmethod
+    def _write_dem_products(cls, dem: gu.Raster, todo: list[tuple[str, pathlib.Path]],
+                            terrain_params: dict) -> list[pathlib.Path]:
+        """Write the DEM and/or its terrain products for one sieved DEM group.
+
+        *dem* is already on the pzone's canonical grid; every product is derived
+        from it with the true pixel size, so all dates share one lattice.
+
+        Each file is built with ``gu.Raster.from_array(..., nodata=…)`` rather
+        than ``dem.copy()``, so it carries its own dtype and nodata instead of
+        inheriting the DEM's.
+        """
+        arr = np.ma.masked_invalid(np.ma.asarray(dem.data, dtype=np.float64))
+        if arr.ndim == 3:
+            arr = arr[0]
+        z = arr.filled(np.nan)
+        res_x, res_y = abs(float(dem.res[0])), abs(float(dem.res[1]))
+        nd = cls.DEM_FLOAT_NODATA
+
+        written = []
+        for t, path in todo:
+            if t == "dem":
+                data = np.where(np.isfinite(z), z, nd).astype(np.float32)
+                nodata = nd
+            else:
+                prod = terrain_product(t, z, res_x, res_y, **terrain_params)
+                if t in ("hillshade", "mdhillshade"):
+                    data, nodata = shade_to_uint8(prod), 0
+                else:  # slope, degrees
+                    data = np.where(np.isfinite(prod), prod, nd).astype(np.float32)
+                    nodata = nd
+            # Masked explicitly: handing geoutils a plain array that contains
+            # the nodata value makes it warn and mask it anyway.
+            out = gu.Raster.from_array(np.ma.masked_equal(data, nodata),
+                                       transform=dem.transform, crs=dem.crs,
+                                       nodata=nodata)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            out.to_file(path)
+            written.append(path)
+        return written
+
     def save_correlation_figure(
         self,
         view: str = "design_map",
@@ -3675,6 +3993,7 @@ class Session:
         self,
         criterias: str | list[str] = "",
         pz_name: str = "",
+        image_type: str | None = None,
     ) -> list[dict]:
         """Per-pair facts the derivation needs, read once — **from tables only**.
 
@@ -3692,6 +4011,10 @@ class Session:
 
         :param criterias: Passed to :meth:`get_pairs_overview`.
         :param pz_name: Restrict to one pzone; ``""`` for all.
+        :param image_type: Restrict to one image type; ``None`` for all.
+            Groups are ``(sensor, Δt bin)``, so they only mean something
+            within one type — and the plan is keyed by ``pa_key``, which is
+            unique only within one type.
         :returns: One dict per pair, ready for
             :func:`~geomulticorr.utils._corrparams_frame.corrparams_frame_from_pairs`.
         """
@@ -3700,6 +4023,8 @@ class Session:
             return []
         if pz_name:
             overview = overview[overview["pa_pz_name"] == pz_name]
+        if image_type is not None:
+            overview = overview[type_column(overview, "pa_type") == normalise_image_type(image_type)]
 
         resolutions = self._thumb_resolution_lookup()
 
@@ -3791,6 +4116,7 @@ class Session:
         self,
         criterias: str | list[str] = "",
         pz_name: str = "",
+        image_type: str | None = None,
         **assumptions,
     ) -> pd.DataFrame:
         """Derive a correlation-parameters frame from the committed pairs.
@@ -3810,7 +4136,7 @@ class Session:
             empty_corrparams_frame,
         )
 
-        facts = self._corrparams_pair_facts(criterias, pz_name)
+        facts = self._corrparams_pair_facts(criterias, pz_name, image_type)
         if not facts:
             return empty_corrparams_frame()
 
@@ -3836,6 +4162,7 @@ class Session:
         formats: str | list[str] | tuple[str, ...] = ("html", "png"),
         plan_name: str = "default",
         write_plan: bool = True,
+        image_type: str | None = None,
         **defaults,
     ):
         """Choose ASP correlation parameters for a whole archive, interactively.
@@ -3863,6 +4190,11 @@ class Session:
         :param formats: Any of ``html``, ``png``, ``jpg``, ``pdf``, ``svg``.
         :param plan_name: Name of the correlation plan written.
         :param write_plan: Write the plan JSON. False derives and plots only.
+        :param image_type: Restrict to one image type (``"opt"``,
+            ``"mdhillshade"``, …); ``None`` keeps every pair. Pass it whenever
+            the Pairs layer holds more than one type: the plan is keyed by
+            ``pa_key``, and ``prepare_pairs_correlation`` refuses a plan whose
+            keys occur in several types.
         :param defaults: Initial values; only
             :attr:`_CORRPARAMS_EXPLORER_DEFAULTS` keys are accepted, anything
             else raises rather than being silently ignored.
@@ -3898,7 +4230,7 @@ class Session:
             )
 
         # ── expensive setup, ONCE ─────────────────────────────────────────── #
-        facts = self._corrparams_pair_facts(criterias, pz_name)
+        facts = self._corrparams_pair_facts(criterias, pz_name, image_type)
 
         initial = {
             "velocity_m_yr": 1.0, "footprint_m": 60.0, "c_px": 0.15, "k": 3.0,
@@ -4623,6 +4955,10 @@ class Session:
         print_summary: bool = True,
         plan: str | pathlib.Path | dict | None = None,
         params_by_pair: Mapping[str, dict] | None = None,
+        image_type: str | None = None,
+        nodata_value: float | None = None,
+        individual_normalization: bool | None = None,
+        pre_normalization: bool | None = None,
     ) -> list[pathlib.Path]:
         """Prepare the output directory and bash script for each pair.
 
@@ -4657,18 +4993,49 @@ class Session:
                 and the pair-to-group assignment.
             params_by_pair: ``{pa_key: {...}}`` pinning individual pairs, which
                 wins over both the scalars and the plan.
+            image_type: Keep only pairs of this image type (``"opt"``,
+                ``"hillshade"``, ``"mdhillshade"``, ``"slope"``, ``"dem"``);
+                ANDed with *criterias*. ``None`` keeps every type.
+            nodata_value / individual_normalization / pre_normalization: ASP
+                input encoding (``nodata-value``, ``individually-normalize``,
+                ``force-use-entire-range``). ``None`` takes the per-pair
+                default of its image type (:data:`CORR_INPUT_DEFAULTS`): nothing
+                for optical, which keeps its settings file unchanged; nodata
+                ``0`` for hillshades and ``-9999`` for slope/DEM, with
+                individual normalisation, for elevation types. Explicit values
+                win for every pair.
 
         Returns:
             List of paths to the generated bash scripts.
         """
         from geomulticorr.correlation import ASP
         from geomulticorr.correlation._correlation_plan import (
+            input_params_differ_from_file,
             read_correlation_plan,
             resolve_pair_params,
         )
 
         asp = ASP(session=self, asp_bin_dir=asp_bin_dir)
-        pairs = self.get_pairs(criterias)
+        pairs = self.get_pairs(criterias, image_type=image_type)
+
+        # The plan and params_by_pair are keyed by pa_key, which is unique only
+        # within one image type: an optical and a hillshade pair of the same
+        # dates and sensor share it.  Applying a keyed setting to both would be
+        # a guess, so refuse and ask for image_type.
+        if plan is not None or params_by_pair:
+            key_counts = collections.Counter(p.pa_key for p in pairs)
+            dupes = sorted(k for k, n in key_counts.items() if n > 1)
+            if dupes:
+                raise ValueError(
+                    f"{len(dupes)} pa_key(s) occur in more than one image type "
+                    f"(e.g. {dupes[0]!r}), so plan/params_by_pair would apply "
+                    f"ambiguously; pass image_type= to select one type"
+                )
+        explicit_input = {
+            "nodata_value": nodata_value,
+            "individual_normalization": individual_normalization,
+            "pre_normalization": pre_normalization,
+        }
 
         if not pairs:
             logger.warning("No pairs found for the given criteria. Nothing to prepare.")
@@ -4746,6 +5113,9 @@ class Session:
                 rec["group"] = group if source != "scalar" else "scalar"
                 if source == "override":
                     rec["group"] = f"{group or '—'} (override)"
+                input_params = _corr_input_params(
+                    getattr(pair, "pa_type", IMAGE_TYPE_OPTICAL), explicit_input
+                )
 
                 if all(pair.check_corr_outputs().values()) and not overwrite:
                     rec["script"] = "skipped (complete)"
@@ -4777,7 +5147,7 @@ class Session:
                     changed = self._corr_params_changed(
                         params_file, asp, effective,
                         save_disparity_difference=save_disparity_difference,
-                    )
+                    ) or input_params_differ_from_file(params_file, input_params)
                     if not changed:
                         bash_scripts.append(bash_path)
                         rec["script"] = "reused"
@@ -4795,6 +5165,7 @@ class Session:
                     save_disparity_difference=save_disparity_difference,
                     params_file_path=params_file,
                     **_asp_param_kwargs(effective),
+                    **input_params,
                 )
                 rec["params"] = params_file.name
 
@@ -4850,6 +5221,7 @@ class Session:
         correval: bool = True,
         overwrite_scripts: bool = False,
         print_summary: bool = True,
+        image_type: str | None = None,
     ) -> list[int]:
         """Prepare (if needed) and launch correlation for all pairs matching *criterias*.
 
@@ -4877,11 +5249,13 @@ class Session:
                 Forwarded to ``parallel_stereo`` inside the script.
             clean: Delete intermediate ASP files after a successful run.
             correval: Embed a ``corr_eval`` call in the generated bash script.
+            image_type: Keep only pairs of this image type; ANDed with
+                *criterias*. ``None`` keeps every type.
 
         Returns:
             List of return codes (one per pair; 0 = success / submitted).
         """
-        pairs = self.get_pairs(criterias)
+        pairs = self.get_pairs(criterias, image_type=image_type)
         if not pairs:
             logger.warning("No pairs found matching criterias.")
             return []
@@ -4988,6 +5362,7 @@ class Session:
         clean: bool = True,
         asp_bin_dir: str | pathlib.Path | None = None,
         print_summary: bool = True,
+        image_type: str | None = None,
     ) -> None:
         """Sync geodatabase status and optionally clean after OAR jobs complete.
 
@@ -5000,12 +5375,13 @@ class Session:
 
         Args:
             criterias: Same filter syntax as :meth:`get_pairs`.
+            image_type: Keep only pairs of this image type (``"opt"``, ``"hillshade"``, ``"mdhillshade"``, ``"slope"``, ``"dem"``); ANDed with *criterias*. Prefer it over a criterias string: ``"hillshade"`` is also a substring of ``"mdhillshade"``.
             clean: Delete intermediate ASP files for completed pairs (default ``True``).
             asp_bin_dir: Optional path to the ASP bin directory (only used when *clean* is ``True``).
         """
         from geomulticorr.correlation import ASP
 
-        pairs = self.get_pairs(criterias)
+        pairs = self.get_pairs(criterias, image_type=image_type)
         if not pairs:
             logger.warning("sync_pairs_after_cluster: no pairs found.")
             return
@@ -5061,6 +5437,7 @@ class Session:
         criterias: str | list[str] = "",
         dry_run: bool = False,
         print_summary: bool = True,
+        image_type: str | None = None,
     ) -> list[pathlib.Path]:
         """Delete all correlation outputs for matching pairs, resetting them to 'clipped' status.
 
@@ -5071,13 +5448,14 @@ class Session:
 
         Args:
             criterias: Filter pairs — same syntax as :meth:`get_pairs`.
+            image_type: Keep only pairs of this image type (``"opt"``, ``"hillshade"``, ``"mdhillshade"``, ``"slope"``, ``"dem"``); ANDed with *criterias*. Prefer it over a criterias string: ``"hillshade"`` is also a substring of ``"mdhillshade"``.
             dry_run: List files that would be deleted without removing them.
             print_summary: Print a summary table after completion.
 
         Returns:
             List of deleted (or would-be-deleted) file paths.
         """
-        pairs = self.get_pairs(criterias)
+        pairs = self.get_pairs(criterias, image_type=image_type)
         if not pairs:
             logger.warning("reset_pairs_outputs: no pairs found.")
             return []
@@ -5151,6 +5529,7 @@ class Session:
         print_summary: bool = True,
         sync_geodb: bool = True,
         verbose: bool = False,
+        image_type: str | None = None,
     ) -> dict:
         """Extract EW/NS displacements and compute raw stats for all complete pairs.
 
@@ -5160,6 +5539,7 @@ class Session:
 
         Args:
             criterias: Same filter syntax as :meth:`get_pairs`.
+            image_type: Keep only pairs of this image type (``"opt"``, ``"hillshade"``, ``"mdhillshade"``, ``"slope"``, ``"dem"``); ANDed with *criterias*. Prefer it over a criterias string: ``"hillshade"`` is also a substring of ``"mdhillshade"``.
             save_plot: Save the 9-panel control figure for each pair.
             overwrite: Re-process pairs that already have EW/NS files on disk.
             target_resolution: If provided, resample EW, NS, and NCC outputs to this
@@ -5191,7 +5571,7 @@ class Session:
         """
         import geopandas as gpd
 
-        pairs = self.get_pairs(criterias)
+        pairs = self.get_pairs(criterias, image_type=image_type)
         results: dict = {}
 
         # Pre-compute one canonical grid per pzone so all pairs within the same pzone
@@ -5308,6 +5688,7 @@ class Session:
         print_summary: bool = True,
         sync_geodb: bool = True,
         verbose: bool = False,
+        image_type: str | None = None,
         **kwargs,
     ) -> dict:
         """Apply a filter and/or correction pipeline to all processed pairs.
@@ -5339,6 +5720,7 @@ class Session:
                 instance (or any :class:`~geomulticorr.corrections.BaseMask`).
                 ``None`` skips filtering (all valid pixels used as stable ground).
             criterias: Same filter syntax as :meth:`get_pairs`.
+            image_type: Keep only pairs of this image type (``"opt"``, ``"hillshade"``, ``"mdhillshade"``, ``"slope"``, ``"dem"``); ANDed with *criterias*. Prefer it over a criterias string: ``"hillshade"`` is also a substring of ``"mdhillshade"``.
             overwrite: Re-process pairs whose corrected files already exist.
                 Pairs corrected before the stable-ground masks were persisted
                 are re-processed regardless when a *filter_pipeline* is given,
@@ -5398,7 +5780,7 @@ class Session:
             )
         plot_opts = PLOT_LEVELS[plot_level]
 
-        pairs = self.get_pairs(criterias)
+        pairs = self.get_pairs(criterias, image_type=image_type)
         results: dict = {}
 
         _RAMP_TOPO_CLASSES = {

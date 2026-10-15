@@ -31,6 +31,7 @@ from osgeo import gdal
 import geoutils as gu
 
 import geomulticorr.core.pair as gmc_pair
+from geomulticorr.utils._image_types import image_type_of_thumb_path
 
 THUMBNAME_PATTERN = re.compile(
     "^([a-z]|[A-Z]|-|[0-9])+_[0-9]{4}(-[0-9]{2}){2}_.*.(tif|TIF)$"
@@ -71,6 +72,8 @@ class Thumb:
         :ivar th_date_datetime: Acquisition date as pandas Timestamp.
         :ivar geometry: Shapely geometry of the raster footprint.
         :ivar th_valid: Validation flag (0 = not validated).
+        :ivar th_type: Image type read from the folder: ``"opt"`` for
+            ``optical/``, or the ``elevation/<type>/`` subfolder name.
         :ivar th_res: Ground sample distance in CRS units, read from the file
             header; ``nan`` when it cannot be read.
         """
@@ -93,6 +96,9 @@ class Thumb:
         self.th_date_datetime = pd.to_datetime(self.th_date)
         self.geometry = ras.footprint.ds.geometry.union_all()
         self.th_valid = 0
+        # Image type ("opt", "dem", "hillshade", ...), carried by the folder —
+        # never by the filename, whose three-field format stays untouched.
+        self.th_type = image_type_of_thumb_path(target_path)
         # Ground sample distance, in the CRS' units (metres for a projected CRS).
         #
         # Read from the file header, which is authoritative: it is the pixel size
@@ -147,6 +153,7 @@ class Thumb:
                 "th_date_datetime": self.th_date_datetime,
                 "th_valid": self.th_valid,
                 "th_res": float(self.th_res),
+                "th_type": self.th_type,
                 "geometry": self.geometry,
             }
         )

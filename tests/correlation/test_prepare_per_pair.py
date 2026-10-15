@@ -47,7 +47,7 @@ def _stub_session(tmp_path, keys):
     """A minimal object carrying the real method and nothing else."""
     pairs = [_StubPair(k, tmp_path) for k in keys]
     session = types.SimpleNamespace(
-        get_pairs=lambda criterias="": list(pairs),
+        get_pairs=lambda criterias="", image_type=None: list(pairs),
         _corr_params_changed=lambda *a, **kw: Session._corr_params_changed(session, *a, **kw),
         pairs=pairs,
     )

@@ -71,11 +71,12 @@ class TestToPdserie:
         assert isinstance(Thumb(thumb_file).to_pdserie()["th_res"], float)
 
     def test_schema_is_otherwise_unchanged(self, thumb_file):
-        """Adding a column must not disturb the existing nine."""
+        """Adding a column must not disturb the existing ones (th_type added 0.6.x)."""
         keys = set(Thumb(thumb_file).to_pdserie().index)
         assert keys == {
             "th_pz_name", "th_path", "th_sensor", "th_date", "th_year",
-            "th_date_dec", "th_date_datetime", "th_valid", "th_res", "geometry",
+            "th_date_dec", "th_date_datetime", "th_valid", "th_res", "th_type",
+            "geometry",
         }
 
 

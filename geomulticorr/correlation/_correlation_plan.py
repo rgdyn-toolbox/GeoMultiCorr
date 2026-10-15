@@ -336,6 +336,41 @@ def parse_params_file(path: pathlib.Path | str) -> dict[str, str]:
     return out
 
 
+#: Input-encoding settings.  Resolved per **image type** (an optical thumb and
+#: a slope thumb differ in nodata and dynamic range), never per Δt group, so
+#: they sit outside :data:`PLAN_PARAM_KEYS` and have their own reuse check.
+INPUT_PARAM_KEYS = ("nodata_value", "individual_normalization", "pre_normalization")
+_INPUT_FLAG_TO_ASP_KEY = {
+    "individual_normalization": "individually-normalize",
+    "pre_normalization": "force-use-entire-range",
+}
+
+
+def input_params_differ_from_file(path: pathlib.Path | str,
+                                  input_params: Mapping[str, Any]) -> bool:
+    """Whether the input-encoding settings differ from the file on disk.
+
+    Companion of :func:`params_differ_from_file` for :data:`INPUT_PARAM_KEYS`,
+    so that changing a nodata value or a normalisation flag regenerates the
+    script instead of silently re-running the old one.  ``nodata_value=None``
+    and ``False`` flags write no line, so an optical pair's file — which never
+    had those lines — still reads as unchanged.
+    """
+    existing = parse_params_file(path)
+    if not existing:
+        return True
+    nodata = input_params.get("nodata_value")
+    if nodata is None:
+        if "nodata-value" in existing:
+            return True
+    elif existing.get("nodata-value") != str(nodata):
+        return True
+    for name, asp_key in _INPUT_FLAG_TO_ASP_KEY.items():
+        if bool(input_params.get(name)) != (asp_key in existing):
+            return True
+    return False
+
+
 def _format_asp_value(value: Any) -> str:
     """Render *value* the way ``build_correlation_params`` writes it."""
     if isinstance(value, (tuple, list)):
