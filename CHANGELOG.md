@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.7.1] — 2026-10-15
+
+### Added
+- **Correlation of multi-temporal DEMs.** DEMs correlate badly on raw elevation, so they
+  are correlated through terrain products, each its own **image type**: `hillshade`
+  (single light), `mdhillshade` (multidirectional), `slope`, plus the cropped `dem`.
+  `sieve_bulk(image_type="dem", terrain_products=…)` crops, reprojects and merges each
+  DEM onto the pzone grid as float32, *then* derives the products. Doing it after the
+  merge avoids seam artefacts and computes slope/shading at the correlated resolution.
+  Thumbs go to `<pz>/elevation/<type>/`, pairs to `image_correlation/<type>/`. Optical
+  paths are unchanged. See `docs/dem_correlation.md`.
+- `Thumb.th_type` / `Pair.pa_type` (read from the folder) and the `th_type` / `pa_type`
+  columns; `Session.thumb_dir()` / `pair_dir()`.
+- `image_type=` on `update_pairs`, `get_pairs`, `get_pairs_overview`, the correlation,
+  extraction and correction batch methods, and both explorers. Pairs never cross types.
+  Use it instead of `criterias`: `"hillshade"` is a substring of `"mdhillshade"`.
+- `prepare_pairs_correlation(nodata_value=, individual_normalization=,
+  pre_normalization=)`, with per-type defaults (`CORR_INPUT_DEFAULTS`). Changing them
+  regenerates the job script.
+- DEM source inference from file names (`infer_dem_sensor`): `pleiades`, `spot6`,
+  `spot7`, `worldview`, `lidar`, `uav`, `aerial`, else `dem`.
+- `geomulticorr/utils/_terrain.py`: slope, single-light and multidirectional hillshade
+  with true pixel spacing and NaN propagation.
+
+### Changed
+- **`sieve_bulk(image_type="dem")` now writes dated DEM thumbs.** The previous
+  single-correction-DEM behaviour is `image_type="reference_dem"` (or
+  `build_reference_dem`).
+- `map_georasters_bank(image_type="dem")` writes the `Protomap_dem` layer, so it no longer
+  overwrites the optical `Protomap`; `get_georasters_map(image_type)` now honours its
+  argument.
+- The pzone gains an eighth subfolder, `elevation/`. The pairs explorer stash gains a
+  seventh key, `image_type`, and the figure stem adds it for non-optical types only.
+
+### Fixed
+- `update_thumbs` crashed with `KeyError: 'th_path'` when no thumb was found; it now warns,
+  naming the globs and the no-`_` pzone rule.
+- `Pair(session, target_path=<pathlib.Path>)` ignored the path (`type(...) in (str, Path)`
+  is false for `PosixPath`); only strings worked.
+
 ## [0.7.0] — 2026-09-29
 
 ### Fixed
