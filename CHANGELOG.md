@@ -1,5 +1,64 @@
 # Changelog
 
+## [0.7.3] — 2026-10-19
+
+### Added
+- **`geomulticorr.data_sources`** — satellite imagery and DEM discovery/download behind one
+  `Finder` + `Client` pattern (search is free and returns a GeoDataFrame; downloads are a
+  separate, explicit step). Each source is documented in its own tutorial notebook under
+  `notebooks/`:
+  - **Microsoft Planetary Computer** (`MPC_ImageFinder`, `MPC_ImageCollectionCatalog`) —
+    Landsat 5/7/8/9 C2 L2 and Sentinel-2 L2A, no account needed (anonymous SAS signing).
+  - **USGS M2M** (`M2MClient`, `M2MImageFinder`) — Landsat Collection-2 L1/L2 with
+    application-token login, per-band selection, MTL/ANG sidecars, `RATE_LIMIT` back-off and
+    `resume_label()` to collect downloads already staged server-side.
+  - **Planet** (`PlanetClient`, `PlanetImageFinder`) — PlanetScope search, thumbnails,
+    perspective groups from view angle, and quota-guarded orders (cost estimate, remaining
+    quota, per-order budget, duplicate-scene ledger, dry run, confirmation prompt).
+  - **DINAMIS / Théia** (`DinamisClient`, `DinamisImageFinder`) — SPOT 6/7 via STAC, with
+    presigned MinIO URLs through the `teledetection` SDK, COG clips, and
+    `filename_template` (`DINAMIS_DEFAULT_FILENAME_TEMPLATE`, `DINAMIS_LEGACY_FILENAME_TEMPLATE`).
+  - **Google Earth Engine** (`GEEClient`, `GEE_ImageFinder`, `GEE_ImageCollectionCatalog`).
+  - **Global DEMs** (`DEMClient`, `DEMFinder`) — SRTM GL1 and Copernicus GLO-30, cached and
+    mosaicked, no account needed.
+- **Archive layout** (`data_sources/_layout.py`): `sensor_pathrow` organisation for Landsat
+  and Sentinel-2 downloads, and `safe_filename` / `filename_from_content_disposition`, so a
+  server-supplied filename can never write outside its destination folder.
+- `tests/data_sources/` — 234 offline tests (no network, no credentials): tile and product-id
+  parsing, filename sanitisation, quota guards, rate-limit retry, error diagnosis, atomic
+  downloads, and a guard that fails if a credential-shaped literal appears in the sources.
+
+### Changed
+- `geomulticorr.gee` is now a deprecated alias of `geomulticorr.data_sources`. Its duplicate
+  `gee_image_search_download.py` is removed; `from geomulticorr.gee import GEEClient,
+  ImageFinder, …` keeps working with a `DeprecationWarning`, but importing the old
+  *submodule* path (`geomulticorr.gee.gee_image_search_download`) no longer does.
+
+### Security
+- Credentials are read only from arguments or environment variables (`PL_API_KEY`,
+  `USGS_M2M_USERNAME` / `USGS_M2M_TOKEN`, `MDT_SPOT67_STAC_ACCESS_KEY` /
+  `MDT_SPOT67_STAC_SECRET_KEY`, `.env` via python-dotenv); none is stored in the package.
+  MPC SAS tokens are stripped from derived filenames.
+
+### Fixed
+- `DEMClient`: every successful tile download failed with `Cannot reach …` — `_write_atomic`
+  read the size of its temporary file *after* renaming it away.
+- `DEMFinder.search_metadata` for `provider="cop30"` took the latitude from the wrong token
+  of the tile id (always 10°), so the returned tile footprints were in the wrong place.
+- `CITATION.cff` — metadata now validated using `$cffconvert --validate` and compatible with 'AGPL-3.0-or-later', pointing at the concept DOI (all versions).
+
+## [0.7.2] — 2026-10-19
+
+### Added
+- `.zenodo.json` — Zenodo deposit metadata (title, description, AGPL-3.0 licence, creators with ORCID, contributors, keywords), so each GitHub release is archived with complete metadata.
+- `CITATION.cff` — "Cite this repository" metadata for GitHub and reference managers,
+  pointing at the concept DOI (all versions).
+
+### Changed
+- Package authors in `pyproject.toml` now carry contact addresses.
+
+No code change: the library behaves exactly as 0.7.1.
+
 ## [0.7.1] — 2026-10-15
 
 ### Added
