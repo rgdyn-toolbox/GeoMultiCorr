@@ -7,6 +7,10 @@ __pycache__/
 dist/
 temp/
 
+# Local M2M debugging scripts
+geomulticorr/data_sources/diagnose_m2m.py
+geomulticorr/data_sources/resume_m2m.py
+
 # Temporary data
 data/
 
@@ -31,3 +35,7 @@ tests/__pycache__
 
 # Logo files
 gmc_logo/
+
+# Sphinx documentation build
+docs/build/
+docs/source/reference/gen_modules/
