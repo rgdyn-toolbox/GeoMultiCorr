@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+type: software
+title: "GeoMultiCorr: surface displacement from optical images and time-series inversion"
+abstract: "End-to-end Python pipeline for measuring earth-surface displacements from multi-sensor optical images and DEMs, from image correlation with the Ames Stereo Pipeline to time-series inversion."
+license: agpl-3.0-only
+doi: 10.5281/zenodo.17079419
+repository-code: "https://github.com/rgdyn-toolbox/GeoMultiCorr"
+url: "https://github.com/rgdyn-toolbox/GeoMultiCorr"
+keywords:
+  - surface displacement time series
+  - image correlation
+  - time series inversion
+  - Ames Stereo Pipeline
+  - optical remote sensing
+authors:
+  - family-names: Cusicanqui
+    given-names: Diego
+    affiliation: "Université Grenoble Alpes, Université Savoie Mont Blanc, CNRS, IRD, IGE, ISTerre, Edytem"
+    orcid: "https://orcid.org/0000-0002-4681-1111"
+  - family-names: Duvanel
+    given-names: Thibaut
+    affiliation: "Université Savoie Mont Blanc; Université de Lausanne"
+    orcid: "https://orcid.org/0009-0001-4699-7075"

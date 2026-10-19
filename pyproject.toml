@@ -6,15 +6,18 @@ build-backend = "hatchling.build"
 name = "GeoMultiCorr"
 dynamic = ["version"]
 authors = [
-  { name="Diego Cusicanqui", email="diego.cusicanqui@univ-grenoble-alpes.fr"},
-  { name="Thibaut Duvanel", email="thibaut.duvanel@unil.ch" },
+  { name="Diego Cusicanqui",
+  email="diego.cusicanqui@univ-grenoble-alpes.fr"
+  },
+  { name="Thibaut Duvanel",
+  email="thibaut.duvanel@unil.ch" },
 ]
-description = "A python lib to study earth-surface displacements from optical images with Ames Stereo Pipeline"
+description = "End-to-end Python pipeline for measuring earth-surface displacements from multi-sensor optical images and DEMs, from image correlation with the Ames Stereo Pipeline to time-series inversion."
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: AGPL-3.0 License",
+    "License :: OSI Approved :: AGPLv3+",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
 ]
