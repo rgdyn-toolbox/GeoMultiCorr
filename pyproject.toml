@@ -6,11 +6,8 @@ build-backend = "hatchling.build"
 name = "GeoMultiCorr"
 dynamic = ["version"]
 authors = [
-  { name="Diego Cusicanqui",
-  email="diego.cusicanqui@univ-grenoble-alpes.fr"
-  },
-  { name="Thibaut Duvanel",
-  email="thibaut.duvanel@unil.ch" },
+  { name="Diego Cusicanqui", email="diego.cusicanqui@univ-grenoble-alpes.fr"},
+  { name="Thibaut Duvanel", email="thibaut.duvanel@unil.ch" },
 ]
 description = "End-to-end Python pipeline for measuring earth-surface displacements from multi-sensor optical images and DEMs, from image correlation with the Ames Stereo Pipeline to time-series inversion."
 readme = "README.md"
