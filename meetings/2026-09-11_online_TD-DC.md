@@ -10,7 +10,7 @@
 ## Development strategy
 ### Version conflicts
 - The code of GeoMultiCorr is currently existing in both versions which are very different one to the other. Each of it have its own logic, pros, and cons.
-- Our **principal objective** in order to publish the software is to merge these versions into one. In this order, TD have created the note [[issues]]. 
+- Our **principal objective** in order to publish the software is to merge these versions into one. In this order, TD have created the note [[issues]]
 ### GeoMultiCorr project's scope
 - Should we integrate the part which download the images in GeoMultiCorr or not ? 
 	- DC spent a lot of time on a module to download spot6 images, sentinel... 
