@@ -2,6 +2,7 @@ name: gmc_env
 channels:
   - conda-forge
 dependencies:
+  - pip
   - python>=3.11
   - pytest
   - pytest-cov
