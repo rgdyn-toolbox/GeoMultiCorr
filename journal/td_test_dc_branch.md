@@ -1,0 +1,53 @@
+# Objectifs Généraux
+- Identifier les parties redondantes entre nos deux branches
+- Identifier les avantages / inconvénients de chacune des deux 
+- Tester la workflow et identifier des bugs
+- Sélectionner une approche pour chaque partie du workflow, de la constitution de la base aux séries temporelles
+- In fine, merger les deux branches. 
+# Méthode
+- TD installe et teste la branche de Diego et l'applique sur les images Suisse
+- Documenter chaque problème ou difficulté à prendre la chaîne en main 
+
+# 2026-10-21
+- Objectifs du jour
+	- [ ] Suivre la procédure d'installation décrite par Diego dans le ReadMe
+		- [ ] Documenter tous les soucis rencontrés
+		- [x] Créer l'env virtuel
+			- `conda env create -f gmv_env.yml`
+				- Get a warning : `Warning: you have pip-installed dependencies in your environment file, but you do not list pip itself as one of your conda dependencies.  Conda may not use the correct pip to install your packages, and they may end up in the wrong place.  Please add an explicit pip dependency.  I'm adding one for you, but still nagging you.`
+				- [x] Fix : add pip as dependency in the gmc_env.yml
+		- [x] Installer GeoMultiCorr avec pip
+		- [ ] Installer ASP
+			- Déjà installé sur ma machine, j'ai skippé cette étape. 
+	- [x] Créer une base de données d'images
+		- Fait. Images aériennes Suisse de 2017 à 2023 sur les glaciers rocheux actifs. 
+		- Stockée sous `datamap['aerial_images_dir']` and `datamap['simon_swissimage_availables']`
+	- [x] Créer un script de manipulation
+		- `notebooks/manips_td.ipynb`
+	- [x] Créer un projet avec `gmc.open_gmc_session`
+		- It works, but if I re-launch the script after the project creation, it don't. 
+		- `ValueError: Something else exists at $project_path`
+		- I struggle a few minutes, looking in the code of __init__ of the Session class ; 
+		- And I relaunch the script, and it works. 
+		- It works only if gmc create the directory.
+		- If the path is /home/myProject, then myProject must not been created before to call open_gmc_session('/home/myProject').
+		- Je pense que le problème vient de l'imbrication de if / else dans le __init__ de Session.
+	- **Map Geo Raster Bank**
+		- Error "Widgets require us to download supporting files from a 3rd party website. Error loading @jupyter-widgets/base:2.0.0)." with a "Click to how javascript error" icon. 
+		- I have my own raster bank created before for the Swiss project, so I just copy / paste the raster map. 
+	- [x] Créer des pzones
+		- `session.draw_polygon_manually` don't works. It just display a sentence 'Draw your polygon(s) on the map above. When done, run the next cell to get the GeoDataFrame.'.
+		- So, **I draw them manually**
+	- [x] Manually set EPSG 2056 in Qgis project
+	- [x] Utiliser `sieve_bulk` pour fabriquer des vignettes à partir de la base et les pzones
+		- Fonctionne mais l'affichage donne encore "Javascript error"
+	- Je n'ai pas compris ce que fait **validate thumbs** ? 
+	- [x] Generate Pairs with explore_pairs_strategy
+		- Fonctionne à l'aveugle : 
+			- J'ai juste cliqué "save figure" sans  voir ce que ça faisait à cause du même problème de visualisation (Click to show javascript error)
+		- Mais en tout cas les paires ont été créées
+	- Produire des champs de déplacement
+		- Sur le launch_correlation j'ai :
+			- TypeError: ASP.run_correlation() got an unexpected keyword argument 'params_file_path'
+			- Je me suis arrêté là aujourd'hui. 	
+	- Produire des séries temporelles
