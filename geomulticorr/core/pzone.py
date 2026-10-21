@@ -13,6 +13,7 @@ import numpy as np
 from sklearn import cluster
 
 import geomulticorr.core.thumb as gmc_thumb
+from geomulticorr.utils._image_types import normalise_image_type, type_column
 from geomulticorr._logging import logger
 
 
@@ -118,6 +119,7 @@ class Pzone:
         max_dt_days: int | None = None,
         min_dt_days: int | None = None,
         sensor_filter: str | None = None,
+        image_type: str = "opt",
     ) -> list:
         """Return Pair objects for valid thumbs using the specified pairing strategy.
 
@@ -132,11 +134,15 @@ class Pzone:
                 (in days). Pairs below this are dropped.
             sensor_filter: Optional sensor name substring to restrict thumbs
                 (e.g. ``"spot"``, ``"planetscope"``).
+            image_type: Thumb image type to pair (``"opt"``, ``"dem"``,
+                ``"hillshade"``, ``"mdhillshade"``, ``"slope"``). Pairs never
+                cross image types.
 
         Returns:
             List of Pair objects.
         """
-        thumbs = sorted(self.get_valid_thumbs(sensor_filter=sensor_filter), key=lambda t: t.th_date_datetime)
+        thumbs = sorted(self.get_valid_thumbs(sensor_filter=sensor_filter, image_type=image_type),
+                        key=lambda t: t.th_date_datetime)
         n = len(thumbs)
         pairs_idx = _strategy_pair_indices(n, strategy, max_step)
 
@@ -160,20 +166,28 @@ class Pzone:
         max_dt_days: int | None = None,
         min_dt_days: int | None = None,
         sensor_filter: str | None = None,
+        image_type: str = "opt",
     ) -> gpd.GeoDataFrame:
         pairs = self.get_pairs_with_strategy(
-            strategy, max_step, max_dt_days, min_dt_days=min_dt_days, sensor_filter=sensor_filter
+            strategy, max_step, max_dt_days, min_dt_days=min_dt_days,
+            sensor_filter=sensor_filter, image_type=image_type,
         )
         return gpd.GeoDataFrame([p.to_pdserie() for p in pairs])
 
 
-    def get_valid_thumbs(self, sensor_filter: str | None = None):
+    def get_valid_thumbs(self, sensor_filter: str | None = None,
+                         image_type: str | None = "opt"):
         """
         Renvoie les vignettes selectionnées par l'user dans qgis, en modifiant la valeur attributaire "th_valid" dans la table Thumbs
+
+        *image_type* filters on the ``th_type`` column (rows predating it read
+        as ``"opt"``); ``None`` keeps every type.
         """
         criterias = [self.pz_name] + ([sensor_filter] if sensor_filter else [])
         ths = self.session.get_thumbs_overview(criterias)
         ths_valid = ths[ths.th_valid == '1']
+        if image_type is not None:
+            ths_valid = ths_valid[type_column(ths_valid, "th_type") == normalise_image_type(image_type)]
         gmc_ths_valid = [gmc_thumb.Thumb(th.th_path) for th in ths_valid.iloc]
         return gmc_ths_valid
 

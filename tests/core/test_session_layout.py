@@ -146,10 +146,12 @@ class TestPzDirMethod:
             session.pz_dir("test_pz", "masks")
 
     def test_new_layout_subdirs(self):
-        """masks was removed; reference_raster was added."""
-        assert len(NEW_LAYOUT_PZ_SUBDIRS) == 7
+        """masks was removed; reference_raster, then elevation, were added."""
+        assert NEW_LAYOUT_PZ_SUBDIRS == (
+            "optical", "image_correlation", "reference_dem", "reference_raster",
+            "vector", "inversion", "figures", "elevation",
+        )
         assert "masks" not in NEW_LAYOUT_PZ_SUBDIRS
-        assert "reference_raster" in NEW_LAYOUT_PZ_SUBDIRS
 
 
 class TestInsertPzoneStructure:
@@ -342,10 +344,14 @@ class TestSaveWeightsFigureRouting:
         assert out_dir.is_dir()
 
     def test_no_new_pz_kind_constant_was_added(self):
-        """The figures subfolder must not grow the pzone subdirectory tuple."""
-        assert len(NEW_LAYOUT_PZ_SUBDIRS) == 7
-        assert "inversion" not in [s for s in NEW_LAYOUT_PZ_SUBDIRS
-                                   if s.endswith("figures")]
+        """The figures subfolder must not grow the pzone subdirectory tuple.
+
+        Eight since ``elevation`` (DEM-derived thumbs) was added deliberately;
+        figures/inversion is still a plain subfolder, not a kind.
+        """
+        assert len(NEW_LAYOUT_PZ_SUBDIRS) == 8
+        assert not any("/" in s or s.endswith("inversion") and s != "inversion"
+                       for s in NEW_LAYOUT_PZ_SUBDIRS)
 
     def test_legacy_layout_discards_the_pzone(self, temp_project_new):
         """Which is exactly why save_weights_figure warns and bypasses pz_dir."""

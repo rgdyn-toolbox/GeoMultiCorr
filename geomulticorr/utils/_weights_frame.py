@@ -47,6 +47,10 @@ Public API:
   styling, so plotly and matplotlib draw the same thing.
 - :data:`WEIGHT_MODE_KEYS` / :func:`relevant_weight_keys` — which parameters
   actually affect a given weighting mode.
+- :func:`parse_sensor_weights` / :func:`format_sensor_weights` — the
+  ``"spot=0.5, planetscope=1"`` text form of the ``sensor_weights`` mapping,
+  used by the explorer's Text control.
+- :func:`sensor_colors` — one deterministic colour per sensor group, for both backends.
 - :func:`weights_stats` / :func:`format_weights_summary` — user-facing counts.
 """
 from __future__ import annotations
@@ -66,6 +70,7 @@ WEIGHTS_FRAME_COLUMNS: tuple[str, ...] = (
     "nmad_ns",         # NS NMAD (m), nan when missing
     "cc",              # cc_quality_gte_050, nan when missing
     "corr_direction",  # the pair's correlation direction ("" when unknown)
+    "sensor",          # lower-case sensor of the pair ("" when unknown, "a+b" if mixed)
 )
 
 _DTYPES: dict[str, str] = {
@@ -77,6 +82,7 @@ _DTYPES: dict[str, str] = {
     "nmad_ns": "float64",
     "cc": "float64",
     "corr_direction": "object",
+    "sensor": "object",
 }
 
 #: Series colour per direction.  Read by **both** backends so a saved PNG cannot
@@ -88,6 +94,64 @@ WEIGHT_DIRECTION_MARKERS: dict[str, tuple[str, str]] = {
     "EW": ("circle", "o"),
     "NS": ("diamond", "D"),
 }
+
+#: Palette for sensor groups (a colour-blind-safe qualitative set).  Assigned
+#: by :func:`sensor_colors` in **sorted** sensor order, so the same archive gets
+#: the same colours whatever order its pairs come in.
+SENSOR_PALETTE: tuple[str, ...] = (
+    "#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#8c564b",
+    "#e377c2", "#17becf", "#bcbd22", "#7f7f7f", "#ff7f0e",
+)
+
+
+def sensor_colors(sensors: Sequence[str]) -> dict[str, str]:
+    """``{sensor: hex}`` — deterministic under reordering, cycling the palette.
+
+    Read by both plotting backends so a saved PNG and the plotly figure agree.
+    The empty label (unknown sensor) is included when present.
+    """
+    unique = sorted({("" if s is None else str(s)) for s in sensors})
+    return {s: SENSOR_PALETTE[i % len(SENSOR_PALETTE)] for i, s in enumerate(unique)}
+
+
+def parse_sensor_weights(text: str | None) -> dict[str, float] | None:
+    """``"spot=0.5, planetscope=1"`` → ``{"planetscope": 1.0, "spot": 0.5}``.
+
+    Accepts ``=`` or ``:`` between name and factor, commas or whitespace between
+    entries, and any case (keys are lower-cased). Empty or whitespace-only text
+    means "no sensor weighting" and returns ``None``. A malformed token raises
+    ``ValueError`` naming it — the explorer catches that and keeps the last good
+    value rather than letting the callback die silently.
+    """
+    if text is None:
+        return None
+    text = text.strip()
+    if not text:
+        return None
+    out: dict[str, float] = {}
+    for token in text.replace(",", " ").split():
+        sep = "=" if "=" in token else (":" if ":" in token else None)
+        if sep is None:
+            raise ValueError(f"expected name=factor, got {token!r}")
+        key, _, value = token.partition(sep)
+        key = key.strip().lower()
+        if not key:
+            raise ValueError(f"missing sensor name in {token!r}")
+        try:
+            factor = float(value)
+        except ValueError:
+            raise ValueError(f"factor for {key!r} must be a number, got {value!r}") from None
+        if not np.isfinite(factor) or factor < 0.0:
+            raise ValueError(f"factor for {key!r} must be finite and ≥ 0, got {value!r}")
+        out[key] = factor
+    return dict(sorted(out.items())) or None
+
+
+def format_sensor_weights(sensor_weights: dict[str, float] | None) -> str:
+    """The inverse of :func:`parse_sensor_weights`: sorted ``name=factor`` list, ``""`` for none."""
+    if not sensor_weights:
+        return ""
+    return ", ".join(f"{k}={float(v):g}" for k, v in sorted(sensor_weights.items()))
 
 #: Weighting parameters that actually affect each mode.
 #:
@@ -112,15 +176,22 @@ WEIGHT_MODE_KEYS: dict[str, set[str]] = {
 }
 
 
-def relevant_weight_keys(weight_mode: str, combine: str | None = None) -> set[str]:
+def relevant_weight_keys(
+    weight_mode: str, combine: str | None = None,
+    sensor_weights: dict[str, float] | None = None,
+) -> set[str]:
     """Parameters that change the weights for *weight_mode*.
 
     Folds in the α/β/γ rule the explorer applies: those three only matter when a
     quality mode is combined with ``'wmean'``, so a stem or a parameter listing
-    must not mention them otherwise.
+    must not mention them otherwise. ``sensor_weights`` is mode-independent —
+    it multiplies every mode's result, ``uniform`` included — so it is folded in
+    here rather than listed under each mode in :data:`WEIGHT_MODE_KEYS`, and
+    only when actually set.
 
     :param weight_mode: One of the keys of :data:`WEIGHT_MODE_KEYS`.
     :param combine: The combination method, when the mode is a quality mode.
+    :param sensor_weights: The sensor factors in force, or ``None``/``{}``.
     :returns: A new set (never the stored one — callers mutate it).
     """
     relevant = set(WEIGHT_MODE_KEYS.get(weight_mode, set()))
@@ -129,6 +200,8 @@ def relevant_weight_keys(weight_mode: str, combine: str | None = None) -> set[st
             relevant |= {"alpha", "beta", "gamma"}
         elif weight_mode == "quality_spatial":
             relevant |= {"alpha", "beta"}
+    if sensor_weights:
+        relevant.add("sensor_weights")
     return relevant
 
 
@@ -147,6 +220,7 @@ def weights_frame(
     nmad_ns: Sequence[float] | None = None,
     cc: Sequence[float] | None = None,
     corr_direction: Sequence[str] | None = None,
+    sensor: Sequence[str] | None = None,
 ) -> pd.DataFrame:
     """Build a weights frame from per-pair vectors, all aligned to *pa_keys*.
 
@@ -158,6 +232,7 @@ def weights_frame(
     :param nmad_ns: NS NMAD per pair.
     :param cc: CC quality per pair.
     :param corr_direction: The pair's correlation direction; ``""`` by default.
+    :param sensor: The pair's sensor label (lower-case); ``""`` by default.
     :returns: A frame with :data:`WEIGHTS_FRAME_COLUMNS`.
     :raises ValueError: If any vector's length differs from *pa_keys*.  A silent
         broadcast here would mislabel every point in the figure.
@@ -177,14 +252,17 @@ def weights_frame(
             dtype="float64"
         )
 
-    if corr_direction is None:
-        directions: Sequence[str] = [""] * n
-    elif len(corr_direction) != n:
-        raise ValueError(
-            f"corr_direction has {len(corr_direction)} entries but there are {n} pairs."
-        )
-    else:
-        directions = [("" if d is None else str(d)) for d in corr_direction]
+    def _labels(values, label: str) -> list[str]:
+        if values is None:
+            return [""] * n
+        if len(values) != n:
+            raise ValueError(
+                f"{label} has {len(values)} entries but there are {n} pairs."
+            )
+        return [("" if v is None else str(v)) for v in values]
+
+    directions = _labels(corr_direction, "corr_direction")
+    sensors = _labels(sensor, "sensor")
 
     frame = pd.DataFrame(
         {
@@ -196,6 +274,7 @@ def weights_frame(
             "nmad_ns": _floats(nmad_ns, "nmad_ns"),
             "cc": _floats(cc, "cc"),
             "corr_direction": np.asarray(directions, dtype=object),
+            "sensor": np.asarray(sensors, dtype=object),
         }
     )
     return frame.astype(_DTYPES)[list(WEIGHTS_FRAME_COLUMNS)]

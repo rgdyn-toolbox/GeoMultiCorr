@@ -74,6 +74,7 @@ from geomulticorr.utils._weights_frame import relevant_weight_keys
 _STEM_KEY_ORDER: tuple[str, ...] = (
     "combine", "cc_gamma", "alpha", "beta", "gamma",
     "sharpness", "slope", "min_weight", "w_min", "invert", "dt_range",
+    "sensor_weights",
 )
 
 _DEFAULT_FIGSIZE: tuple[float, float] = (9, 5)
@@ -88,6 +89,13 @@ def _stem_fragment(key: str, value) -> str:
             return ""
         lo, hi = value
         return f"dt{int(lo)}-{int(hi)}"
+    if key == "sensor_weights":
+        if not value:
+            return ""
+        # sorted keys → the same mapping always spells the same fragment
+        return "sw" + "-".join(
+            f"{_slug(k)}{_slug(f'{float(v):g}')}" for k, v in sorted(value.items())
+        )
     if isinstance(value, float):
         # trim the trailing zeros a plain str() leaves on 0.3333333333333333
         return f"{key}{_slug(f'{value:g}')}"
@@ -124,14 +132,16 @@ def weights_figure_stem(
     :param inversion_name: The inversion these weights belong to.
     :param pz_name: Pzone name; ``"all"`` when empty.
     :param weight_mode: The weighting mode.
-    :param params: Any of the twelve weighting parameters; irrelevant ones are
-        dropped rather than encoded.
+    :param params: Any of the thirteen weighting parameters; irrelevant ones are
+        dropped rather than encoded. ``sensor_weights`` counts as relevant for
+        every mode whenever it is set.
     :returns: The stem, without an extension.
     """
     parts = [_slug(pz_name) or "all", _slug(inversion_name), "weights",
              _slug(weight_mode)]
 
-    relevant = relevant_weight_keys(weight_mode, params.get("combine"))
+    relevant = relevant_weight_keys(weight_mode, params.get("combine"),
+                                    sensor_weights=params.get("sensor_weights"))
     for key in _STEM_KEY_ORDER:
         if key not in relevant or key not in params:
             continue

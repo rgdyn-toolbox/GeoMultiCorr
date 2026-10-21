@@ -73,3 +73,28 @@ class TestDiscoverTifPaths:
         empty = SimpleNamespace(inversion_dir=tmp_path / "no_such_run")
         with pytest.raises(FileNotFoundError):
             InversionExtractor(empty)
+
+
+class TestDirectoryInput:
+    """A fused product has no TIOInversion; the folder alone must do."""
+
+    def test_accepts_a_directory(self, tmp_path):
+        for date in _DATES:
+            _touch(tmp_path / "inverse_EW" / f"TOT_{date}_EW.tif")
+        ex = InversionExtractor(tmp_path)
+        assert ex.inversion_dir == tmp_path
+        assert ex.available_dates == _DATES
+        assert ex.available_components == ["EW"]
+
+    def test_accepts_a_string_path(self, tmp_path):
+        _touch(tmp_path / "inverse_NS" / f"TOT_{_DATES[0]}_NS.tif")
+        assert InversionExtractor(str(tmp_path)).available_components == ["NS"]
+
+    def test_module_helper_equals_the_method(self, extractor):
+        from geomulticorr.stats.inversion_extractor import discover_tot_rasters
+        assert extractor._discover_tif_paths(None) == discover_tot_rasters(
+            extractor.inversion.inversion_dir)
+
+    def test_empty_directory_names_both_ways_to_produce_rasters(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match="launch\\(mode='python'\\)"):
+            InversionExtractor(tmp_path)

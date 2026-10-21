@@ -142,10 +142,11 @@ def compute_slope(dem_arr: np.ndarray, transform) -> np.ndarray:
     :returns: Slope magnitude in degrees, same shape as *dem_arr*.
     :rtype: np.ndarray
     """
-    pixel_size_row = abs(transform.e)
-    pixel_size_col = abs(transform.a)
-    dz_drow, dz_dcol = np.gradient(dem_arr, pixel_size_row, pixel_size_col)
-    return np.degrees(np.arctan(np.sqrt(dz_drow**2 + dz_dcol**2)))
+    # The math lives in utils/_terrain.py; "gradient" keeps the historical
+    # np.gradient formula so this predictor does not move.
+    from geomulticorr.utils._terrain import slope_degrees
+
+    return slope_degrees(dem_arr, abs(transform.a), abs(transform.e), method="gradient")
 
 
 # --------------------------------------------------------------------------- #

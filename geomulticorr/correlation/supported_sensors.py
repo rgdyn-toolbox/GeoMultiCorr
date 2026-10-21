@@ -66,6 +66,48 @@ SENSOR_CATALOG = [
     {"patterns": [r"dem", r"hillshade"], "sensor": "DEM", "family": "dem"},
 ]
 
+# 1b. DEM sources — what "sensor" means for a multi-temporal DEM thumb.
+#
+# A DEM has no sensor metadata we can read, so the source is inferred from the
+# file (then folder) name.  Ordered: the first pattern that matches wins, most
+# specific first — "IGN_LiDARHD" must resolve to lidar, not to aerial via "ign".
+#
+# Boundaries are letter lookarounds, not ``\b``: ``\b`` treats ``_`` as a word
+# character, so ``\bspot6\b`` would miss the usual ``site_spot6_2020`` spelling.
+# Every token is free of ``_`` and ``-``: Thumb splits its filename on ``_``
+# and Pair splits each side of its key on ``-``.
+_L, _R = r"(?<![a-z])", r"(?![a-z])"
+DEM_SENSOR_PATTERNS: list[tuple[str, str]] = [
+    # Stereo satellite DSMs (e.g. ASP point2dem output)
+    (_L + r"(?:pl[eé]iades(?:neo)?|phr|pneo)", "pleiades"),
+    (_L + r"(?:spot ?|sp)6" + _R, "spot6"),
+    (_L + r"(?:spot ?|sp)7" + _R, "spot7"),
+    (_L + r"(?:worldview|wv0?[1-4])", "worldview"),
+    # Airborne lidar
+    (_L + r"(?:lidar(?:hd)?|als|rge ?alti)" + _R, "lidar"),
+    # Aerial / UAV photogrammetry
+    (_L + r"(?:uav|uas|drone|rpas)" + _R, "uav"),
+    (_L + r"(?:aerial|photogram[a-z]*|sfm|ign|historical)" + _R, "aerial"),
+]
+_DEM_SENSOR_REGEXES = [(re.compile(p), token) for p, token in DEM_SENSOR_PATTERNS]
+#: Sensor token when no pattern matches.
+DEM_SENSOR_FALLBACK = "dem"
+
+
+def infer_dem_sensor(path) -> str:
+    """Source token of a DEM, from its file name then its parent folder name.
+
+    Returns one of the tokens of :data:`DEM_SENSOR_PATTERNS`, or
+    :data:`DEM_SENSOR_FALLBACK` (``"dem"``) when nothing matches.
+    """
+    p = pathlib.Path(path)
+    for text in (p.name.lower(), p.parent.name.lower()):
+        for rx, token in _DEM_SENSOR_REGEXES:
+            if rx.search(text):
+                return token
+    return DEM_SENSOR_FALLBACK
+
+
 AUXILIARY_FILE_PATTERNS: dict[str, list[str]] = {
     "planetscope": ["_udm2_", "_udm_", "_confidence_"],
     "sentinel":    ["_TCI_", "_SCL_", "_WVP_", "_AOT_"],

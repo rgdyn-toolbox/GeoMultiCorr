@@ -46,6 +46,9 @@ import matplotlib.pyplot as plt
 import geomulticorr.core.thumb as gmc_thumb
 import geomulticorr.stats.stats as gmc_stats
 from geomulticorr.utils._grid import write_binary_raster
+from geomulticorr.utils._image_types import (
+    IMAGE_TYPE_OPTICAL, IMAGE_TYPES, pair_subdir, pzone_root_of_thumb_path,
+)
 from geomulticorr.utils.gmc_functions import plot_show_raw_results
 from geomulticorr.correlation.correlation import ASP
 from geomulticorr._logging import logger
@@ -119,11 +122,21 @@ class Pair:
         """
         self.session = session
         # Construction from a pair path
-        if type(target_path) in (str, Path):
+        # isinstance, not type(...) in (str, Path): a PosixPath is not Path.
+        if isinstance(target_path, (str, os.PathLike)):
             target_path = Path(target_path)
+            # Optical pairs sit directly in image_correlation/; every other
+            # image type in image_correlation/<type>/.
+            parent = target_path.parent
+            if parent.name.lower() == "image_correlation":
+                pa_type = IMAGE_TYPE_OPTICAL
+            elif (parent.name.lower() in IMAGE_TYPES
+                  and parent.parent.name.lower() == "image_correlation"):
+                pa_type = parent.name.lower()
+            else:
+                pa_type = None
             assert (
-                Path(target_path).parent.exists()
-                and Path(target_path).parent.name.lower() == "image_correlation"
+                pa_type is not None and parent.exists()
             ), "this path is not leading to a well-formed pair"
 
             # Get metadata about the thumbs component of the pair
@@ -140,7 +153,7 @@ class Pair:
             right_key = f"{pz_name}_{right_date}_{right_sensor}.tif"
 
             # Reconstruct their path
-            thumbs_pzone_path = session.pz_dir(pz_name, "optical")
+            thumbs_pzone_path = session.thumb_dir(pz_name, pa_type)
             left_path = Path(thumbs_pzone_path, left_key)
             right_path = Path(thumbs_pzone_path, right_key)
 
@@ -153,6 +166,13 @@ class Pair:
             left.th_pz_name == right.th_pz_name
         ), "left and right have not the same pzone"
         assert left.th_path != right.th_path, "left thumb is right thumb"
+        left_type = getattr(left, "th_type", IMAGE_TYPE_OPTICAL)
+        right_type = getattr(right, "th_type", IMAGE_TYPE_OPTICAL)
+        assert left_type == right_type, (
+            f"left and right have different image types ({left_type!r} vs "
+            f"{right_type!r}); pairs never cross image types"
+        )
+        self.pa_type = left_type
 
         # Metadata
         self.pa_pz_name = left.th_pz_name
@@ -170,8 +190,12 @@ class Pair:
         )
 
         # Base path
+        # Optical: <pz>/image_correlation/<pa_key>, unchanged.  Other types get
+        # their own subfolder, so an optical and a hillshade pair of the same
+        # dates never share a directory.
         self.pa_path = Path(
-            Path(left.th_path).parent.parent, "image_correlation", f"{self.pa_key}"
+            pzone_root_of_thumb_path(left.th_path), "image_correlation",
+            pair_subdir(self.pa_type), f"{self.pa_key}"
         ).absolute()
 
         # Symlink paths — point to the sieved thumb images (no clipping, no copy)
@@ -292,6 +316,7 @@ status    : {self.pa_status}
                 "pa_direction": self.pa_direction,
                 "pa_disparity_f_path": str(self.pa_disparity_f_path),
                 "pa_status": self.pa_status,
+                "pa_type": self.pa_type,
                 "geometry": self.geometry,
             }
         )

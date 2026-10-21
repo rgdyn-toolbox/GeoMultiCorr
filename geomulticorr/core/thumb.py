@@ -31,6 +31,7 @@ from osgeo import gdal
 import geoutils as gu
 
 import geomulticorr.core.pair as gmc_pair
+from geomulticorr.utils._image_types import image_type_of_thumb_path
 
 THUMBNAME_PATTERN = re.compile(
     "^([a-z]|[A-Z]|-|[0-9])+_[0-9]{4}(-[0-9]{2}){2}_.*.(tif|TIF)$"
@@ -71,6 +72,10 @@ class Thumb:
         :ivar th_date_datetime: Acquisition date as pandas Timestamp.
         :ivar geometry: Shapely geometry of the raster footprint.
         :ivar th_valid: Validation flag (0 = not validated).
+        :ivar th_type: Image type read from the folder: ``"opt"`` for
+            ``optical/``, or the ``elevation/<type>/`` subfolder name.
+        :ivar th_res: Ground sample distance in CRS units, read from the file
+            header; ``nan`` when it cannot be read.
         """
         target_path = Path(target_path)
 
@@ -91,7 +96,41 @@ class Thumb:
         self.th_date_datetime = pd.to_datetime(self.th_date)
         self.geometry = ras.footprint.ds.geometry.union_all()
         self.th_valid = 0
+        # Image type ("opt", "dem", "hillshade", ...), carried by the folder —
+        # never by the filename, whose three-field format stays untouched.
+        self.th_type = image_type_of_thumb_path(target_path)
+        # Ground sample distance, in the CRS' units (metres for a projected CRS).
+        #
+        # Read from the file header, which is authoritative: it is the pixel size
+        # ASP will actually see.  Recording ``sieve_bulk``'s ``target_resolution``
+        # instead would be wrong for every thumb registered by
+        # ``register_existing_thumbs``, which copies pixels byte-for-byte and
+        # never goes through the sieve.
+        #
+        # Always a real float (``nan`` on failure, never a string or None): the
+        # Thumbs layer is rebuilt by concatenating rows read back from the GPKG
+        # with rows from ``to_pdserie``, and a mixed dtype there would silently
+        # turn the column to ``object`` — the trap ``th_year``/``th_valid``
+        # already fell into.
+        self.th_res = self._read_resolution(ras)
     #END def
+
+    @staticmethod
+    def _read_resolution(ras) -> float:
+        """Pixel size of *ras* in CRS units, or ``nan`` when unreadable.
+
+        Degrades rather than raises, matching
+        :meth:`~geomulticorr.core.session.Session._thumb_resolution`: a thumb
+        with an odd header should still register, just without a resolution, so
+        one bad file cannot block ``update_thumbs`` for a whole project.
+
+        :param ras: An open :class:`geoutils.Raster`.
+        :returns: Pixel size along x, as a positive float.
+        """
+        try:
+            return abs(float(ras.res[0]))
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return float("nan")
 
     def to_pdserie(self):
         """
@@ -113,6 +152,8 @@ class Thumb:
                 "th_date_dec": self.th_date_dec,
                 "th_date_datetime": self.th_date_datetime,
                 "th_valid": self.th_valid,
+                "th_res": float(self.th_res),
+                "th_type": self.th_type,
                 "geometry": self.geometry,
             }
         )

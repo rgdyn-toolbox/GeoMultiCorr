@@ -1,5 +1,201 @@
 # Changelog
 
+## [0.7.3] — 2026-10-19
+
+### Added
+- **`geomulticorr.data_sources`** — satellite imagery and DEM discovery/download behind one
+  `Finder` + `Client` pattern (search is free and returns a GeoDataFrame; downloads are a
+  separate, explicit step). Each source is documented in its own tutorial notebook under
+  `notebooks/`:
+  - **Microsoft Planetary Computer** (`MPC_ImageFinder`, `MPC_ImageCollectionCatalog`) —
+    Landsat 5/7/8/9 C2 L2 and Sentinel-2 L2A, no account needed (anonymous SAS signing).
+  - **USGS M2M** (`M2MClient`, `M2MImageFinder`) — Landsat Collection-2 L1/L2 with
+    application-token login, per-band selection, MTL/ANG sidecars, `RATE_LIMIT` back-off and
+    `resume_label()` to collect downloads already staged server-side.
+  - **Planet** (`PlanetClient`, `PlanetImageFinder`) — PlanetScope search, thumbnails,
+    perspective groups from view angle, and quota-guarded orders (cost estimate, remaining
+    quota, per-order budget, duplicate-scene ledger, dry run, confirmation prompt).
+  - **DINAMIS / Théia** (`DinamisClient`, `DinamisImageFinder`) — SPOT 6/7 via STAC, with
+    presigned MinIO URLs through the `teledetection` SDK, COG clips, and
+    `filename_template` (`DINAMIS_DEFAULT_FILENAME_TEMPLATE`, `DINAMIS_LEGACY_FILENAME_TEMPLATE`).
+  - **Google Earth Engine** (`GEEClient`, `GEE_ImageFinder`, `GEE_ImageCollectionCatalog`).
+  - **Global DEMs** (`DEMClient`, `DEMFinder`) — SRTM GL1 and Copernicus GLO-30, cached and
+    mosaicked, no account needed.
+- **Archive layout** (`data_sources/_layout.py`): `sensor_pathrow` organisation for Landsat
+  and Sentinel-2 downloads, and `safe_filename` / `filename_from_content_disposition`, so a
+  server-supplied filename can never write outside its destination folder.
+- `tests/data_sources/` — 234 offline tests (no network, no credentials): tile and product-id
+  parsing, filename sanitisation, quota guards, rate-limit retry, error diagnosis, atomic
+  downloads, and a guard that fails if a credential-shaped literal appears in the sources.
+
+### Changed
+- `geomulticorr.gee` is now a deprecated alias of `geomulticorr.data_sources`. Its duplicate
+  `gee_image_search_download.py` is removed; `from geomulticorr.gee import GEEClient,
+  ImageFinder, …` keeps working with a `DeprecationWarning`, but importing the old
+  *submodule* path (`geomulticorr.gee.gee_image_search_download`) no longer does.
+
+### Security
+- Credentials are read only from arguments or environment variables (`PL_API_KEY`,
+  `USGS_M2M_USERNAME` / `USGS_M2M_TOKEN`, `MDT_SPOT67_STAC_ACCESS_KEY` /
+  `MDT_SPOT67_STAC_SECRET_KEY`, `.env` via python-dotenv); none is stored in the package.
+  MPC SAS tokens are stripped from derived filenames.
+
+### Fixed
+- `DEMClient`: every successful tile download failed with `Cannot reach …` — `_write_atomic`
+  read the size of its temporary file *after* renaming it away.
+- `DEMFinder.search_metadata` for `provider="cop30"` took the latitude from the wrong token
+  of the tile id (always 10°), so the returned tile footprints were in the wrong place.
+- `CITATION.cff` — metadata now validated using `$cffconvert --validate` and compatible with 'AGPL-3.0-or-later', pointing at the concept DOI (all versions).
+
+## [0.7.2] — 2026-10-19
+
+### Added
+- `.zenodo.json` — Zenodo deposit metadata (title, description, AGPL-3.0 licence, creators with ORCID, contributors, keywords), so each GitHub release is archived with complete metadata.
+- `CITATION.cff` — "Cite this repository" metadata for GitHub and reference managers,
+  pointing at the concept DOI (all versions).
+
+### Changed
+- Package authors in `pyproject.toml` now carry contact addresses.
+
+No code change: the library behaves exactly as 0.7.1.
+
+## [0.7.1] — 2026-10-15
+
+### Added
+- **Correlation of multi-temporal DEMs.** DEMs correlate badly on raw elevation, so they
+  are correlated through terrain products, each its own **image type**: `hillshade`
+  (single light), `mdhillshade` (multidirectional), `slope`, plus the cropped `dem`.
+  `sieve_bulk(image_type="dem", terrain_products=…)` crops, reprojects and merges each
+  DEM onto the pzone grid as float32, *then* derives the products. Doing it after the
+  merge avoids seam artefacts and computes slope/shading at the correlated resolution.
+  Thumbs go to `<pz>/elevation/<type>/`, pairs to `image_correlation/<type>/`. Optical
+  paths are unchanged. See `docs/dem_correlation.md`.
+- `Thumb.th_type` / `Pair.pa_type` (read from the folder) and the `th_type` / `pa_type`
+  columns; `Session.thumb_dir()` / `pair_dir()`.
+- `image_type=` on `update_pairs`, `get_pairs`, `get_pairs_overview`, the correlation,
+  extraction and correction batch methods, and both explorers. Pairs never cross types.
+  Use it instead of `criterias`: `"hillshade"` is a substring of `"mdhillshade"`.
+- `prepare_pairs_correlation(nodata_value=, individual_normalization=,
+  pre_normalization=)`, with per-type defaults (`CORR_INPUT_DEFAULTS`). Changing them
+  regenerates the job script.
+- DEM source inference from file names (`infer_dem_sensor`): `pleiades`, `spot6`,
+  `spot7`, `worldview`, `lidar`, `uav`, `aerial`, else `dem`.
+- `geomulticorr/utils/_terrain.py`: slope, single-light and multidirectional hillshade
+  with true pixel spacing and NaN propagation.
+
+### Changed
+- **`sieve_bulk(image_type="dem")` now writes dated DEM thumbs.** The previous
+  single-correction-DEM behaviour is `image_type="reference_dem"` (or
+  `build_reference_dem`).
+- `map_georasters_bank(image_type="dem")` writes the `Protomap_dem` layer, so it no longer
+  overwrites the optical `Protomap`; `get_georasters_map(image_type)` now honours its
+  argument.
+- The pzone gains an eighth subfolder, `elevation/`. The pairs explorer stash gains a
+  seventh key, `image_type`, and the figure stem adds it for non-optical types only.
+
+### Fixed
+- `update_thumbs` crashed with `KeyError: 'th_path'` when no thumb was found; it now warns,
+  naming the globs and the no-`_` pzone rule.
+- `Pair(session, target_path=<pathlib.Path>)` ignored the path (`type(...) in (str, Path)`
+  is false for `PosixPath`); only strings worked.
+
+## [0.7.0] — 2026-09-29
+
+### Fixed
+- **Pair weights never reached the solver.** `input_tio` hard-coded the *"weighting by
+  interferogram variance"* line to `0`, and `invers_pixel_omp` reads the third column of
+  `liste_couple` only when that line is `2` — every `weight_mode` ever written was ignored
+  and the solver used its own 1/σ per map. `TIOConfig(weight_mode="file")` is the new
+  default, so **re-running an inversion changes its result**; `TIOConfig.legacy()`
+  reproduces the earlier block byte-for-byte for comparison.
+
+### Added
+- **`geomulticorr.inversion.pytio`** — the Python port of `invers_pixel_brit_omp.f90`
+  (M.-P. Doin, CNRS/ISTerre; optical variant Bontemps et al. 2018) and
+  `lect_depl_cumule_lin.f`, vendored with a test suite (`tests/inversion/pytio/`).
+  Validated against the Fortran to float32 rounding.
+- **`TIOInversion.launch(mode="python")`** — runs the inversion in-process with no
+  Fortran binaries, writes `TOT_<date>_<dir>.tif` directly plus `diagnostics/`
+  (rms, rank defect, pairs per pixel, velocity fit; per-pair residuals on request) and
+  returns the solver's xarray datasets. `tio_binaries_dir=None` is now accepted.
+- **`TIOConfig`** as the single solver configuration: `prepare_inversion(solver=…)`,
+  `input_tio` rendered from it (`input_tio_text`), recorded in the run-parameters
+  trace (`solver`, `weights.applied_by_solver`). A warning fires when non-uniform
+  weights are written under a mode the solver will not read.
+- **`TIOInversion.network_components()`** — connected components of the pair graph
+  with dates and sensors; `prepare_inversion` warns when there is more than one
+  (no pair links them, so the offset between them is decided by the smoothing prior)
+  and records them in the trace (`network`).
+- **`sensor_weights`** — thirteenth weighting parameter: `{"spot": 1.0, "planetscope": 0.5}`
+  multiplied into every mode's weights per sensor (substring match, longest key wins,
+  min of the two sides). Explorer text field, figure stem fragment, `sensor` column in
+  the weights frame, per-sensor colouring in both figure backends.
+- **`geomulticorr.inversion._stack`** — `load_cumulative_stack` / `write_cumulative_stack`
+  / `TIOInversion.to_xarray()`: the `TOT_*.tif` series as one `(time, y, x)` dataset and
+  back. `InversionExtractor` now also accepts an inversion directory.
+- **`geomulticorr.inversion.fusion`** — `pair_closure_against_series` + `closure_summary`
+  (which sensor disagrees with which, per pair and per pixel), `calibrate_to_reference`
+  (per-pixel offset + rate over the overlap), `fuse_series`, and the `fuse_inversions`
+  orchestrator writing the `TOT_*.tif` layout, `calibration/*.tif` and
+  `fusion_parameters.json`. `resolve_inversion_dir(session, pzone, name)` for its output.
+- **`plot_cumulative_time_series`** — per-point EW/NS/magnitude panels with one line per
+  inversion (e.g. SPOT, PlanetScope, fused) and a buffer-std band.
+- Docs: `multi_sensor_fusion.md`, `tio_algorithm_guide.md`, `tio_inversion_by_hand.md`;
+  `dask` added to `gmc_env.yml`.
+
+### Changed
+- `_WEIGHT_PARAM_KEYS` has thirteen entries; `WEIGHTS_FRAME_COLUMNS` gains `sensor`;
+  `run-parameters` JSON gains `solver` and `network` and no longer lists `input_tio` as
+  unrecorded.
+- The Python backend writes full-height rasters where the Fortran post-processor drops
+  the last row; do not fuse runs from different backends (`xr.align(join="exact")` refuses).
+
+### Future
+- A joint two-sensor inversion with cross-sensor bias terms on the vendored kernel; HPC
+  submission of the Python backend.
+
+## [0.6.2] — 2026-09-14
+
+### Updates
+
+Updates on email. No important changes.
+
+## [0.6.1] — 2026-09-14
+
+### Added
+- **Community standards** — Code of Conduct (Contributor Covenant), Contributing guidelines (workflow, testing, commit conventions), and Security policy (vulnerability reporting)
+- **README** — DOI reference for citation
+
+## [0.6.0] — 2026-09-14
+
+### Added
+- **Correlation parameters infrastructure recovery**:
+  - `geomulticorr.correlation.corr_params`: ASP parameter derivation (kernel sizing, search reach, dynamic range calculation, strain-rate ceilings)
+  - `geomulticorr.correlation._correlation_plan`: correlation plan JSON structure, precedence resolver (`scalar → group → override`), file comparison guard
+  - `geomulticorr.utils._corrparams_plotly`: interactive 4-view correlation-parameters explorer (design_map, kernel_search, SNR, cost)
+  - `geomulticorr.utils._corrparams_frame`: parameter frame contract (`CORRPARAMS_FRAME_COLUMNS`) and group aggregation
+  - `geomulticorr.utils._corrparams_export`: figure export with stem pruning (`relevant_corr_keys`)
+  - `geomulticorr.utils._durations`: duration string parsing (`"1Y"`, `"6M"`, `"2W"`, `"30D"`) for Δt filters
+  - Comprehensive test suite (`test_corr_params`, `test_correlation_plan`, `test_corrparams_contracts`, `test_prepare_per_pair`, `test_explore_correlation_params`, `test_thumb_resolution`)
+- **`Session.explore_correlation_params()`** — interactive correlation-parameters explorer (headless + widget modes), parameter plan builder, stashes `_last_corr_params` for pipeline replay
+- **`Session.save_correlation_figure()`** — exports correlation-parameters figures (html + static formats)
+- **`Thumb.th_res`** — per-image GSD tracking from raster headers (float dtype); backfill support via `Session.backfill_thumb_resolution()`
+- **License badge** — CC BY-NC-ND 4.0 SVG asset (`by-nc-nd.svg`)
+
+### Changed
+- **Core explorer state consolidation** — `Session._thumb_resolution()` memoised (lazy, bounds-checked), correlation-parameter frame builders split into `_corrparams_pair_facts` (table-based, no `Pair` construction) and `_corrparams_frame` (pure arithmetic over cached facts)
+- **Console tables** — enhanced formatting for correlation-group summaries and parameter details
+- **`TIOInversion` / inversion** — run-parameters trace improvements, weights and state consolidation
+- **`gmc_functions`** — updated plotting with per-correction before/after visuals
+- **`correlation.py`** — ASP parameter passing and `corr_eval` command construction updates
+- **GEE integration (`geomulticorr.gee`)** — improved image search and download robustness
+
+### Technical Details
+- Correlation-parameter explorer recovers table-only design from pair-strategy explorer: reads from `get_pairs_overview()` and Thumbs layer, never constructs `Pair` objects (~100× faster than `get_pairs()` footprint cost)
+- Parameter resolution: `scalar arguments → plan group → per-pair override` precedence, with reuse guard that compares parameters, not just file existence
+- Per-group parameter derivation runs twice: per-pair ideal, then reduced to groups, so figures and files agree with plan replay
+- Δt filters use duration strings; min/max threshold gates whether explicit search box is used; uniform overrides are flagged, never clamped
+
 ## [0.5.2] — 2026-08-31
 
 ### Added

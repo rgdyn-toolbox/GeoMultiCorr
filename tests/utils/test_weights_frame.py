@@ -50,6 +50,9 @@ from geomulticorr.utils._weights_frame import (
     weight_summary,
     weights_frame,
     weights_stats,
+    format_sensor_weights,
+    parse_sensor_weights,
+    sensor_colors,
 )
 
 
@@ -88,6 +91,13 @@ class TestFrameContract:
         assert math.isnan(frame["nmad_ew"].iloc[0])
         assert math.isnan(frame["cc"].iloc[0])
         assert frame["corr_direction"].iloc[0] == ""
+        assert frame["sensor"].iloc[0] == ""
+
+    def test_sensor_column_round_trips(self):
+        frame = weights_frame(["a", "b"], [10, 20], [1.0, 1.0], [1.0, 1.0],
+                              sensor=["spot6", None])
+        assert frame["sensor"].tolist() == ["spot6", ""]
+        assert frame["sensor"].dtype == object
 
     def test_values_round_trip(self):
         frame = _frame(2)
@@ -106,6 +116,7 @@ class TestLengthValidation:
             {"nmad_ns": [0.1]},
             {"cc": [0.5]},
             {"corr_direction": ["Forward"]},
+            {"sensor": ["spot6"]},
         ],
     )
     def test_short_optional_vector_raises(self, kwargs):
@@ -151,6 +162,61 @@ class TestRelevantWeightKeys:
         for mode in ("uniform", "temporal", "parametric", "quality",
                      "quality_spatial"):
             assert "dt_range" not in relevant_weight_keys(mode), mode
+
+    def test_sensor_weights_is_relevant_for_every_mode_when_set(self):
+        """Mode-independent: it multiplies every mode's result, uniform included."""
+        for mode in ("uniform", "temporal", "parametric", "quality", "sigmoid"):
+            assert "sensor_weights" in relevant_weight_keys(
+                mode, sensor_weights={"spot": 0.5}), mode
+
+    def test_sensor_weights_is_absent_when_unset(self):
+        for value in (None, {}):
+            assert "sensor_weights" not in relevant_weight_keys("uniform", sensor_weights=value)
+        # and it stays out of the per-mode table itself
+        from geomulticorr.utils._weights_frame import WEIGHT_MODE_KEYS
+        assert all("sensor_weights" not in keys for keys in WEIGHT_MODE_KEYS.values())
+
+
+class TestSensorWeightsText:
+    """The Text control's grammar and its inverse."""
+
+    def test_parse_basic(self):
+        assert parse_sensor_weights("spot=0.5, planetscope=1") == {"planetscope": 1.0, "spot": 0.5}
+
+    def test_parse_accepts_colon_whitespace_and_case(self):
+        assert parse_sensor_weights("SPOT:0.5 Planetscope=2") == {"planetscope": 2.0, "spot": 0.5}
+
+    def test_parse_empty_is_none(self):
+        assert parse_sensor_weights("") is None
+        assert parse_sensor_weights("   ") is None
+        assert parse_sensor_weights(None) is None
+
+    @pytest.mark.parametrize("bad", ["spot", "spot=abc", "=0.5", "spot=-1", "spot=nan"])
+    def test_parse_rejects_naming_the_token(self, bad):
+        with pytest.raises(ValueError):
+            parse_sensor_weights(bad)
+
+    def test_format_is_sorted_and_round_trips(self):
+        text = format_sensor_weights({"spot": 0.5, "planetscope": 1.0})
+        assert text == "planetscope=1, spot=0.5"
+        assert parse_sensor_weights(text) == {"planetscope": 1.0, "spot": 0.5}
+        assert format_sensor_weights(None) == ""
+        assert format_sensor_weights({}) == ""
+
+
+class TestSensorColors:
+    def test_deterministic_under_reordering(self):
+        a = sensor_colors(["spot6", "planetscope", "spot7"])
+        b = sensor_colors(["spot7", "spot6", "planetscope"])
+        assert a == b
+        assert len(set(a.values())) == 3
+
+    def test_unknown_label_is_included(self):
+        assert "" in sensor_colors(["", "spot6"])
+
+    def test_palette_cycles(self):
+        many = [f"s{i}" for i in range(25)]
+        assert len(sensor_colors(many)) == 25
 
 
 class TestModeTableIsShared:

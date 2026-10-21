@@ -47,6 +47,7 @@ import shutil
 import stat
 import subprocess
 import warnings
+from collections import deque
 from pathlib import Path
 from datetime import datetime
 
@@ -57,6 +58,15 @@ import geoutils as gu
 from geomulticorr.core.console import BatchProgress, print_tio_export_summary
 from geomulticorr.stats import load_pair_stats
 from geomulticorr._logging import logger
+from geomulticorr.inversion.pytio.config import TIOConfig, input_tio_text
+from geomulticorr.utils._weights_frame import (
+    WEIGHT_MODE_KEYS,
+    format_weights_summary,
+    relevant_weight_keys,
+    weight_summary,
+    weights_frame,
+    weights_stats,
+)
 from geomulticorr.utils.hpc_tools import (
     oar_header,
     cluster_base_env,
@@ -95,6 +105,52 @@ def _year_dec(d: datetime) -> float:
     year_start = datetime(d.year, 1, 1)
     year_end   = datetime(d.year + 1, 1, 1)
     return d.year + (d - year_start).days / (year_end - year_start).days
+
+
+def connected_date_components(edges) -> list[list[str]]:
+    """Connected components of the pair graph, as sorted lists of date strings.
+
+    Each edge is a ``(date1, date2)`` pair; orientation and duplicates are
+    irrelevant (both ``(a, b)`` and ``(b, a)`` link the same two dates). A
+    plain breadth-first search over a dict-of-sets — no graph library, the
+    archives are a few hundred dates at most.
+
+    Why this exists: the time-series inversion measures only *differences*
+    between dates that a pair connects. With two components (say SPOT pairs
+    and PlanetScope pairs, no cross-sensor pair) the relative displacement
+    between them is a null space of the least squares that the smoothing prior
+    decides alone, and the solver's own outputs do not flag it — the ε link
+    rows keep every column non-zero, so ``rank_defect`` stays 0 and the closure
+    RMS stays small. Only the graph shows it.
+
+    :param edges: Iterable of ``(date1, date2)`` strings.
+    :returns: Components ordered by their earliest date, dates sorted inside
+        each. Empty input → ``[]``.
+    """
+    adjacency: dict[str, set[str]] = {}
+    for a, b in edges:
+        a, b = str(a), str(b)
+        adjacency.setdefault(a, set()).add(b)
+        adjacency.setdefault(b, set()).add(a)
+
+    seen: set[str] = set()
+    components: list[list[str]] = []
+    for start in sorted(adjacency):
+        if start in seen:
+            continue
+        queue = deque([start])
+        seen.add(start)
+        members = []
+        while queue:
+            node = queue.popleft()
+            members.append(node)
+            for nxt in adjacency[node]:
+                if nxt not in seen:
+                    seen.add(nxt)
+                    queue.append(nxt)
+        components.append(sorted(members))
+    components.sort(key=lambda c: c[0])
+    return components
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -168,6 +224,85 @@ def normalise_dt(dt_values: list[float], invert: bool = False) -> list[float]:
         t_norm = (float(v) - vmin) / span      # 0 = shortest, 1 = longest
         out.append(t_norm if invert else 1.0 - t_norm)
     return out
+
+
+def _validate_sensor_weights(sensor_weights) -> dict[str, float] | None:
+    """``None``/``{}`` → ``None``; otherwise a ``{str: finite float ≥ 0}`` mapping.
+
+    One representation for "no sensor weighting" keeps the explorer stash,
+    the figure stem and the JSON trace from telling ``None`` and ``{}`` apart.
+    """
+    if not sensor_weights:
+        return None
+    if not hasattr(sensor_weights, "items"):
+        raise TypeError(
+            f"sensor_weights must be a mapping {{sensor: factor}}, got "
+            f"{type(sensor_weights).__name__}"
+        )
+    out: dict[str, float] = {}
+    for key, value in sensor_weights.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError(f"sensor_weights keys must be non-empty strings, got {key!r}")
+        try:
+            factor = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"sensor_weights[{key!r}] must be a number, got {value!r}") from None
+        if not math.isfinite(factor) or factor < 0.0:
+            raise ValueError(f"sensor_weights[{key!r}] must be finite and ≥ 0, got {value!r}")
+        out[key.strip().lower()] = factor
+    return out
+
+
+def _sensor_factor_one_side(sensor: str, sensor_weights: dict[str, float]) -> float:
+    """Longest key that is a substring of *sensor* (case-insensitive) wins; else 1.0."""
+    name = (sensor or "").lower()
+    best_key = None
+    for key in sensor_weights:
+        if key in name and (best_key is None or len(key) > len(best_key)):
+            best_key = key
+    return 1.0 if best_key is None else sensor_weights[best_key]
+
+
+def sensor_weight_factor(sensors: tuple[str, str], sensor_weights: dict[str, float] | None) -> float:
+    """Multiplicative factor a pair receives from ``sensor_weights``.
+
+    ``1.0`` when *sensor_weights* is empty. Each side of the pair is matched
+    **case-insensitively by substring** — ``{"spot": 0.5}`` covers ``spot6`` and
+    ``spot7`` — and when several keys match, the **longest** wins, so
+    ``{"spot": 0.5, "spot7": 0.8}`` gives ``spot7`` its own factor. A sensor no
+    key matches keeps ``1.0``. The pair takes the **minimum** of its two sides:
+    a cross-sensor pair is only as trusted as its weaker image.
+
+    :param sensors: ``(left_sensor, right_sensor)`` names; empty strings allowed.
+    :param sensor_weights: Already validated mapping (see
+        :func:`_validate_sensor_weights`) or ``None``.
+    """
+    if not sensor_weights:
+        return 1.0
+    left, right = sensors
+    return min(_sensor_factor_one_side(left, sensor_weights),
+               _sensor_factor_one_side(right, sensor_weights))
+
+
+def _pair_sensors(pair) -> tuple[str, str]:
+    """``(left, right)`` sensor names of a pair, ``""`` where the attribute is missing."""
+    return (
+        str(getattr(getattr(pair, "pa_left", None), "th_sensor", "") or ""),
+        str(getattr(getattr(pair, "pa_right", None), "th_sensor", "") or ""),
+    )
+
+
+def _pair_sensor_label(pair) -> str:
+    """One lower-case label per pair for the weights frame: the sensor when both
+    sides agree, ``"left+right"`` otherwise, ``""`` when unknown."""
+    left, right = (s.lower() for s in _pair_sensors(pair))
+    if not left and not right:
+        return ""
+    if left == right or not right:
+        return left
+    if not left:
+        return right
+    return f"{left}+{right}"
 
 
 def combine_weights(
@@ -295,13 +430,21 @@ def _find_tio_executable(bin_name: str, tio_bin_dir: Path | None = None) -> str:
 
 def _build_input_tio_text(
         liste_image_inv_fn: str = "liste_image_inv",
-        liste_couple_fn: str = "liste_couple"
+        liste_couple_fn: str = "liste_couple",
+        solver: TIOConfig | None = None,
         ) -> str:
-    """Build the standard ``invers_pixel`` parameter block written to ``input_tio``.
+    """Build the ``invers_pixel`` parameter block written to ``input_tio``.
 
-    Produces the multi-line text expected by ``invers_pixel_omp`` as its
-    stdin input file. All smoothing, referencing, and weighting settings are
-    hard-coded to the GMC defaults; only the filenames are customisable.
+    A thin wrapper over :func:`geomulticorr.inversion.pytio.config.input_tio_text`,
+    kept under its historical name. The block is rendered from a
+    :class:`~geomulticorr.inversion.pytio.TIOConfig` — the same object the
+    Python backend reads — so the two backends cannot drift apart.
+
+    Until 0.6.3 this text was hard-coded with the *"weighting by interferogram
+    variance"* line at ``0``, and the Fortran reads the third column of
+    ``liste_couple`` **only** when that line is ``2``: every pair weight GMC
+    wrote was silently ignored. ``TIOConfig()`` now renders ``2``;
+    ``TIOConfig.legacy()`` reproduces the old block byte-for-byte.
 
     :param liste_image_inv_fn: Filename of the image-date list, relative to the
         inversion directory (e.g. ``'liste_image_inv'``).
@@ -309,44 +452,77 @@ def _build_input_tio_text(
     :param liste_couple_fn: Filename of the pair/weight list, relative to the
         inversion directory (e.g. ``'liste_couple'``).
     :type liste_couple_fn: str
+    :param solver: The solver configuration; ``None`` means the defaults.
+    :type solver: TIOConfig or None
     :returns: Multi-line parameter string terminated by a newline, ready to be
         written directly to ``input_tio``.
     :rtype: str
     """
-    lines = [
-        "0.0030  %  smoothing coefficient (threshold = 0.0001)",
-        "1   %   remove points with large RMS misclosure  (y=0;n=1)",
-        "1.2 %  threshold on RMS misclosure (in rad) ?",
-        "1  % range and azimuth sampling ?",
-        "0 % iterations to correct unwrapping errors (y:nb_of_iterations,n:0)",
-        "0 % iterations to weight pixels of interferograms with large residual? (y:nb_of_iterations,n:0)",
-        "0.2 % Scaling value for weighting residuals (in same unit as input files)",
-        "0 % iterations to mask (tiny weight) pixels of interferograms with large residual? (y:nb_of_iterations,n:0)",
-        "4 % threshold on residual, defining clearly wrong values (in same unit as input files)",
-        "1    %   elimination of outliers by the median ? (y=0,n=1)",
-        f"{liste_image_inv_fn}",
-        "0    % sort by date (0) ou by another variable (1) ?",
-        f"{liste_couple_fn}",
-        "1   % interferogram format (RMG : 0; R4 :1) (date1-date2_pre_inv.unw or date1-date2.r4)",
-        "3100.   %  include interferograms with bperp lower than maximal baseline",
-        "1 % Weight input interferograms by coherence or correlation maps ? (y:0,n:1)",
-        "0 % coherence file format (RMG : 0; R4 :1) (date1-date2.cor or date1-date2-CC.r4)",
-        "1   %   minimal number of interferams using each image",
-        "1     % interferograms weighting so that the weight per image is the same (y=0;n=1)",
-        "0.6 % maximum fraction of discarded interferograms",
-        "0 %  Would you like to restrict the area of inversion ?(y=1,n=0)",
-        "1 735 1500 1585  %Give four corners, lower, left, top, right in file pixel coord",
-        "1  %    referencing of interferograms by bands (1) or corners (2) ?",
-        "5  %     band NW-SW(1), SW-SE(2), NW-NE(3), average of three bands(4), no referencement(5) ?",
-        "1   %   Weigthing by image quality (y:0,n:1) ?",
-        "0   %  Weigthing by interferogram variance (y:0,n:1) ?  or user given weight (2)?",
-        "1    % use of covariance (y:0,n:1) ? (Obsolete)",
-        "0   % include a baseline term in inversion ? (y:1;n:0) Requires smoothing !",
-        "1   % smoothing by Laplacian, computed with a scheme at 3pts (0) or 5pts (1) ?",
-        "2   % weigthed smoothing by the average time step (y:0; n:1, int:2) ?",
-        "1    % put the first derivative to zero (y:0; n:1)?",
-    ]
-    return "\n".join(lines) + "\n"
+    return input_tio_text(solver, liste_image_inv_fn, liste_couple_fn)
+
+
+def resolve_inversion_dir(session, pzone_name: str, inversion_name: str) -> Path:
+    """Where an inversion named *inversion_name* of *pzone_name* lives.
+
+    Layout-aware, like everything that touches the project tree: the legacy
+    layout keeps ``inversion_<name>/`` in the pzone root, the new one uses the
+    ``inversion/<name>/`` sub-folder. Used by ``TIOInversion.__init__`` and by
+    callers that write a product with no ``TIOInversion`` of its own — a fused
+    series lands at ``resolve_inversion_dir(session, pz, "PDL_fused")``. No
+    ``PZ_KIND_*`` constant is added for it: the run is a sub-folder of the
+    pzone's ``inversion/`` kind, not a kind of its own.
+    """
+    if getattr(session, "_legacy_layout", False):
+        return Path(session.pz_dir(pzone_name)) / f"inversion_{inversion_name}"
+    return Path(session.pz_dir(pzone_name, "inversion")) / inversion_name
+
+
+def _write_geotiff_like(
+    data: np.ndarray, path: Path, ref_raster_path: Path, *, nodata=np.nan
+) -> Path:
+    """Write a 2-D float32 array as a GeoTIFF on *ref_raster_path*'s georeference.
+
+    The profile every inverted product shares — CRS and transform from the
+    reference, ``float32``, NaN nodata, LZW — so files written by the Fortran
+    conversion (:meth:`TIOInversion._tot_to_geotiff`), the Python backend and
+    the fusion writer are indistinguishable to ``InversionExtractor`` and
+    ``rasterstats``. *data* may have fewer rows than the reference (the Fortran
+    post-processor drops one); the transform is kept, only ``height`` follows
+    the array.
+    """
+    data = np.asarray(data, dtype=np.float32)
+    if data.ndim != 2:
+        raise ValueError(f"expected a 2-D array, got shape {data.shape}")
+    with rasterio.open(str(ref_raster_path)) as ref_ds:
+        profile = ref_ds.profile.copy()
+    profile.update(height=data.shape[0], width=data.shape[1], count=1,
+                   dtype=np.float32, nodata=nodata, compress="lzw")
+    if not profile.get("tiled", False):
+        # a striped reference carries its strip size as blockxsize/blockysize,
+        # which GDAL rejects (with a warning) unless the output is tiled
+        profile.pop("blockxsize", None)
+        profile.pop("blockysize", None)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(str(path), "w", **profile) as dst:
+        dst.write(data, 1)
+    return path
+
+
+def _coerce_solver(solver) -> TIOConfig:
+    """Validate a ``solver=`` argument: ``None`` → defaults, else a ``TIOConfig``.
+
+    Raised *before* anything is written so a typo cannot leave a half-prepared
+    inversion behind.
+    """
+    if solver is None:
+        return TIOConfig()
+    if not isinstance(solver, TIOConfig):
+        raise TypeError(
+            "solver must be a geomulticorr.inversion.TIOConfig "
+            f"(got {type(solver).__name__}); e.g. TIOConfig(gamma=0.01, reweight_iterations=2)."
+        )
+    return solver
 
 
 def _build_launch_script(
@@ -493,13 +669,48 @@ class TIOInversion:
 
     _DIRECTIONS = ("EW", "NS")
 
+    #: Exactly the keys :attr:`_last_weights_params` carries.
+    #:
+    #: These are the thirteen weighting parameters shared by
+    #: :meth:`compute_pair_weights`, :meth:`write_liste_couple` and
+    #: :meth:`prepare_inversion`, so both of these are legal::
+    #:
+    #:     inv.write_liste_couple(**inv._last_weights_params)
+    #:     inv.prepare_inversion(**inv._last_weights_params)
+    #:
+    #: ``direction`` is **excluded, and that is forced rather than a
+    #: preference**: neither writer has that parameter, so including it would
+    #: make both splats raise ``TypeError``.  It is view-only in the explorer
+    #: anyway — it toggles which series is visible, nothing more.
+    #:
+    #: The key set is fixed, never pruned per mode: a variable set would break
+    #: the splat guarantee, and the receiving method would quietly substitute its
+    #: own default for whatever was dropped.
+    #:
+    #: ``sensor_weights`` is the one non-scalar: ``{"spot": 1.0, "planetscope":
+    #: 0.5}`` or ``None``, a multiplicative factor applied after every mode's
+    #: own weight (see :func:`sensor_weight_factor`).
+    _WEIGHT_PARAM_KEYS: tuple[str, ...] = (
+        "weight_mode", "slope", "min_weight", "dt_range", "sharpness", "w_min",
+        "invert", "combine", "alpha", "beta", "gamma", "cc_gamma", "sensor_weights",
+    )
+
+    #: Initial values :meth:`explore_weights` accepts through ``**defaults``.
+    #: Anything else raises ``TypeError`` rather than being silently ignored —
+    #: a typo like ``sharpnes=8`` used to be a no-op.
+    _WEIGHTS_EXPLORER_DEFAULTS: tuple[str, ...] = (
+        "direction", "combine", "alpha", "beta", "gamma", "cc_gamma",
+        "sharpness", "slope", "min_weight", "w_min", "invert", "dt_range",
+        "sensor_weights",
+    )
+
     def __init__(
         self,
         session,
         pairs: list,
         inversion_name: str = "inversion",
         filter_pipeline=None,
-        tio_binaries_dir: str | Path = "/home/cusicand/TIO_install",
+        tio_binaries_dir: str | Path | None = "/home/cusicand/TIO_install",
     ) -> None:
         if not pairs:
             raise ValueError("At least one pair is required")
@@ -508,33 +719,54 @@ class TIOInversion:
         self.pairs               = list(pairs)
         self.inversion_name      = inversion_name
         self.filter_pipeline     = filter_pipeline
-        self.tio_binaries_dir    = Path(tio_binaries_dir)
+        self.tio_binaries_dir    = None if tio_binaries_dir is None else Path(tio_binaries_dir)
+        #: The solver settings both backends read; replaced by
+        #: ``prepare_inversion(solver=...)``.
+        self.solver: TIOConfig   = TIOConfig()
 
         # Derive pzone from first pair (all pairs must be from same pzone)
         first_pair = self.pairs[0]
         # Extract pzone from pair key format: {pzone}_{date1}-{sensor1}_{date2}-{sensor2}
         pzone_name = first_pair.pa_key.split("_")[0]
 
-        # Build inversion directory within pzone structure (layout-aware)
-        if session._legacy_layout:
-            # Legacy: inversion_{name} prefix in pzone root
-            pzone_path = session.pz_dir(pzone_name)
-            self.inversion_dir = pzone_path / f"inversion_{inversion_name}"
-        else:
-            # New layout: inversion/{name} subfolder
-            self.inversion_dir = session.pz_dir(pzone_name, "inversion") / inversion_name
+        self.inversion_dir = resolve_inversion_dir(session, pzone_name, inversion_name)
 
         logger.info(f"TIO inversion '{inversion_name}' will be stored in: {self.inversion_dir}")
 
-        # Validate TIO binaries exist
-        self.invers_pixel_omp_bin = _find_tio_executable("invers_pixel_omp", self.tio_binaries_dir)
-        self.lect_depl_cumule_lin_bin = _find_tio_executable("lect_depl_cumule_lin", self.tio_binaries_dir)
-        logger.info(f"TIO binaries found: invers_pixel_omp, lect_depl_cumule_lin")
+        # The Fortran binaries are optional: without them only the in-process
+        # backend, launch(mode="python"), is available. Never raise here — the
+        # Fortran launch paths check for themselves and name the argument.
+        self.invers_pixel_omp_bin: str | None = None
+        self.lect_depl_cumule_lin_bin: str | None = None
+        try:
+            self.invers_pixel_omp_bin = _find_tio_executable("invers_pixel_omp", self.tio_binaries_dir)
+            self.lect_depl_cumule_lin_bin = _find_tio_executable("lect_depl_cumule_lin", self.tio_binaries_dir)
+        except FileNotFoundError:
+            self.invers_pixel_omp_bin = self.lect_depl_cumule_lin_bin = None
+            logger.info(
+                "TIO Fortran binaries not found"
+                + ("" if self.tio_binaries_dir is None else f" in {self.tio_binaries_dir}")
+                + " — only launch(mode='python') is available."
+            )
+        else:
+            logger.info("TIO binaries found: invers_pixel_omp, lect_depl_cumule_lin")
+
+        self.pzone_name = pzone_name
 
         self._image_dates: list[str] | None = None
         self._raster_width:  int | None = None
         self._raster_height: int | None = None
         self.cluster: str | None = None
+
+        # Explorer / provenance state.  Every reader still goes through
+        # getattr(..., None): the tests build instances via TIOInversion.__new__,
+        # which never runs this method.
+        self._last_weights_params: dict | None = None
+        self._last_weights: dict | None = None
+        self._quality_metrics: tuple | None = None
+        self._last_nmad_filter: dict | None = None
+        self._last_launch: dict | None = None
+        self._last_network: dict | None = None
 
     # ── repr ──────────────────────────────────────────────────────────────────
 
@@ -567,6 +799,70 @@ class TIOInversion:
             self._image_dates = sorted(dates)
         return self._image_dates
 
+    def network_components(self) -> list[dict]:
+        """Connected components of the pair network, with their dates and sensors.
+
+        The inversion only measures displacement *between dates a pair links*.
+        More than one component means the relative offset between the
+        components is not measured at all — the smoothing prior decides it —
+        which is exactly what happens when SPOT pairs and PlanetScope pairs are
+        inverted together with no cross-sensor pair. Nothing in the solver's
+        own diagnostics flags it (see :func:`connected_date_components`), so
+        :meth:`prepare_inversion` calls this and warns.
+
+        Not cached: :meth:`filter_pairs_by_nmad` mutates ``self.pairs`` and the
+        computation is a few hundred set operations.
+
+        :returns: One dict per component, ordered by earliest date::
+
+            {"dates": [YYYYMMDD, …], "start": …, "end": …, "n_dates": int,
+             "n_pairs": int, "sensors": [lower-case, sorted, unique]}
+
+            ``sensors`` is empty when the pairs carry no sensor attribute (the
+            thumbs are reached as ``pair.pa_left.th_sensor``).
+        """
+        def _d(thumb) -> str:
+            return str(getattr(thumb, "th_date", "")).replace("-", "")
+
+        def _s(thumb) -> str:
+            return str(getattr(thumb, "th_sensor", "") or "").lower()
+
+        edges = []
+        for p in self.pairs:
+            left = getattr(p, "pa_left", None)
+            right = getattr(p, "pa_right", None)
+            edges.append((_d(left), _d(right)))
+
+        components = []
+        for dates in connected_date_components(edges):
+            members = set(dates)
+            n_pairs = 0
+            sensors: set[str] = set()
+            for p, (a, b) in zip(self.pairs, edges):
+                if a in members or b in members:
+                    n_pairs += 1
+                    for side in ("pa_left", "pa_right"):
+                        s = _s(getattr(p, side, None))
+                        if s:
+                            sensors.add(s)
+            components.append({
+                "dates": list(dates),
+                "start": dates[0],
+                "end": dates[-1],
+                "n_dates": len(dates),
+                "n_pairs": n_pairs,
+                "sensors": sorted(sensors),
+            })
+        return components
+
+    @staticmethod
+    def _describe_components(components: list[dict]) -> str:
+        return "; ".join(
+            f"{c['start']}–{c['end']} ({c['n_dates']} dates, {c['n_pairs']} pairs)"
+            f"[{','.join(c['sensors']) or '?'}]"
+            for c in components
+        )
+
     @property
     def raster_shape(self) -> tuple[int, int]:
         """Raster dimensions ``(width_cols, height_rows)`` in pixels.
@@ -582,6 +878,42 @@ class TIOInversion:
             self._raster_width  = r.width
             self._raster_height = r.height
         return self._raster_width, self._raster_height
+
+    @property
+    def _last_weight_mode(self) -> str | None:
+        """Deprecated view onto ``_last_weights_params["weight_mode"]``.
+
+        .. deprecated:: 0.6.0
+           :meth:`explore_weights` now stashes one parameters dict, the way
+           ``Session.explore_pairs_strategy`` does.  Read
+           ``inv._last_weights_params["weight_mode"]``.  Removal in 0.7.0.
+
+        Read-only on purpose.  A setter would have to fabricate the other twelve
+        parameters out of defaults, re-creating exactly the second source of
+        truth this replaced.
+        """
+        warnings.warn(
+            "TIOInversion._last_weight_mode is deprecated and will be removed in "
+            "0.7.0 — use _last_weights_params['weight_mode'].",
+            DeprecationWarning, stacklevel=2,
+        )
+        params = getattr(self, "_last_weights_params", None) or {}
+        return params.get("weight_mode")
+
+    @property
+    def _last_combine(self) -> str | None:
+        """Deprecated view onto ``_last_weights_params["combine"]``.
+
+        .. deprecated:: 0.6.0
+           See :attr:`_last_weight_mode`.  Removal in 0.7.0.
+        """
+        warnings.warn(
+            "TIOInversion._last_combine is deprecated and will be removed in "
+            "0.7.0 — use _last_weights_params['combine'].",
+            DeprecationWarning, stacklevel=2,
+        )
+        params = getattr(self, "_last_weights_params", None) or {}
+        return params.get("combine")
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
@@ -760,7 +1092,49 @@ class TIOInversion:
             if not rsc_link.exists() and not rsc_link.is_symlink():
                 rsc_link.symlink_to(file_info)
 
-    def _tot_to_geotiff(self, tot_file: Path, ref_raster_path: Path) -> Path:
+    @staticmethod
+    def _tot_tif_name(directory: Path, date: str, component: str) -> Path:
+        """``<directory>/TOT_<date>_<component>.tif``.
+
+        The single place ``TOT_*`` GeoTIFF names are built, for all three
+        components (``EW``, ``NS``, ``magn``) — used by :meth:`_tot_to_geotiff`
+        (the writer), :meth:`post_process` (the pre-write skip-check, and the
+        magnitude output), so the naming can never drift between them.
+
+        :param directory: Destination directory (``inverse_EW``, ``inverse_NS``
+            or ``inverse_magn``).
+        :type directory: pathlib.Path
+        :param date: ``YYYYMMDD`` date string.
+        :type date: str
+        :param component: ``"EW"``, ``"NS"`` or ``"magn"``.
+        :type component: str
+        :rtype: pathlib.Path
+        """
+        from geomulticorr.inversion._stack import tot_tif_name  # the one spelling
+
+        return tot_tif_name(directory, date, component)
+
+    def to_xarray(self, components=("EW", "NS"), *, chunks="auto"):
+        """This inversion's cumulative series as one ``(time, y, x)`` dataset.
+
+        A thin wrapper over
+        :func:`geomulticorr.inversion._stack.load_cumulative_stack`, reading the
+        ``TOT_<date>_<comp>.tif`` rasters that :meth:`post_process` or
+        ``launch(mode="python")`` wrote. Lazy through dask when installed.
+
+        :param components: Data variables to load (``"EW"``, ``"NS"``; magnitude
+            is derived, not loaded).
+        :param chunks: See :func:`~geomulticorr.inversion._stack.load_cumulative_stack`.
+        :returns: ``xarray.Dataset`` with attrs ``inversion_name`` and ``pzone``.
+        """
+        from geomulticorr.inversion._stack import load_cumulative_stack
+
+        ds = load_cumulative_stack(self, components, chunks=chunks)
+        ds.attrs["inversion_name"] = self.inversion_name
+        ds.attrs["pzone"] = getattr(self, "pzone_name", "") or ""
+        return ds
+
+    def _tot_to_geotiff(self, tot_file: Path, ref_raster_path: Path, direction: str) -> Path:
         """Convert a raw ENVI Float32 TOT binary to a georeferenced GeoTIFF.
 
         ``lect_depl_cumule_lin`` is called with ``height - 1`` rows, so TOT
@@ -775,8 +1149,12 @@ class TIOInversion:
         :param ref_raster_path: Path to any same-grid GeoTIFF whose CRS and
             geotransform will be copied (typically ``pairs[0].pa_ew_path``).
         :type ref_raster_path: pathlib.Path
-        :returns: Path to the newly written GeoTIFF (same stem, ``.tif``
-            extension, LZW-compressed).
+        :param direction: ``"EW"`` or ``"NS"`` — appended to the output name
+            via :meth:`_tot_tif_name` so the two directions never collide if
+            ever written to the same directory.
+        :type direction: str
+        :returns: Path to the newly written GeoTIFF (``TOT_<date>_<direction>.tif``,
+            LZW-compressed).
         :rtype: pathlib.Path
         """
 
@@ -787,7 +1165,8 @@ class TIOInversion:
         mask = ~np.isfinite(data) | (data == 0)
         data[mask] = np.nan
 
-        out = tot_file.with_suffix(".tif")
+        date = tot_file.name.removeprefix("TOT_")
+        out  = self._tot_tif_name(tot_file.parent, date, direction)
         with rasterio.open(str(ref_raster_path)) as ref_ds:
             profile = ref_ds.profile.copy()
         profile.update(
@@ -904,10 +1283,19 @@ class TIOInversion:
         ``pair.pa_dt_days``. Missing values are recorded as ``nan`` (treated as
         neutral downstream) with a warning — a pair is never dropped here.
 
+        **Memoised**, because this opens one stats JSON per pair and
+        :meth:`explore_weights` calls it twice per redraw — 920 file opens per
+        slider tick at 460 pairs, on the default ``quality`` mode.  The cache is
+        cleared by :meth:`filter_pairs_by_nmad`, which changes ``self.pairs``.
+
         :returns: Four lists (ew_nmad, ns_nmad, cc, dt_days), each aligned to
             ``self.pairs``.
         :rtype: tuple[list[float], list[float], list[float], list[float]]
         """
+        cached = getattr(self, "_quality_metrics", None)
+        if cached is not None:
+            return cached
+
         def _num(v):
             return float(v) if isinstance(v, (int, float)) and math.isfinite(v) else float("nan")
 
@@ -932,7 +1320,9 @@ class TIOInversion:
             )
             ccs.append(_num(cc))
             dts.append(float(pair.pa_dt_days))
-        return ew_nmads, ns_nmads, ccs, dts
+
+        self._quality_metrics = (ew_nmads, ns_nmads, ccs, dts)
+        return self._quality_metrics
 
     def compute_pair_weights(
         self,
@@ -949,6 +1339,7 @@ class TIOInversion:
         beta: float = 1.0 / 3.0,
         gamma: float = 1.0 / 3.0,
         cc_gamma: float = 1.0,
+        sensor_weights: dict[str, float] | None = None,
         direction: str = "max",
     ) -> list[float]:
         """Compute one weight per pair (aligned to ``self.pairs``), in ``[0, 1]``.
@@ -995,13 +1386,46 @@ class TIOInversion:
         :param beta: ``'quality'``/``'wmean'`` weight of the CC term.
         :param gamma: ``'quality'``/``'wmean'`` weight of the Δt term.
         :param cc_gamma: Exponent applied to the CC sub-weight in ``'quality'``.
+        :param sensor_weights: Optional ``{sensor: factor}`` multiplied into the
+            weight of every pair of that sensor, **after** the mode weight and
+            after the *w_min* floor — so the floor stays per mode and the sensor
+            factor is a deliberate exception to it. Keys are matched
+            case-insensitively as substrings of ``pair.pa_left.th_sensor`` /
+            ``pa_right.th_sensor`` (``"spot"`` covers ``spot6`` and ``spot7``);
+            the longest matching key wins; a pair whose two sides fall in
+            different groups takes the smaller factor; unmatched sensors keep
+            ``1.0``. See :func:`sensor_weight_factor`. The solver renormalises
+            weights to mean 1 per pixel, so ``{"planetscope": 0.5}`` halves
+            PlanetScope's row weight relative to the rest — roughly a quarter of
+            the least-squares influence. Works with every mode, including
+            ``'uniform'``.
         :param direction: NMAD source for ``'quality'`` — ``"EW"``, ``"NS"``, or
             ``"max"`` (per-pair maximum). Ignored by date-based modes.
         :returns: Weights aligned to ``self.pairs``.
         :rtype: list[float]
         """
         n = len(self.pairs)
+        sensor_weights = _validate_sensor_weights(sensor_weights)
 
+        weights = self._mode_weights(
+            weight_mode, n, slope=slope, min_weight=min_weight, dt_range=dt_range,
+            sharpness=sharpness, w_min=w_min, invert=invert, combine=combine,
+            alpha=alpha, beta=beta, gamma=gamma, cc_gamma=cc_gamma, direction=direction,
+        )
+        if sensor_weights:
+            # Read the sensor names only when asked to: test fixtures and
+            # geodatabases predating th_sensor build pairs without it.
+            weights = [
+                w * sensor_weight_factor(_pair_sensors(pair), sensor_weights)
+                for w, pair in zip(weights, self.pairs)
+            ]
+        return weights
+
+    def _mode_weights(
+        self, weight_mode: str, n: int, *, slope, min_weight, dt_range, sharpness,
+        w_min, invert, combine, alpha, beta, gamma, cc_gamma, direction,
+    ) -> list[float]:
+        """The per-mode weight, before any sensor factor (see :meth:`compute_pair_weights`)."""
         if weight_mode in ("quality", "quality_spatial"):
             ew_nmads, ns_nmads, ccs, dts = self._pair_quality_metrics()
             if direction == "EW":
@@ -1111,6 +1535,7 @@ class TIOInversion:
         beta: float = 1.0 / 3.0,
         gamma: float = 1.0 / 3.0,
         cc_gamma: float = 1.0,
+        sensor_weights: dict[str, float] | None = None,
         weights: list[float] | dict | None = None,
         sync_geodb: bool = True,
     ) -> dict[str, list[float]]:
@@ -1186,6 +1611,12 @@ class TIOInversion:
         :param beta: ``'quality'`` weight of the CC term (``'wmean'``).
         :param gamma: ``'quality'`` weight of the Δt term (``'wmean'``).
         :param cc_gamma: Exponent on the CC sub-weight in ``'quality'``.
+        :param sensor_weights: Optional ``{sensor: factor}`` multiplied into every
+            mode's weight per sensor (substring match, longest key wins, min of
+            the two sides) — see :meth:`compute_pair_weights`. Ignored, with a
+            warning, when explicit *weights* are supplied: those bypass the mode
+            math entirely.
+        :type sensor_weights: dict[str, float] | None
         :param weights: Optional precomputed weights bypassing the mode math.
             Either a single list (length ``len(self.pairs)``, written to **both**
             directions) or a mapping ``{"EW": [...], "NS": [...]}`` for
@@ -1208,23 +1639,23 @@ class TIOInversion:
                 )
             return [float(w) for w in vec]
 
+        self._warn_if_weights_are_ignored(
+            explicit=weights is not None, weight_mode=weight_mode,
+            sensor_weights=sensor_weights)
+
         if weights is not None:
+            if sensor_weights:
+                logger.warning(
+                    "sensor_weights ignored — explicit weight vectors bypass the "
+                    "mode math (apply the factor before passing weights=)."
+                )
             if isinstance(weights, dict):
                 w_ew = _check(weights["EW"], "EW")
                 w_ns = _check(weights["NS"], "NS")
             else:  # single vector → both directions
                 w_ew = w_ns = _check(weights, "EW/NS")
-            # Resolve the recorded mode label for explicit weights: an explicit
-            # weight_mode wins; otherwise reuse what explore_weights tuned (when
-            # these are its weights); else be honest and call it "explicit".
-            if weight_mode is not None:
-                res_mode, res_combine = weight_mode, combine
-            elif weights is getattr(self, "_last_weights", None) and \
-                    getattr(self, "_last_weight_mode", None):
-                res_mode = self._last_weight_mode
-                res_combine = getattr(self, "_last_combine", combine)
-            else:
-                res_mode, res_combine = "explicit", None
+            res_mode, res_combine, _src = self._resolve_weight_label(
+                weight_mode, combine, weights)
         else:
             res_mode = weight_mode or "uniform"
             res_combine = combine
@@ -1232,6 +1663,7 @@ class TIOInversion:
                 slope=slope, min_weight=min_weight, dt_range=dt_range,
                 sharpness=sharpness, w_min=w_min, invert=invert,
                 combine=combine, alpha=alpha, beta=beta, gamma=gamma, cc_gamma=cc_gamma,
+                sensor_weights=sensor_weights,
             )
             w_ew = self.compute_pair_weights(res_mode, direction="EW", **common)
             w_ns = self.compute_pair_weights(res_mode, direction="NS", **common)
@@ -1250,6 +1682,65 @@ class TIOInversion:
             self._sync_pair_weights(w_ew, w_ns, res_mode, res_combine)
 
         return {"EW": w_ew, "NS": w_ns}
+
+    @staticmethod
+    def _same_weights(a, b) -> bool:
+        """Whether two weight mappings hold the same numbers.
+
+        Identity (``a is b``) was too strict: ``dict(inv._last_weights)`` is the
+        same weights but a different object, and it fell through to the
+        ``"explicit"`` label.
+
+        A bare ``==`` is not the fix either — the docs and notebooks do
+        ``np.array(inv._last_weights["EW"])``, and comparing a dict holding an
+        ndarray returns an *array*, so ``if a == b`` raises "truth value of an
+        array is ambiguous".  Both sides are therefore coerced to plain float
+        lists inside a ``try``: a provenance **label** must never be able to
+        abort a write that would otherwise succeed.
+        """
+        def _as_lists(value):
+            if not isinstance(value, dict):
+                return None
+            return {k: [float(x) for x in v] for k, v in value.items()}
+
+        try:
+            left, right = _as_lists(a), _as_lists(b)
+        except (TypeError, ValueError):
+            return False
+        if left is None or right is None:
+            return False
+        return left == right
+
+    def _resolve_weight_label(
+        self,
+        weight_mode: str | None,
+        combine: str | None,
+        weights,
+    ) -> tuple[str, str | None, str]:
+        """Decide what mode label to record for an explicit *weights* vector.
+
+        An explicit *weight_mode* wins; otherwise reuse what
+        :meth:`explore_weights` tuned, when these are its weights; else be
+        honest and call it ``"explicit"`` rather than silently recording
+        ``"uniform"``.
+
+        :returns: ``(mode, combine, source)`` where *source* is one of
+            ``"argument"``, ``"explorer"``, ``"explicit"`` or ``"computed"`` —
+            the JSON trace records it, so a reader can tell a tuned run from a
+            hand-supplied vector.
+        """
+        if weights is None:
+            return (weight_mode or "uniform"), combine, "computed"
+
+        if weight_mode is not None:
+            return weight_mode, combine, "argument"
+
+        stashed = getattr(self, "_last_weights", None)
+        params = getattr(self, "_last_weights_params", None) or {}
+        if params.get("weight_mode") and self._same_weights(weights, stashed):
+            return params["weight_mode"], params.get("combine", combine), "explorer"
+
+        return "explicit", None, "explicit"
 
     def _sync_pair_weights(
         self,
@@ -1286,15 +1777,14 @@ class TIOInversion:
 
     #: Controls that actually affect each weighting mode (drives the explorer's
     #: show/hide logic). ``direction`` and ``mode`` are always shown.
-    _MODE_CONTROLS: dict[str, set[str]] = {
-        "uniform": set(),
-        "temporal": {"w_min"},
-        "relative_temporal": {"w_min", "invert"},
-        "sigmoid": {"sharpness", "w_min", "invert"},
-        "parametric": {"slope", "min_weight"},
-        "quality": {"combine", "cc_gamma", "invert"},
-        "quality_spatial": {"combine", "cc_gamma"},
-    }
+    #:
+    #: An **alias**, not a copy: the figure-stem builder and the run-parameters
+    #: JSON prune by the same table, and two tables would eventually disagree
+    #: about which slider matters. It carries one name with no widget —
+    #: ``dt_range``, needed so two runs differing only in ``dt_range`` do not
+    #: collide on one file stem — which ``_apply_visibility`` ignores, since it
+    #: looks names up by membership.
+    _MODE_CONTROLS: dict[str, set[str]] = WEIGHT_MODE_KEYS
 
     def plot_weights(self, modes: list[str] | None = None, direction: str = "max",
                      **params):
@@ -1334,51 +1824,266 @@ class TIOInversion:
         )
         return fig
 
-    def explore_weights(self, weight_mode: str = "quality", **defaults):
+    def _weights_frame(self, w_ew: list[float], w_ns: list[float]):
+        """Assemble the weights frame both plotting backends consume.
+
+        The hover metrics come from the memoised :meth:`_pair_quality_metrics`,
+        so building a frame costs no file reads after the first call.
+        """
+        ew_nmads, ns_nmads, ccs, dts = self._pair_quality_metrics()
+        return weights_frame(
+            [p.pa_key for p in self.pairs],
+            dts, w_ew, w_ns,
+            nmad_ew=ew_nmads, nmad_ns=ns_nmads, cc=ccs,
+            corr_direction=[
+                str(getattr(p, "pa_direction", "")).capitalize() for p in self.pairs
+            ],
+            sensor=[_pair_sensor_label(p) for p in self.pairs],
+        )
+
+    def _stash_weight_params(self, weight_mode: str, **params) -> dict:
+        """Write :attr:`_last_weights_params` — the single stash for the explorer.
+
+        Exactly :attr:`_WEIGHT_PARAM_KEYS`, no more and no less, so
+        ``write_liste_couple(**params)`` and ``prepare_inversion(**params)`` are
+        both legal splats.  Values are coerced to plain Python scalars here so
+        the dict is JSON-safe by construction, rather than needing a custom
+        encoder at the point it is written to the run-parameters file.
+
+        :returns: The stashed dict (also assigned to ``self``).
+        """
+        def _scalar(value):
+            if isinstance(value, bool) or value is None or isinstance(value, str):
+                return value
+            if isinstance(value, dict):
+                # sensor_weights: sorted so the stash (and the JSON trace and
+                # the figure stem) has one spelling; {} collapses to None so
+                # "no sensor weighting" has one representation too.
+                return {str(k): float(v) for k, v in sorted(value.items())} or None
+            if isinstance(value, (list, tuple)):
+                return tuple(float(v) for v in value)
+            return float(value)
+
+        stash = {"weight_mode": str(weight_mode)}
+        for key in self._WEIGHT_PARAM_KEYS:
+            if key == "weight_mode":
+                continue
+            stash[key] = _scalar(params.get(key))
+        self._last_weights_params = stash
+        return stash
+
+    def _compute_stashed_weights(self) -> dict[str, list[float]]:
+        """Compute both directions' weights **from the stash**, not the widgets.
+
+        Reading the stash rather than the controls is what makes
+        ``inv._last_weights_params`` and ``inv._last_weights`` unable to
+        disagree: the vectors become a pure function of the dict that was just
+        written.  It also means
+
+        .. code-block:: python
+
+            inv.prepare_inversion(**inv._last_weights_params)
+
+        recomputes byte-identical weights *and* takes the explicit-``weight_mode``
+        branch, so the provenance question never arises.
+        """
+        params = dict(self._last_weights_params or {})
+        mode = params.pop("weight_mode", "uniform")
+        w_ew = self.compute_pair_weights(mode, direction="EW", **params)
+        w_ns = self.compute_pair_weights(mode, direction="NS", **params)
+        self._last_weights = {"EW": w_ew, "NS": w_ns}
+        return self._last_weights
+
+    def save_weights_figure(
+        self,
+        *,
+        frame=None,
+        formats: str | list[str] | tuple[str, ...] = ("html", "png"),
+        stem: str | None = None,
+        subdir: str = "inversion",
+        title: str = "",
+        dpi: int = 300,
+        figsize: tuple[float, float] | None = None,
+        plotlyjs: bool | str = True,
+        overwrite: bool = True,
+        **view_kwargs,
+    ) -> dict:
+        """Save the weight-vs-Δt figure for this inversion.
+
+        Routes to ``<project>/<pzone>/figures/<subdir>/`` on a new-layout
+        project.  On a **legacy-layout** project it falls back to the
+        project-wide ``figures_<project>/<subdir>/`` with a warning, because
+        ``pz_dir(pz, PZ_KIND_FIGURES)`` discards the pzone name entirely there.
+
+        The ``inversion/`` folder need not exist — it is created at write time.
+        No ``PZ_KIND_*`` constant is added for it: those name the seven
+        *pzone* subdirectories, and this is a subdirectory of ``figures/``.
+
+        Writes the figure twice: a self-contained interactive ``.html`` (plotly,
+        opens with no network access) and a publication-quality
+        ``.png``/``.jpg``/``.pdf``/``.svg`` (matplotlib).  No ``kaleido`` needed.
+
+        :param frame: Weights frame to draw.  ``None`` rebuilds it from
+            :attr:`_last_weights`, or from freshly computed uniform weights when
+            the explorer has never run.
+        :param formats: Any of ``"html"``, ``"png"``, ``"jpg"``, ``"pdf"``, ``"svg"``.
+        :param stem: File stem; when omitted a deterministic one is built from
+            the pzone, inversion name and weighting parameters — so re-running
+            refreshes the same files instead of piling up copies.
+        :param subdir: Subdirectory under the figures folder.
+        :param title: Figure title, applied to both backends.
+        :param dpi: Raster resolution for the matplotlib output.
+        :param figsize: Matplotlib figure size.
+        :param plotlyjs: ``True`` inlines plotly.js (offline-capable, ~3 MB);
+            ``"cdn"`` gives a small file needing a network connection.
+        :param overwrite: Replace a file of the same name (default).  ``False``
+            appends ``_01``, ``_02``… instead.
+        :param view_kwargs: Figure options (``directions``, ``height``,
+            ``alpha``, ``markersize``), filtered per backend.
+        :returns: ``{format: Path}`` for every file written.
+        """
+        from geomulticorr.core.session import PZ_KIND_FIGURES
+        from geomulticorr.utils._weights_export import (
+            save_weights_figure,
+            weights_figure_stem,
+        )
+
+        params = dict(getattr(self, "_last_weights_params", None) or {})
+        if frame is None:
+            weights = getattr(self, "_last_weights", None)
+            if weights is None:
+                self._stash_weight_params(params.pop("weight_mode", "uniform"), **params)
+                weights = self._compute_stashed_weights()
+                params = dict(self._last_weights_params)
+            frame = self._weights_frame(weights["EW"], weights["NS"])
+
+        pz = getattr(self, "pzone_name", "") or ""
+        if self.session._legacy_layout:
+            logger.warning(
+                f"pz_name={pz!r} ignored for legacy-layout session; "
+                "using project-wide figures folder"
+            )
+            out_dir = self.session.path_figures / subdir
+        else:
+            out_dir = self.session.pz_dir(pz, PZ_KIND_FIGURES) / subdir
+
+        if stem is None:
+            stem = weights_figure_stem(
+                inversion_name=self.inversion_name, pz_name=pz,
+                **{k: v for k, v in params.items() if k != "weight_mode"},
+                weight_mode=params.get("weight_mode", ""),
+            )
+
+        paths = save_weights_figure(
+            frame, out_dir, formats=formats, stem=stem, title=title, dpi=dpi,
+            figsize=figsize, plotlyjs=plotlyjs, view_kwargs=view_kwargs,
+            overwrite=overwrite,
+        )
+        logger.success(f"Saved weights figure to {out_dir} ({', '.join(paths)}).")
+        return paths
+
+    def explore_weights(
+        self,
+        weight_mode: str = "quality",
+        *,
+        interactive: bool = True,
+        savefig: bool = True,
+        formats: str | tuple[str, ...] = ("html", "png"),
+        **defaults,
+    ):
         """Interactive Plotly + ipywidgets tool to tune and preview pair weights.
 
         Renders a live scatter of **weight vs Δt** with one point per pair **per
-        direction** (EW circles + NS diamonds — 2 × ``len(pairs)`` points in
-        ``both`` view, one series otherwise). Sliders/dropdowns recompute the
+        direction** (EW circles + NS diamonds). Sliders/dropdowns recompute the
         weights on every change, and only the controls that affect the selected
-        mode are shown. The current per-direction weights are stored on
-        ``self._last_weights`` (a ``{"EW": [...], "NS": [...]}`` dict) so they can
-        be written directly::
+        mode are shown.
 
-            inv.explore_weights()                       # tune interactively
+        Every control change writes one parameters dict, mirroring
+        ``Session.explore_pairs_strategy``'s ``_last_pairs_params``::
+
+            inv.explore_weights()                             # tune interactively
+            inv.prepare_inversion(**inv._last_weights_params) # commit
+
+        Two pieces of state, deliberately kept apart: ``_last_weights_params``
+        holds the **parameters** you replay, ``_last_weights`` holds the
+        **computed** ``{"EW": [...], "NS": [...]}`` vectors you consume. The
+        vectors are computed *from* the dict, so the two cannot disagree.
+        Writing the vectors directly still works::
+
             inv.write_liste_couple(weights=inv._last_weights)
-            # or inv.prepare_inversion(weights=inv._last_weights)
 
-        Requires plotly and ipywidgets (Jupyter). Returns the assembled
-        ``ipywidgets.VBox`` (also displays inline in a notebook).
+        Requires plotly and ipywidgets when *interactive*; the headless path
+        imports neither.
 
         :param weight_mode: Initial mode selected in the dropdown.
-        :param defaults: Initial values for any control (``direction``,
-            ``combine``, ``alpha``, ``beta``, ``gamma``, ``cc_gamma``,
-            ``sharpness``, ``slope``, ``min_weight``, ``w_min``, ``invert``).
-        :returns: An ``ipywidgets.VBox`` containing the controls and figure.
+        :param interactive: ``False`` returns ``(frame, fig)`` — the weights
+            frame and a built-but-never-displayed plotly figure — importing no
+            ipywidgets and needing no display, so it works from scripts and
+            batch jobs.
+        :param savefig: Headless mode only: write the figure to
+            ``<pzone>/figures/inversion/``. Ignored when *interactive* (which has
+            a **Save figure** button instead).
+        :param formats: Formats for that headless save.
+        :param defaults: Initial values for any control — see
+            :attr:`_WEIGHTS_EXPLORER_DEFAULTS`. An unknown key raises
+            ``TypeError`` rather than being silently ignored.
+        :returns: An ``ipywidgets.VBox``, or ``(frame, fig)`` when not
+            *interactive*.
+        :raises TypeError: On an unrecognised *defaults* key.
         """
-        import ipywidgets as widgets
-        import plotly.graph_objects as go
-
-        ew_nmads, ns_nmads, ccs, dts = self._pair_quality_metrics()
-        keys = [p.pa_key for p in self.pairs]
-        dirs = [str(getattr(p, "pa_direction", "")).capitalize() for p in self.pairs]
-        # list-of-lists (not np.column_stack) so float NMAD/CC keep their dtype
-        # alongside the string correlation direction.
-        cd_ew = [[e, c, d] for e, c, d in zip(ew_nmads, ccs, dirs)]
-        cd_ns = [[n, c, d] for n, c, d in zip(ns_nmads, ccs, dirs)]
-
-        def _compute():
-            common = dict(
-                combine=c_combine.value, alpha=c_alpha.value, beta=c_beta.value,
-                gamma=c_gamma.value, cc_gamma=c_ccg.value, sharpness=c_sharp.value,
-                slope=c_slope.value, min_weight=c_minw.value, w_min=c_wmin.value,
-                invert=c_invert.value,
+        unknown = sorted(set(defaults) - set(self._WEIGHTS_EXPLORER_DEFAULTS))
+        if unknown:
+            raise TypeError(
+                f"explore_weights() got unexpected keyword argument(s) {unknown}. "
+                f"Accepted: {list(self._WEIGHTS_EXPLORER_DEFAULTS)}."
             )
-            w_ew = self.compute_pair_weights(c_mode.value, direction="EW", **common)
-            w_ns = self.compute_pair_weights(c_mode.value, direction="NS", **common)
-            return w_ew, w_ns
+
+        from geomulticorr.utils._weights_plotly import figure_weights
+
+        initial = {
+            "combine": defaults.get("combine", "geomean"),
+            "alpha": defaults.get("alpha", 1 / 3),
+            "beta": defaults.get("beta", 1 / 3),
+            "gamma": defaults.get("gamma", 1 / 3),
+            "cc_gamma": defaults.get("cc_gamma", 1.0),
+            "sharpness": defaults.get("sharpness", 5.0),
+            "slope": defaults.get("slope", 2.0),
+            "min_weight": defaults.get("min_weight", 0.1),
+            "w_min": defaults.get("w_min", 0.0),
+            "invert": defaults.get("invert", False),
+            "dt_range": defaults.get("dt_range", None),
+            "sensor_weights": _validate_sensor_weights(defaults.get("sensor_weights")),
+        }
+
+        def _title_for(mode: str, combine: str) -> str:
+            label = f"{mode}:{combine}" if mode in ("quality", "quality_spatial") else mode
+            return f"TIO pair weights — '{self.inversion_name}' [{label}]"
+
+        # ── headless path: results only, no widgets, no display ──
+        if not interactive:
+            self._stash_weight_params(weight_mode, **initial)
+            weights = self._compute_stashed_weights()
+            frame = self._weights_frame(weights["EW"], weights["NS"])
+            direction = defaults.get("direction", "both")
+            title = _title_for(weight_mode, initial["combine"])
+            fig = figure_weights(frame, title=title, directions=direction)
+
+            if savefig and len(frame):
+                self.save_weights_figure(
+                    frame=frame, formats=formats, title=title, directions=direction,
+                )
+            elif savefig:
+                logger.warning("No pairs to plot — nothing saved.")
+            return frame, fig
+
+        import ipywidgets as widgets
+        from IPython.display import display as _ipy_display
+
+        from geomulticorr.utils._pairs_export import FIGURE_FORMATS
+        from geomulticorr.utils._weights_frame import (
+            format_sensor_weights,
+            parse_sensor_weights,
+        )
 
         # ── controls ──
         c_mode = widgets.Dropdown(
@@ -1389,25 +2094,41 @@ class TIOInversion:
                                  value=defaults.get("direction", "both"),
                                  description="direction")
         c_combine = widgets.Dropdown(options=["geomean", "wmean", "product"],
-                                     value=defaults.get("combine", "geomean"),
-                                     description="combine")
-        c_alpha = widgets.FloatSlider(value=defaults.get("alpha", 1/3), min=0, max=1,
+                                     value=initial["combine"], description="combine")
+        c_alpha = widgets.FloatSlider(value=initial["alpha"], min=0, max=1,
                                       step=0.05, description="α nmad")
-        c_beta = widgets.FloatSlider(value=defaults.get("beta", 1/3), min=0, max=1,
+        c_beta = widgets.FloatSlider(value=initial["beta"], min=0, max=1,
                                      step=0.05, description="β cc")
-        c_gamma = widgets.FloatSlider(value=defaults.get("gamma", 1/3), min=0, max=1,
+        c_gamma = widgets.FloatSlider(value=initial["gamma"], min=0, max=1,
                                       step=0.05, description="γ dt")
-        c_ccg = widgets.FloatSlider(value=defaults.get("cc_gamma", 1.0), min=0.1, max=3.0,
+        c_ccg = widgets.FloatSlider(value=initial["cc_gamma"], min=0.1, max=3.0,
                                     step=0.1, description="cc_gamma")
-        c_sharp = widgets.FloatSlider(value=defaults.get("sharpness", 5.0), min=1, max=12,
+        c_sharp = widgets.FloatSlider(value=initial["sharpness"], min=1, max=12,
                                       step=0.5, description="sharpness")
-        c_slope = widgets.FloatSlider(value=defaults.get("slope", 2.0), min=0.5, max=5,
+        c_slope = widgets.FloatSlider(value=initial["slope"], min=0.5, max=5,
                                       step=0.1, description="slope")
-        c_minw = widgets.FloatSlider(value=defaults.get("min_weight", 0.1), min=0, max=1,
+        c_minw = widgets.FloatSlider(value=initial["min_weight"], min=0, max=1,
                                      step=0.05, description="min_weight")
-        c_wmin = widgets.FloatSlider(value=defaults.get("w_min", 0.0), min=0, max=0.9,
+        c_wmin = widgets.FloatSlider(value=initial["w_min"], min=0, max=0.9,
                                      step=0.05, description="w_min")
-        c_invert = widgets.Checkbox(value=defaults.get("invert", False), description="invert")
+        c_invert = widgets.Checkbox(value=initial["invert"], description="invert")
+        # sensor factors as text ("spot=0.5, planetscope=1"): the semantics are
+        # substring *groups*, which one slider per raw sensor name could not
+        # express, and a fixed control set keeps the layout stable. Parsed in a
+        # try below — a bad token writes a red status line and keeps the last
+        # good value, like the Δt fields of the pairing explorer.
+        c_sensors = widgets.Text(
+            value=format_sensor_weights(initial["sensor_weights"]),
+            description="sensor w", placeholder="spot=0.5, planetscope=1",
+            continuous_update=False, style={"description_width": "initial"},
+        )
+        # save row — the file name is derived from the weighting parameters, so
+        # the only choice left is which formats to write.
+        c_formats = widgets.SelectMultiple(options=list(FIGURE_FORMATS),
+                                           value=("html", "png"),
+                                           rows=len(FIGURE_FORMATS),
+                                           description="formats")
+        b_save = widgets.Button(description="Save figure", icon="save")
 
         # map control name -> widget, for show/hide
         tunables = {
@@ -1416,94 +2137,153 @@ class TIOInversion:
             "min_weight": c_minw, "w_min": c_wmin, "invert": c_invert,
         }
 
+        plot_out = widgets.Output()
+        summary = widgets.HTML()
+        status = widgets.HTML()
+        state: dict = {"syncing": False, "sensor_weights": initial["sensor_weights"]}
+
         def _apply_visibility():
-            relevant = set(self._MODE_CONTROLS.get(c_mode.value, set()))
-            # α/β/γ only matter for the weighted-mean combine of quality mode
-            if c_mode.value == "quality" and c_combine.value == "wmean":
-                relevant |= {"alpha", "beta", "gamma"}
-            # α/β only matter for the weighted-mean combine of quality_spatial mode
-            if c_mode.value == "quality_spatial" and c_combine.value == "wmean":
-                relevant |= {"alpha", "beta"}
+            """Show only the controls the current mode actually uses."""
+            relevant = relevant_weight_keys(c_mode.value, c_combine.value)
             for name, w in tunables.items():
                 w.layout.display = None if name in relevant else "none"
 
-        w_ew, w_ns = _compute()
-        self._last_weights = {"EW": w_ew, "NS": w_ns}
-        self._last_weight_mode = c_mode.value
-        self._last_combine = c_combine.value
+        def _read_sensor_weights():
+            """The Text field, parsed; on a bad token keep the last good value."""
+            try:
+                parsed = parse_sensor_weights(c_sensors.value)
+            except ValueError as exc:
+                status.value = (f"<span style='color:#c33'>✘ sensor w: {exc}</span>")
+                return state.get("sensor_weights")
+            state["sensor_weights"] = parsed
+            return parsed
 
-        fig = go.FigureWidget(
-            data=[
-                go.Scatter(x=dts, y=w_ew, mode="markers", name="EW", text=keys,
-                           customdata=cd_ew, opacity=0.75,
-                           marker=dict(size=9, symbol="circle", color="#1f77b4"),
-                           hovertemplate="pair_key=%{text}<br>weight=%{y:.3f}"
-                                         "<br>map=EW"
-                                         "<br>corr_dir=%{customdata[2]}"
-                                         "<br>NMAD=%{customdata[0]:.3f}"
-                                         "<br>CC=%{customdata[1]:.2f}"
-                                         "<br>Δt=%{x:.0f} d<extra></extra>"),
-                go.Scatter(x=dts, y=w_ns, mode="markers", name="NS", text=keys,
-                           customdata=cd_ns, opacity=0.75,
-                           marker=dict(size=9, symbol="diamond", color="#ff7f0e"),
-                           hovertemplate="pair_key=%{text}<br>weight=%{y:.3f}"
-                                         "<br>map=NS"
-                                         "<br>corr_dir=%{customdata[2]}"
-                                         "<br>NMAD=%{customdata[0]:.3f}"
-                                         "<br>CC=%{customdata[1]:.2f}"
-                                         "<br>Δt=%{x:.0f} d<extra></extra>"),
-            ]
-        )
-        fig.update_layout(
-            title=f"TIO pair weights — '{self.inversion_name}' [{c_mode.value}]",
-            xaxis_title="Temporal baseline Δt (days)",
-            yaxis_title="weight", yaxis_range=[-0.02, 1.02],
-            template="plotly_white", height=460,
-        )
+        def _stash():
+            self._stash_weight_params(
+                c_mode.value,
+                combine=c_combine.value, alpha=c_alpha.value, beta=c_beta.value,
+                gamma=c_gamma.value, cc_gamma=c_ccg.value, sharpness=c_sharp.value,
+                slope=c_slope.value, min_weight=c_minw.value, w_min=c_wmin.value,
+                invert=c_invert.value, dt_range=initial["dt_range"],
+                sensor_weights=_read_sensor_weights(),
+            )
 
-        def _apply_direction():
-            show_ew = c_dir.value in ("both", "EW")
-            show_ns = c_dir.value in ("both", "NS")
-            fig.data[0].visible = show_ew
-            fig.data[1].visible = show_ns
+        def _fig_title() -> str:
+            return _title_for(c_mode.value, c_combine.value)
+
+        # A plain ``go.Figure`` redrawn inside an ``Output`` is used instead of a
+        # ``go.FigureWidget``: since plotly 6 the latter is an *anywidget*, whose
+        # front-end JS is not bundled with the VSCode Jupyter extension and often
+        # fails to load ("No version of module anywidget is registered"). Core
+        # ipywidgets + the built-in plotly renderer work everywhere, offline.
+        def _draw():
+            fig = figure_weights(state["frame"], title=_fig_title(),
+                                 directions=c_dir.value)
+            with plot_out:
+                plot_out.clear_output(wait=True)
+                _ipy_display(fig)
+
+        def _render_summary():
+            summary.value = format_weights_summary(
+                weights_stats(state["frame"], weight_mode=c_mode.value,
+                              combine=c_combine.value)
+            )
 
         def _update(_change=None):
+            """Weighting change — re-stash, recompute, then redraw."""
+            if state.get("syncing"):
+                return
             _apply_visibility()
-            w_ew, w_ns = _compute()
-            self._last_weights = {"EW": w_ew, "NS": w_ns}
-            self._last_weight_mode = c_mode.value
-            self._last_combine = c_combine.value
-            with fig.batch_update():
-                fig.data[0].y = w_ew
-                fig.data[1].y = w_ns
-                _apply_direction()
-                fig.layout.title.text = (
-                    f"TIO pair weights — '{self.inversion_name}' [{c_mode.value}]"
+            _stash()
+            weights = self._compute_stashed_weights()
+            state["frame"] = self._weights_frame(weights["EW"], weights["NS"])
+            _draw()
+            _render_summary()
+
+        def _redraw(_change=None):
+            """View-only change — reuse the cached weights, never recompute."""
+            if state.get("syncing"):
+                return
+            _draw()
+
+        def _on_save(_button):
+            # Never let this raise: an uncaught exception in a widget callback
+            # only reaches the kernel log, which VSCode usually hides.
+            b_save.disabled = True
+            status.value = "<i>saving…</i>"
+            try:
+                paths = self.save_weights_figure(
+                    frame=state["frame"],
+                    formats=tuple(c_formats.value) or ("html",),
+                    title=_fig_title(), directions=c_dir.value,
                 )
+                names = " ".join(f"<code>{p.name}</code>" for p in paths.values())
+                folder = next(iter(paths.values())).parent
+                status.value = (f"<span style='color:#2a7'>✔ saved to</span> "
+                                f"<code>{folder}</code><br>{names}")
+            except Exception as exc:
+                logger.error(f"save_weights_figure failed: {exc!r}")
+                status.value = (f"<span style='color:#c33'>✘ save failed — "
+                                f"{type(exc).__name__}: {exc}</span>")
+            finally:
+                b_save.disabled = False
 
-        for c in (c_mode, c_dir, *tunables.values()):
+        for c in (c_mode, *tunables.values(), c_sensors):
             c.observe(_update, names="value")
+        c_dir.observe(_redraw, names="value")
+        b_save.on_click(_on_save)
 
-        _apply_visibility()
-        _apply_direction()
+        _update()
 
-        row1 = widgets.HBox([c_mode, c_dir, c_combine, c_invert])
+        row1 = widgets.HBox([c_mode, c_dir, c_combine, c_invert, c_sensors])
         row2 = widgets.HBox([c_alpha, c_beta, c_gamma, c_ccg])
         row3 = widgets.HBox([c_sharp, c_slope, c_minw, c_wmin])
-        return widgets.VBox([row1, row2, row3, fig])
+        row4 = widgets.HBox([c_formats, b_save])
+        return widgets.VBox([row1, row2, row3, plot_out, summary, status, row4])
 
-    def write_input_tio(self) -> None:
+    def write_input_tio(self, solver: TIOConfig | None = None) -> None:
         """Write the ``input_tio`` parameter file to both inversion directories.
 
-        Content is produced by :func:`_build_input_tio_text` with GMC defaults.
-        The file is written to ``inverse_EW/input_tio`` and
-        ``inverse_NS/input_tio`` and marked executable.
+        Content is rendered from *solver* (a
+        :class:`~geomulticorr.inversion.pytio.TIOConfig`; ``None`` means the
+        configuration already on ``self.solver``) by :func:`_build_input_tio_text`.
+        The resolved configuration is stored back on ``self.solver`` so the
+        run-parameters trace records what was actually written. The file is
+        written to ``inverse_EW/input_tio`` and ``inverse_NS/input_tio`` and
+        marked executable.
+
+        :param solver: Solver settings to render; ``None`` keeps ``self.solver``.
+        :type solver: TIOConfig or None
         """
-        content = _build_input_tio_text()
+        if solver is not None:
+            self.solver = _coerce_solver(solver)
+        cfg = getattr(self, "solver", None) or TIOConfig()
+        self.solver = cfg
+        content = _build_input_tio_text(solver=cfg)
         for direction in self._DIRECTIONS:
             p = self.inversion_dir / f"inverse_{direction}" / "input_tio"
             p.write_text(content)
             self._make_executable(p)
+
+    def _warn_if_weights_are_ignored(self, *, explicit: bool, weight_mode: str | None,
+                                     sensor_weights=None) -> None:
+        """Say so when non-trivial weights are written but the solver will not read them.
+
+        The Fortran reads ``liste_couple``'s third column only under
+        ``iponder=2`` (``TIOConfig(weight_mode="file")``); the Python backend
+        mirrors that. Silently writing weights that go nowhere is exactly the
+        defect this replaced, so the mismatch is announced rather than allowed.
+        """
+        cfg = getattr(self, "solver", None) or TIOConfig()
+        if cfg.weights_applied_by_solver:
+            return
+        if explicit or sensor_weights or (weight_mode not in (None, "uniform")):
+            logger.warning(
+                f"Pair weights are written to liste_couple but the solver will NOT "
+                f"read them (TIOConfig.weight_mode={cfg.weight_mode!r} → input_tio "
+                f"iponder={cfg.iponder}). Pass solver=TIOConfig(weight_mode='file') "
+                "to prepare_inversion() to apply them."
+            )
 
     def write_launch_script(
         self,
@@ -1545,6 +2325,24 @@ class TIOInversion:
 
         invers_pixel_bin = self.invers_pixel_omp_bin
         lect_depl_bin    = self.lect_depl_cumule_lin_bin
+        if invers_pixel_bin is None or lect_depl_bin is None:
+            if cluster is not None:
+                raise RuntimeError(
+                    f"write_launch_script(cluster={cluster!r}) needs the Fortran binaries, "
+                    "but none were found — pass tio_binaries_dir= to TIOInversion(), or "
+                    "run the inversion in-process with launch(mode='python')."
+                )
+            # Local Fortran launch scripts are a convenience; the in-process
+            # backend does not need them, so skip rather than fail the prepare.
+            logger.info(
+                "Fortran binaries not configured — no launch script written; "
+                "use launch(mode='python')."
+            )
+            self.cluster = "local"
+            self._last_launch = {"cluster": "local", "nodes": int(nodes),
+                                 "cores": int(cores), "walltime": walltime,
+                                 "script": None}
+            return
 
         width, height = self.raster_shape
         n_images = len(self.image_dates)
@@ -1567,6 +2365,12 @@ class TIOInversion:
         # for, so launch() can catch a mode mismatch instead of failing at
         # `oarsub` time with a script that has the wrong (or no) header.
         self.cluster = "local" if cluster is None else cluster
+        self._last_launch = {
+            "cluster": self.cluster,
+            "nodes": int(nodes),
+            "cores": int(cores),
+            "walltime": walltime,
+        }
 
     # ── Orchestration ─────────────────────────────────────────────────────────
 
@@ -1642,6 +2446,14 @@ class TIOInversion:
 
         self.pairs = good
         self._image_dates = None
+        # per-pair metrics are indexed positionally against self.pairs
+        self._quality_metrics = None
+        self._last_nmad_filter = {
+            "threshold": float(threshold),
+            "correction_name": correction_name,
+            "kept": len(good),
+            "removed": len(bad),
+        }
 
         if bad:
             logger.info(f"@GMC TIO ── NMAD filter (≤{threshold} m): "
@@ -1649,6 +2461,84 @@ class TIOInversion:
         else:
             logger.info(f"@GMC TIO ── NMAD filter: all {len(good)} pairs within threshold")
         return good, bad
+
+    def write_run_parameters(
+        self,
+        weight_mode: str,
+        combine: str | None,
+        weight_source: str,
+        weight_params: dict,
+        weights: dict[str, list[float]],
+    ) -> dict[str, Path]:
+        """Write one self-contained run-parameters JSON per direction.
+
+        Lands beside that direction's TIO inputs, as
+        ``inverse_EW/inverse_EW_parameters.json`` and the NS twin.
+        ``setup_directories`` already created both folders.
+
+        The files record the *recipe*, not the results: the weighting parameters
+        in full (so ``write_liste_couple(**params)`` reproduces the run), the
+        solver configuration (``TIOConfig.to_dict()``, with whether the solver
+        will read the weights at all), the pair-network components, the filter
+        pipeline, the NMAD threshold and the launch profile. The per-pair
+        weights and the acquisition dates are deliberately left out — each
+        already sits in the same folder, and a second copy would only be
+        somewhere for the two to disagree.
+
+        What makes the two files genuinely differ is ``direction`` and the
+        weight ``summary``, computed from *that* direction's vector. For
+        date-based modes the two summaries coincide, which is itself informative.
+
+        :returns: ``{direction: Path}`` for the files written.
+        """
+        from geomulticorr.inversion._run_parameters import (
+            build_run_parameters,
+            write_run_parameters,
+        )
+
+        try:
+            raster_shape = self.raster_shape
+        except Exception as exc:  # a missing raster must not abort the trace
+            logger.warning(f"[run parameters] raster shape unavailable: {exc}")
+            raster_shape = None
+
+        cfg = getattr(self, "solver", None) or TIOConfig()
+        solver_doc = {
+            **cfg.to_dict(),
+            "iponder": cfg.iponder,
+            "weights_applied_by_solver": cfg.weights_applied_by_solver,
+        }
+
+        written: dict[str, Path] = {}
+        for direction in self._DIRECTIONS:
+            document = build_run_parameters(
+                direction=direction,
+                inversion_name=self.inversion_name,
+                pzone=getattr(self, "pzone_name", "") or "",
+                inversion_dir=self.inversion_dir,
+                raster_shape=raster_shape,
+                pair_keys=[p.pa_key for p in self.pairs],
+                n_images=len(self.image_dates),
+                weight_mode=weight_mode,
+                combine=combine,
+                weight_source=weight_source,
+                weight_params=weight_params,
+                relevant_params=sorted(relevant_weight_keys(
+                    weight_mode, combine,
+                    sensor_weights=(weight_params or {}).get("sensor_weights"))),
+                weight_summary=weight_summary(
+                    weights.get(direction, []) if weights else []
+                ),
+                filter_pipeline=self.filter_pipeline,
+                nmad_filter=getattr(self, "_last_nmad_filter", None),
+                launch=getattr(self, "_last_launch", None),
+                solver=solver_doc,
+                network=getattr(self, "_last_network", None),
+            )
+            path = self.inversion_dir / f"inverse_{direction}" / \
+                f"inverse_{direction}_parameters.json"
+            written[direction] = write_run_parameters(path, document)
+        return written
 
     def prepare_inversion(
         self,
@@ -1664,6 +2554,7 @@ class TIOInversion:
         beta: float = 1.0 / 3.0,
         gamma: float = 1.0 / 3.0,
         cc_gamma: float = 1.0,
+        sensor_weights: dict[str, float] | None = None,
         weights: list[float] | dict | None = None,
         sync_geodb: bool = True,
         cluster: str | None = None,
@@ -1673,6 +2564,7 @@ class TIOInversion:
         overwrite: bool = False,
         print_summary: bool = True,
         verbose: bool = False,
+        solver: TIOConfig | None = None,
     ) -> None:
         """Run the full TIO preparation pipeline.
 
@@ -1683,10 +2575,21 @@ class TIOInversion:
         3. For each pair: filter → save corrected TIFFs → convert to ENVI
            binary → create symlinks in ``LN_DATA/``.
         4. Write ``liste_image``, ``liste_image_inv``, ``liste_couple``,
-           ``input_tio``, and bash launch scripts.
+           ``input_tio`` (rendered from *solver*), and bash launch scripts.
+        5. Write ``inverse_{EW,NS}/inverse_{EW,NS}_parameters.json`` — the
+           run-parameters trace (see :meth:`write_run_parameters`). A failure
+           here is logged, never raised: it must not cost an otherwise fully
+           prepared inversion.
 
         After :meth:`prepare_inversion` completes, call :meth:`launch` to start
-        the inversion.
+        the inversion — ``launch(mode="python")`` runs it in-process with the
+        same *solver* settings and needs no Fortran binaries.
+
+        The pair weights only reach the least squares when
+        ``solver.weight_mode == "file"`` (the default): that is the
+        ``input_tio`` line the Fortran consults before reading ``liste_couple``'s
+        third column, and the Python backend follows it. Any other mode logs a
+        warning if non-uniform weights were requested.
 
         :param weight_mode: Pair weighting strategy passed to
             :meth:`write_liste_couple`.  One of ``'uniform'``, ``'temporal'``,
@@ -1719,6 +2622,11 @@ class TIOInversion:
         :param beta: ``'quality'`` CC-term weight (``'wmean'``).
         :param gamma: ``'quality'`` Δt-term weight (``'wmean'``).
         :param cc_gamma: Exponent on the CC sub-weight in ``'quality'``.
+        :param sensor_weights: Optional ``{sensor: factor}`` multiplied into the
+            mode weights per sensor, e.g. ``{"spot": 1.0, "planetscope": 0.5}``
+            (see :meth:`compute_pair_weights`). Note that in a **disconnected**
+            network (no cross-sensor pair) this cannot fix the offset between
+            the sensors' sub-series — it only chooses which one bends.
         :param weights: Optional precomputed weight vector (e.g. from
             :meth:`explore_weights`); bypasses mode math when given.
         :param sync_geodb: Persist per-pair weights to the stats JSON and sync
@@ -1743,6 +2651,13 @@ class TIOInversion:
             header describing the whole run instead, so the progress bar stays
             readable across hundreds of pairs. Warnings and errors are unaffected.
         :type verbose: bool
+        :param solver: The solver settings, a
+            :class:`~geomulticorr.inversion.pytio.TIOConfig` (smoothing
+            ``gamma``, robust ``reweight_iterations``, ``weight_mode``…).
+            ``None`` means the defaults; ``TIOConfig.legacy()`` reproduces the
+            block earlier releases hard-coded. Stored on ``self.solver`` and
+            recorded in the run-parameters trace.
+        :type solver: TIOConfig or None
 
         Example
         -------
@@ -1754,10 +2669,15 @@ class TIOInversion:
                 sharpness=8,
                 w_min=0.2,
                 invert=True,
+                solver=TIOConfig(gamma=0.01, reweight_iterations=2),
             )
             inv.launch(mode="local")
         """
         validate_cluster(cluster)
+        if solver is not None:
+            self.solver = _coerce_solver(solver)
+        elif getattr(self, "solver", None) is None:
+            self.solver = TIOConfig()
 
         mode = "local" if cluster is None else cluster
 
@@ -1779,6 +2699,11 @@ class TIOInversion:
             f"{weight_mode or ('explicit' if weights is not None else 'uniform')}"
         )
         logger.settings(
+            f"Solver: weight_mode={self.solver.weight_mode!r} (input_tio iponder="
+            f"{self.solver.iponder}), gamma={self.solver.gamma:g}, scheme={self.solver.scheme}, "
+            f"reweight_iterations={self.solver.reweight_iterations}"
+        )
+        logger.settings(
             f"Launch target: {mode}"
             + ("" if cluster is None
                else f" ({nodes} node(s), {cores} core(s), walltime {walltime})")
@@ -1786,6 +2711,28 @@ class TIOInversion:
         if not verbose:
             logger.settings(
                 "Per-pair export messages suppressed — pass verbose=True to show them"
+            )
+
+        # The inversion measures only what a pair links. Say so *before* the
+        # export loop when the network is in pieces — the solver will not.
+        components = self.network_components()
+        self._last_network = {"n_components": len(components), "components": components}
+        if len(components) > 1:
+            logger.warning(
+                f"TIO ── the pair network has {len(components)} disconnected components: "
+                f"{self._describe_components(components)}. No pair links them, so the "
+                f"relative displacement between the components is not measured: the "
+                f"solver decides the {len(components) - 1} offset(s) from the smoothing "
+                "prior alone, and any rate disagreement between them is absorbed at the "
+                "bridge intervals (a spike-and-return at the minority dates). Invert each "
+                "component separately and fuse (geomulticorr.inversion.fusion), or add "
+                "pairs that cross the gap."
+            )
+        else:
+            logger.settings(
+                f"Pair network: 1 connected component "
+                f"[{','.join(components[0]['sensors']) or '?'}]" if components else
+                "Pair network: no pairs"
             )
 
         self.setup_directories()
@@ -1814,24 +2761,34 @@ class TIOInversion:
 
         self.write_liste_image()
         self.write_liste_image_inv()
-        self.write_liste_couple(
-            weight_mode=weight_mode,
-            slope=slope,
-            min_weight=min_weight,
-            dt_range=dt_range,
-            sharpness=sharpness,
-            w_min=w_min,
-            invert=invert,
-            combine=combine,
-            alpha=alpha,
-            beta=beta,
-            gamma=gamma,
-            cc_gamma=cc_gamma,
-            weights=weights,
-            sync_geodb=sync_geodb,
+        weight_params = dict(
+            weight_mode=weight_mode, slope=slope, min_weight=min_weight,
+            dt_range=dt_range, sharpness=sharpness, w_min=w_min, invert=invert,
+            combine=combine, alpha=alpha, beta=beta, gamma=gamma, cc_gamma=cc_gamma,
+            sensor_weights=sensor_weights,
+        )
+        written_weights = self.write_liste_couple(
+            **weight_params, weights=weights, sync_geodb=sync_geodb,
         )
         self.write_input_tio()
         self.write_launch_script(cluster=cluster, nodes=nodes, cores=cores, walltime=walltime)
+
+        # After write_launch_script, so self.cluster and the launch profile are
+        # set. Wrapped: this is a trace, and losing it must never cost an
+        # otherwise fully prepared inversion (the _sync_pair_weights precedent).
+        res_mode, res_combine, source = self._resolve_weight_label(
+            weight_mode, combine, weights)
+        if weights is not None and source == "explorer":
+            # the explorer's own parameters describe these vectors, not the
+            # defaults that were never used to produce them
+            weight_params = dict(getattr(self, "_last_weights_params", None)
+                                 or weight_params)
+        try:
+            self.write_run_parameters(
+                res_mode, res_combine, source, weight_params, written_weights)
+        except Exception as exc:
+            logger.warning(f"[run parameters] could not write the trace: {exc}")
+
         logger.info(f"TIO input files written to inverse_EW/ and inverse_NS/")
         logger.info(f"TIO ── ready. Call inv.launch(mode='{mode}').")
 
@@ -1856,7 +2813,14 @@ class TIOInversion:
         )
         return self.prepare_inversion(*args, **kwargs)
 
-    def launch(self, direction: str = "both", mode: str | None = "local") -> None:
+    def launch(
+        self,
+        direction: str = "both",
+        mode: str | None = "local",
+        *,
+        chunks: dict | None = None,
+        write_residuals: bool = False,
+    ):
         """Run or submit the TIO inversion jobs.
 
         *mode* mirrors the ``cluster`` values used by :meth:`prepare_inversion` /
@@ -1864,23 +2828,46 @@ class TIOInversion:
         ``invers_pixel_omp`` and ``lect_depl_cumule_lin`` directly on the
         current machine via :func:`~geomulticorr.utils.hpc_tools.run_local`;
         ``'gricad'`` or ``'isterre'`` submits the launch script written for
-        that cluster via :func:`~geomulticorr.utils.hpc_tools.oarsub_submit`.
+        that cluster via :func:`~geomulticorr.utils.hpc_tools.oarsub_submit`;
+        ``'python'`` runs the vendored solver
+        (:mod:`geomulticorr.inversion.pytio`) in-process — no Fortran
+        binaries, no launch script, and the ``TOT_<date>_<dir>.tif`` GeoTIFFs
+        are written directly (full raster height, where the Fortran
+        post-processor drops the last row), so :meth:`post_process` has nothing
+        left to convert — calling it is harmless and still derives the
+        magnitude maps.
 
         The launch script's OAR header is baked in at
-        :meth:`write_launch_script` time, not at launch time, so *mode* must
-        match the cluster the scripts were last written for — otherwise a
-        ``ValueError`` is raised instead of silently submitting a script with
-        a missing/mismatched header.
+        :meth:`write_launch_script` time, not at launch time, so a cluster
+        *mode* must match the cluster the scripts were last written for —
+        otherwise a ``ValueError`` is raised instead of silently submitting a
+        script with a missing/mismatched header.
 
-        Call :meth:`post_process` after the inversion completes to convert
-        TOT binary outputs to GeoTIFF.
+        Call :meth:`post_process` after a Fortran inversion completes to
+        convert TOT binary outputs to GeoTIFF.
 
         :param direction: Which inversion direction to run — ``'EW'``,
             ``'NS'``, or ``'both'`` (default).
         :type direction: str
         :param mode: Execution target — ``None``/``'local'`` runs binaries
-            directly; ``'gricad'``/``'isterre'`` submits via OAR.
+            directly; ``'gricad'``/``'isterre'`` submits via OAR; ``'python'``
+            solves in-process.
         :type mode: str or None
+        :param chunks: ``'python'`` only — dask chunking of the pair stack,
+            e.g. ``{"y": 128, "x": -1}`` (the default). Chunk in space only;
+            the kernel needs the whole pair axis per pixel.
+        :type chunks: dict or None
+        :param write_residuals: ``'python'`` only — also write one
+            ``diagnostics/residual_<d1>_<d2>.tif`` per pair (modelled −
+            observed). Off by default: hundreds of pairs on a multi-megapixel
+            grid is gigabytes. The residuals are always available in memory on
+            the returned datasets.
+        :type write_residuals: bool
+        :returns: ``None`` for the Fortran/cluster modes; for ``'python'`` a
+            ``{direction: xarray.Dataset}`` with ``cum_disp``, ``residual``
+            (per pair), ``rms``, ``rank_defect``, ``n_pairs`` … — the solver's
+            own diagnostics, which is the cheapest way to see which pairs a
+            joint solution misfits.
 
         Example
         -------
@@ -1890,11 +2877,23 @@ class TIOInversion:
             inv.launch(mode="isterre")         # submit to the ISTerre cluster
             inv.launch(mode="gricad")          # submit to the GRICAD cluster
             inv.launch(direction="EW")         # only EW direction
+            out = inv.launch(mode="python")    # in-process; out["EW"].residual
         """
+        if mode == "python":
+            targets = self._DIRECTIONS if direction == "both" else (direction.upper(),)
+            return self._launch_python(targets, chunks=chunks,
+                                       write_residuals=write_residuals)
+
         validate_cluster(mode)
         mode = "local" if mode is None else mode
 
         targets = self._DIRECTIONS if direction == "both" else (direction.upper(),)
+
+        if self.invers_pixel_omp_bin is None or self.lect_depl_cumule_lin_bin is None:
+            raise RuntimeError(
+                f"launch(mode={mode!r}) needs the Fortran binaries, but none were found — "
+                "pass tio_binaries_dir= to TIOInversion(), or use launch(mode='python')."
+            )
 
         if mode == "local":
             width, height = self.raster_shape
@@ -1925,6 +2924,112 @@ class TIOInversion:
                 logger.info(f"TIO ── submitting {script.name} [{mode}]")
                 oarsub_submit(script, cwd=inv_dir)
 
+    #: Per-pixel diagnostics of a Python run, written as GeoTIFFs under
+    #: ``inverse_<dir>/diagnostics/``: (dataset variable, file stem).
+    _PYTHON_DIAGNOSTICS: tuple[tuple[str, str], ...] = (
+        ("rms", "rms"),
+        ("rank_defect", "rank_defect"),
+        ("n_pairs", "n_pairs"),
+        ("n_images", "n_images"),
+    )
+
+    def _launch_python(
+        self,
+        targets: tuple[str, ...],
+        *,
+        chunks: dict | None = None,
+        write_residuals: bool = False,
+    ) -> dict:
+        """Run the vendored solver in-process for each direction in *targets*.
+
+        Reads the files :meth:`prepare_inversion` wrote (``liste_image_inv``,
+        ``liste_couple``, the ``binary/`` pair maps — no ``LN_DATA`` symlinks
+        needed), inverts with ``self.solver``, fits the velocity line exactly
+        as ``lect_depl_cumule_lin … 1 1`` does (one epoch-reweighting pass,
+        referenced at the first date) and writes ``TOT_<date>_<dir>.tif`` plus
+        the diagnostics. Magnitude maps are derived when both directions ran.
+
+        :returns: ``{direction: xarray.Dataset}`` — the solver output with the
+            velocity-fit variables merged in (``TOT``, ``velocity``, …).
+        """
+        import time as _time
+        from geomulticorr.inversion.pytio import fit_velocity, invert_stack
+        from geomulticorr.inversion.pytio import io as tio_io
+
+        cfg = getattr(self, "solver", None) or TIOConfig()
+        self.solver = cfg
+        width, height = self.raster_shape
+        ref_path = self.pairs[0].pa_ew_path
+        chunks = chunks or {"y": 128, "x": -1}
+
+        results: dict = {}
+        t_start = _time.time()
+        for d in targets:
+            inv_dir = self.inversion_dir / f"inverse_{d}"
+            imgs = tio_io.read_image_list(inv_dir / "liste_image_inv")
+            d1, d2, w = tio_io.read_pair_list(inv_dir / "liste_couple")
+            logger.info(
+                f"TIO ── python backend: inverse_{d} ({len(d1)} pairs, "
+                f"{len(imgs['dates'])} images, {width}×{height} px, "
+                f"weight_mode={cfg.weight_mode!r}, gamma={cfg.gamma:g})"
+            )
+            stack = tio_io.load_pair_stack(
+                str(self.inversion_dir / "binary"), d1, d2,
+                template=f"{{d1}}_{{d2}}_{d}", shape=(height, width), chunks=chunks,
+            )
+            ds = invert_stack(
+                stack, imgs["dates"], imgs["t"], cfg,
+                pair_weights=(w if cfg.weight_mode == "file" else None),
+            ).compute()
+            vel = fit_velocity(ds.cum_disp, t=imgs["elapsed"], n_iter=1,
+                               ref_index=0, cum_smooth=ds.cum_disp_smooth)
+
+            dates = [str(x) for x in ds["date"].values]
+            for k, date in enumerate(dates):
+                _write_geotiff_like(vel.TOT.values[k],
+                                    self._tot_tif_name(inv_dir, date, d), ref_path)
+            diag_dir = inv_dir / "diagnostics"
+            for var, stem in self._PYTHON_DIAGNOSTICS:
+                _write_geotiff_like(ds[var].values, diag_dir / f"{stem}.tif", ref_path)
+            for var in ("velocity", "velocity_error", "rho"):
+                _write_geotiff_like(vel[var].values, diag_dir / f"{var}.tif", ref_path)
+            if write_residuals:
+                for k, key in enumerate(ds["pair_out"].values):
+                    stem = str(key).replace("-", "_")
+                    _write_geotiff_like(ds.residual.values[k],
+                                        diag_dir / f"residual_{stem}.tif", ref_path)
+            logger.file(f"  inverse_{d}: {len(dates)} TOT_*_{d}.tif + diagnostics/")
+
+            # `vel` carries elapsed years as `time`; `ds` carries decimal years
+            # under the same name — keep the solver's and drop the fit's.
+            results[d] = ds.merge(
+                vel[["TOT", "velocity", "velocity_error", "rho", "intercept",
+                     "epoch_weight"]].drop_vars("time", errors="ignore"))
+
+        if set(targets) >= set(self._DIRECTIONS):
+            magn_dir = self.inversion_dir / "inverse_magn"
+            magn_dir.mkdir(parents=True, exist_ok=True)
+            ew = results["EW"]; ns = results["NS"]
+            common = [x for x in map(str, ew["date"].values) if x in set(map(str, ns["date"].values))]
+            for date in common:
+                self._compute_magnitude(
+                    self._tot_tif_name(self.inversion_dir / "inverse_EW", date, "EW"),
+                    self._tot_tif_name(self.inversion_dir / "inverse_NS", date, "NS"),
+                    self._tot_tif_name(magn_dir, date, "magn"),
+                )
+            logger.file(f"  inverse_magn: {len(common)} TOT_*_magn.tif")
+
+        elapsed = _time.time() - t_start
+        self._last_launch = {
+            **(getattr(self, "_last_launch", None) or {}),
+            "backend": "python",
+            "mode": "python",
+            "directions": list(targets),
+            "seconds": round(elapsed, 1),
+        }
+        logger.info(f"TIO ── python backend done in {elapsed:.1f} s.")
+        return results
+
     def post_process(self, direction: str = "both", overwrite: bool = False) -> None:
         """Convert TOT binary inversion outputs to GeoTIFF and compute magnitude maps.
 
@@ -1936,16 +3041,18 @@ class TIOInversion:
 
         1. For each direction: convert ``TOT_*`` binaries to georeferenced
            GeoTIFF via :meth:`_tot_to_geotiff` (CRS and geotransform inherited
-           from ``pairs[0].pa_ew_path``).
+           from ``pairs[0].pa_ew_path``), named ``TOT_<date>_EW.tif`` /
+           ``TOT_<date>_NS.tif`` (see :meth:`_tot_tif_name`).
         2. When *direction* is ``'both'``: for every date where both EW and NS
            GeoTIFFs exist, compute ``sqrt(EW² + NS²)`` via
-           :meth:`_compute_magnitude` and save to ``inverse_magn/``.
+           :meth:`_compute_magnitude` and save to ``inverse_magn/`` as
+           ``TOT_<date>_magn.tif``.
 
         :param direction: Which directions to process — ``'EW'``, ``'NS'``,
             or ``'both'`` (default).
         :type direction: str
-        :param overwrite: When ``False`` (default), skip conversion if a
-            ``.tif`` already exists alongside the binary.  Set to ``True``
+        :param overwrite: When ``False`` (default), skip conversion if the
+            ``TOT_<date>_<component>.tif`` already exists.  Set to ``True``
             to force re-conversion.
         :type overwrite: bool
 
@@ -1968,18 +3075,30 @@ class TIOInversion:
                 f for f in inv_dir.glob("TOT_*") if f.suffix == ""
             )
             if not tot_files:
-                logger.warning(f"post_process: no TOT_* files found in {inv_dir.name}/")
+                # A Python-backend run writes the GeoTIFFs directly: nothing to
+                # convert, but they still feed the magnitude step below.
+                existing = sorted(inv_dir.glob(f"TOT_*_{d}.tif"))
+                if existing:
+                    logger.info(
+                        f"post_process: {len(existing)} TOT_*_{d}.tif already present "
+                        f"in {inv_dir.name}/ (python backend) — nothing to convert"
+                    )
+                    for tif in existing:
+                        tifs[d][tif.stem.removeprefix("TOT_").removesuffix(f"_{d}")] = tif
+                else:
+                    logger.warning(f"post_process: no TOT_* files found in {inv_dir.name}/")
                 continue
 
             logger.info(f"post_process ── converting {len(tot_files)} TOT files [{d}]")
             for tot in tot_files:
-                out = tot.with_suffix(".tif")
+                date = tot.stem.replace("TOT_", "")
+                out  = self._tot_tif_name(inv_dir, date, d)
                 if not overwrite and out.exists():
-                    logger.info(f"  {tot.name}.tif already exists, skipping")
-                    tifs[d][tot.stem.replace("TOT_", "")] = out
+                    logger.info(f"  {out.name} already exists, skipping")
+                    tifs[d][date] = out
                     continue
-                self._tot_to_geotiff(tot, ref_path)
-                tifs[d][tot.stem.replace("TOT_", "")] = out
+                self._tot_to_geotiff(tot, ref_path, direction=d)
+                tifs[d][date] = out
                 logger.file(f"  {out.name}")
 
         # Magnitude only when both directions are available
@@ -1989,9 +3108,9 @@ class TIOInversion:
             common_dates = sorted(set(tifs["EW"]) & set(tifs["NS"]))
             logger.info(f"post_process ── computing magnitude for {len(common_dates)} dates")
             for date in common_dates:
-                out = magn_dir / f"TOT_{date}.tif"
+                out = self._tot_tif_name(magn_dir, date, "magn")
                 if not overwrite and out.exists():
-                    logger.info(f"  TOT_{date}.tif magnitude already exists, skipping")
+                    logger.info(f"  {out.name} already exists, skipping")
                     continue
                 self._compute_magnitude(tifs["EW"][date], tifs["NS"][date], out)
                 logger.file(f"  magnitude: {out.name}")

@@ -45,8 +45,12 @@ This module builds a self-contained JSON document per direction, written to::
 
 **Deliberately excluded**, because they are already on disk in the same folder
 and duplicating them invites the two copies to disagree: the per-pair weight
-vectors, the acquisition dates (``liste_image``) and the TIO solver settings
-(``input_tio``, whose generator takes no arguments — there is nothing to record).
+vectors and the acquisition dates (``liste_image``). The solver settings *are*
+recorded (``solver``, a ``TIOConfig.to_dict()``): ``input_tio`` is rendered
+from that object, and its ``weight_mode`` decides whether the weights in
+``liste_couple`` are read at all — a reader must not have to parse the Fortran
+block to learn that. The pair-network components (``network``) are recorded for
+the same reason: a disconnected graph changes what the result means.
 
 ``written_utc`` makes the file **not byte-stable** by design: it is a log, so no
 test may assert byte-equality, and re-running ``prepare_inversion`` will always
@@ -66,8 +70,7 @@ from geomulticorr._logging import logger
 _NOT_RECORDED = (
     "per-pair weights → liste_couple + each pair's stats JSON; "
     "acquisition dates → liste_image; "
-    "raster geometry → binary/File_info.rsc; "
-    "solver settings → input_tio"
+    "raster geometry → binary/File_info.rsc"
 )
 
 #: Constructor arguments that are data, not configuration — recorded as a type
@@ -162,6 +165,8 @@ def build_run_parameters(
     filter_pipeline=None,
     nmad_filter: dict | None = None,
     launch: dict | None = None,
+    solver: dict | None = None,
+    network: dict | None = None,
 ) -> dict:
     """Assemble the run-parameters document for one direction.
 
@@ -177,6 +182,11 @@ def build_run_parameters(
         ``write_liste_couple(**params)`` reproduces the run from the file alone.
     :param relevant_params: Which of those actually affected this mode — for a
         human reading the file, not for replay.
+    :param solver: ``TIOConfig.to_dict()`` plus ``iponder`` and
+        ``weights_applied_by_solver`` — what ``input_tio`` was rendered from.
+    :param network: ``{"n_components": int, "components": [...]}`` from
+        ``TIOInversion.network_components()``; more than one component means
+        the relative offsets between them come from the smoothing prior alone.
     :returns: A JSON-able dict.
     """
     from geomulticorr import __version__
@@ -195,6 +205,7 @@ def build_run_parameters(
             "n_images": int(n_images),
             "keys": list(pair_keys),
         },
+        "network": _jsonable(network),
         "weights": {
             "mode": weight_mode,
             "combine": combine,
@@ -202,6 +213,8 @@ def build_run_parameters(
                       if combine and weight_mode in ("quality", "quality_spatial")
                       else weight_mode),
             "source": weight_source,
+            "applied_by_solver": (None if solver is None
+                                  else bool(solver.get("weights_applied_by_solver"))),
             "params": _jsonable(weight_params),
             "relevant_params": sorted(relevant_params),
             "summary": _jsonable(weight_summary),
@@ -209,6 +222,7 @@ def build_run_parameters(
         "filter_pipeline": describe_filter_pipeline(filter_pipeline),
         "nmad_filter": _jsonable(nmad_filter),
         "launch": _jsonable(launch),
+        "solver": _jsonable(solver),
         "not_recorded_here": _NOT_RECORDED,
     }
     return document

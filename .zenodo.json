@@ -1,0 +1,30 @@
+{
+  "title": "GeoMultiCorr: surface displacement from optical images and time-series inversion",
+  "description": "End-to-end Python pipeline for measuring earth-surface displacements from multi-sensor optical images and DEMs, from image correlation with the Ames Stereo Pipeline to time-series inversion.",
+  "upload_type": "software",
+  "license": "agpl-3.0-only",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "Cusicanqui, Diego",
+      "affiliation": "Univ. Grenoble Alpes, Univ. Savoie Mont Blanc, CNRS, IRD, IGE, ISTerre, Edytem",
+      "orcid": "0000-0002-4681-1111"
+    },
+    {
+      "name": "Duvanel, Thibaut",
+      "affiliation": "Univ. Savoie Mont Blanc; Université de Lausanne",
+      "orcid": "0009-0001-4699-7075"
+    }
+  ],
+  "contributors": [
+  {"name": "Gaiani, Ronan", "type": "Other"}
+  ],
+  "keywords": [
+    "surface displacement time series",
+    "image correlation",
+    "time series inversion",
+    "Ames Stereo Pipeline",
+    "uncertainty quantification",
+    "optical remote sensing"
+  ]
+}

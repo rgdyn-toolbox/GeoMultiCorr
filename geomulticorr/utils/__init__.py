@@ -51,4 +51,5 @@ from geomulticorr.utils.gmc_functions import (
     plot_pairs_chord,
     plot_pairs_baseline,
     plot_pairs_dt_hist,
+    plot_cumulative_time_series,
 )

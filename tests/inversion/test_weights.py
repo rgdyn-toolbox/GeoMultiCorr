@@ -333,3 +333,135 @@ class TestComputePairWeights:
             w = inv.compute_pair_weights(mode)
             assert len(w) == 2
             assert all(0.0 <= x <= 1.0 for x in w), f"{mode} produced out-of-range weight"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# sensor_weights — the thirteenth key
+# ──────────────────────────────────────────────────────────────────────────────
+
+from geomulticorr.inversion.tio_inversion import (  # noqa: E402
+    _pair_sensor_label,
+    _validate_sensor_weights,
+    sensor_weight_factor,
+)
+
+
+def _sensor_pair(key, dt_days, left, right=None):
+    from datetime import date, timedelta
+    right = left if right is None else right
+    d2 = (date(2022, 1, 1) + timedelta(days=int(dt_days))).isoformat()
+    return SimpleNamespace(
+        pa_key=key, pa_dt_days=dt_days,
+        pa_left=SimpleNamespace(th_date="2022-01-01", th_sensor=left),
+        pa_right=SimpleNamespace(th_date=d2, th_sensor=right),
+    )
+
+
+class TestSensorWeightFactor:
+    def test_no_mapping_is_neutral(self):
+        assert sensor_weight_factor(("spot6", "spot6"), None) == 1.0
+        assert sensor_weight_factor(("spot6", "spot6"), {}) == 1.0
+
+    def test_case_insensitive_substring_match(self):
+        assert sensor_weight_factor(("SPOT6", "Spot7"), {"spot": 0.5}) == 0.5
+
+    def test_longest_key_wins(self):
+        sw = {"spot": 0.5, "spot7": 0.8}
+        assert sensor_weight_factor(("spot7", "spot7"), sw) == 0.8
+        assert sensor_weight_factor(("spot6", "spot6"), sw) == 0.5
+
+    def test_mixed_pair_takes_the_min(self):
+        sw = {"spot": 1.0, "planetscope": 0.3}
+        assert sensor_weight_factor(("spot6", "planetscope"), sw) == 0.3
+
+    def test_unmatched_sensor_keeps_one(self):
+        assert sensor_weight_factor(("pleiades", "pleiades"), {"spot": 0.5}) == 1.0
+        assert sensor_weight_factor(("", ""), {"spot": 0.5}) == 1.0
+
+    def test_validation_normalises_and_rejects(self):
+        assert _validate_sensor_weights(None) is None
+        assert _validate_sensor_weights({}) is None
+        assert _validate_sensor_weights({" SPOT ": "0.5"}) == {"spot": 0.5}
+        with pytest.raises(TypeError, match="mapping"):
+            _validate_sensor_weights(["spot"])
+        with pytest.raises(ValueError, match="non-empty"):
+            _validate_sensor_weights({"": 1.0})
+        with pytest.raises(ValueError, match="number"):
+            _validate_sensor_weights({"spot": "abc"})
+        with pytest.raises(ValueError, match="finite"):
+            _validate_sensor_weights({"spot": -1.0})
+
+    def test_pair_sensor_label(self):
+        assert _pair_sensor_label(_sensor_pair("a", 1, "SPOT6")) == "spot6"
+        assert _pair_sensor_label(_sensor_pair("a", 1, "spot6", "planetscope")) == "spot6+planetscope"
+        assert _pair_sensor_label(_make_pair("a", 1)) == ""
+
+
+class TestSensorWeightsInComputePairWeights:
+    def _inv(self, pairs):
+        inv = TIOInversion.__new__(TIOInversion)
+        inv.pairs = pairs
+        inv._quality_metrics = None
+        return inv
+
+    def test_uniform_times_sensor_factor(self):
+        inv = self._inv([_sensor_pair("a", 30, "spot6"), _sensor_pair("b", 30, "planetscope")])
+        assert inv.compute_pair_weights("uniform", sensor_weights={"planetscope": 0.5}) == [1.0, 0.5]
+
+    def test_applied_after_the_w_min_floor(self):
+        """The floor is per mode; the sensor factor is a deliberate exception to it."""
+        pairs = [_sensor_pair("a", 30, "spot6"), _sensor_pair("b", 400, "spot6"),
+                 _sensor_pair("c", 30, "planetscope")]
+        inv = self._inv(pairs)
+        plain = inv.compute_pair_weights("sigmoid", w_min=0.2)
+        with_sw = inv.compute_pair_weights("sigmoid", w_min=0.2, sensor_weights={"spot": 0.5})
+        assert with_sw[0] == pytest.approx(0.5 * plain[0])
+        assert with_sw[1] == pytest.approx(0.5 * plain[1])
+        assert with_sw[2] == pytest.approx(plain[2])
+        assert plain[1] >= 0.2                        # the floor held before the factor
+        assert with_sw[1] < 0.2                       # and is undercut by it, by design
+
+    def test_applies_to_quality_modes_too(self, monkeypatch):
+        good = _sensor_pair("good", 30, "spot6")
+        bad = _sensor_pair("bad", 30, "planetscope")
+        table = {"good": _stats(0.1, 0.9), "bad": _stats(0.9, 0.1)}
+        monkeypatch.setattr(tio, "load_pair_stats", lambda p: table[p.pa_key])
+        inv = self._inv([good, bad])
+        for mode in ("quality", "quality_spatial"):
+            inv._quality_metrics = None
+            plain = inv.compute_pair_weights(mode)
+            with_sw = inv.compute_pair_weights(mode, sensor_weights={"spot": 0.25})
+            assert with_sw[0] == pytest.approx(0.25 * plain[0])
+            assert with_sw[1] == pytest.approx(plain[1])
+
+    def test_pairs_without_sensor_attribute_are_fine_when_unused(self):
+        inv = self._inv([_make_pair("a", 30), _make_pair("b", 60)])
+        assert inv.compute_pair_weights("uniform", sensor_weights=None) == [1.0, 1.0]
+
+    def test_pairs_without_sensor_attribute_are_unmatched_when_used(self):
+        inv = self._inv([_make_pair("a", 30), _sensor_pair("b", 60, "spot6")])
+        assert inv.compute_pair_weights("uniform", sensor_weights={"spot": 0.5}) == [1.0, 0.5]
+
+    def test_write_liste_couple_threads_it_through(self, tmp_path):
+        inv = self._inv([_sensor_pair("a", 30, "spot6"), _sensor_pair("b", 30, "planetscope")])
+        inv.inversion_dir = tmp_path
+        inv._DIRECTIONS = ("EW", "NS")
+        inv.solver = tio.TIOConfig()
+        for d in inv._DIRECTIONS:
+            (tmp_path / f"inverse_{d}").mkdir()
+        out = inv.write_liste_couple(sensor_weights={"planetscope": 0.5}, sync_geodb=False)
+        assert out["EW"] == [1.0, 0.5]
+        text = (tmp_path / "inverse_EW" / "liste_couple").read_text().splitlines()
+        assert text[1].endswith(" 0.500000")
+
+    def test_explicit_vectors_ignore_it_with_a_warning(self, tmp_path, caplog_gmc):
+        inv = self._inv([_sensor_pair("a", 30, "spot6"), _sensor_pair("b", 30, "planetscope")])
+        inv.inversion_dir = tmp_path
+        inv._DIRECTIONS = ("EW", "NS")
+        inv.solver = tio.TIOConfig()
+        for d in inv._DIRECTIONS:
+            (tmp_path / f"inverse_{d}").mkdir()
+        out = inv.write_liste_couple(weights=[0.9, 0.9], sensor_weights={"planetscope": 0.5},
+                                     sync_geodb=False)
+        assert out["EW"] == [0.9, 0.9]
+        assert "sensor_weights ignored" in caplog_gmc.text

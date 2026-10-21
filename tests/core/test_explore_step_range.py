@@ -36,8 +36,12 @@ class _Pzone:
         self.pz_name = name
         self._thumbs = thumbs
 
-    def get_valid_thumbs(self):
-        return self._thumbs
+    def get_valid_thumbs(self, sensor_filter=None, image_type="opt"):
+        # Fake thumbs carry no th_type: they read as optical, as in real
+        # geodatabases written before image types existed.
+        if image_type is None:
+            return self._thumbs
+        return [t for t in self._thumbs if getattr(t, "th_type", "opt") == image_type]
 
 
 class _StubSession:
@@ -86,7 +90,7 @@ class _Controls:
 
     def __init__(self, box):
         self.box = box
-        self.view, self.strategy, self.step, self.pz = box.children[0].children
+        self.view, self.strategy, self.step, self.pz, self.type = box.children[0].children
         self.maxdt, self.mindt, self.sensor = box.children[1].children
         (self.colorby, self.bins, self.dedupe,
          self.arrows, self.mirror) = box.children[2].children
@@ -225,8 +229,23 @@ class TestNoReentrantRecompute:
         ctrl = _Controls(_explore(session, strategy="step", max_step=2))
 
         calls = self._count_recomputes(monkeypatch)
-        ctrl.set(ctrl.mindt, 100)          # no ceiling change at all
+        ctrl.set(ctrl.mindt, "100")        # Text widget; no ceiling change at all
         assert calls["n"] == 1
+
+    def test_duration_string_filter_recomputes_once(self, monkeypatch):
+        session = _make_session([_Pzone("PZ1", _thumbs(18))])
+        ctrl = _Controls(_explore(session, strategy="step", max_step=2))
+
+        calls = self._count_recomputes(monkeypatch)
+        ctrl.set(ctrl.mindt, "6M")
+        assert calls["n"] == 1
+
+    def test_an_unparseable_duration_does_not_raise(self, monkeypatch):
+        """A bad string must degrade, not kill the control: an exception in a
+        widget callback reaches only the kernel log, which VSCode hides."""
+        session = _make_session([_Pzone("PZ1", _thumbs(18))])
+        ctrl = _Controls(_explore(session, strategy="step", max_step=2))
+        ctrl.set(ctrl.mindt, "nonsense")   # must not propagate
 
     def test_moving_the_slider_recomputes_once(self, monkeypatch):
         session = _make_session([_Pzone("PZ1", _thumbs(18))])

@@ -91,6 +91,7 @@ def pairs_figure_stem(
     max_dt_days: int | None = None,
     min_dt_days: int | None = None,
     sensor_filter: str | None = None,
+    image_type: str | None = None,
 ) -> str:
     """Build a file stem that encodes the pzone, the view and the pairing setup.
 
@@ -98,21 +99,27 @@ def pairs_figure_stem(
     count — so re-running a notebook or a sweep refreshes the same files instead
     of accumulating copies, and downstream steps can reference a figure by path.
 
-    The keyword names are deliberately **exactly** the six keys of
+    The keyword names are deliberately **exactly** the seven keys of
     ``Session._last_pairs_params`` (plus *view*), so a caller can splat that dict
     in.  That dict is also splatted into
     :meth:`~geomulticorr.core.session.Session.update_pairs`, which accepts those
-    six and nothing else — hence nothing may ever be added to it.
+    seven and nothing else — hence nothing may be added to it without adding
+    the same parameter to both.
 
     Shape (segments omitted when not applicable)::
 
-        {pzone|all}_{view}_{strategy}[_maxstep{n}][_dt{min}-{max}][_{sensor}]
+        {pzone|all}[_{image_type}]_{view}_{strategy}[_maxstep{n}][_dt{min}-{max}][_{sensor}]
 
-    e.g. ``Chimborazo_chord_redundancy_maxstep17_dt60-800``.
+    e.g. ``Chimborazo_chord_redundancy_maxstep17_dt60-800``.  The image-type
+    segment is omitted for optical (``"opt"`` / ``None``), so every file name
+    written before image types existed is unchanged.
 
     :returns: The stem, without an extension.
     """
-    parts = [_slug(pz_name) or "all", _slug(view), _slug(strategy)]
+    parts = [_slug(pz_name) or "all"]
+    if image_type and str(image_type).lower() != "opt":
+        parts.append(_slug(image_type))
+    parts += [_slug(view), _slug(strategy)]
     if max_step is not None:
         parts.append(f"maxstep{int(max_step)}")
     if max_dt_days is not None or min_dt_days is not None:
