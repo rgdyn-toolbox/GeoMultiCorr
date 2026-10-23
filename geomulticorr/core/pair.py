@@ -149,13 +149,23 @@ class Pair:
             left_date = f"{left_year}-{left_month}-{left_day}"
             right_date = f"{right_year}-{right_month}-{right_day}"
             pz_name = target_path.name.split("_")[0]
-            left_key = f"{pz_name}_{left_date}_{left_sensor}.tif"
-            right_key = f"{pz_name}_{right_date}_{right_sensor}.tif"
 
-            # Reconstruct their path
+            # Reconstruct their path.  A sensor field may carry the thumb's
+            # resolution tag ("planetscope3m" <- "..._planetscope_3m.tif"), so the
+            # thumb is found by comparing the name with its "_" removed.
             thumbs_pzone_path = session.thumb_dir(pz_name, pa_type)
-            left_path = Path(thumbs_pzone_path, left_key)
-            right_path = Path(thumbs_pzone_path, right_key)
+
+            def _thumb_file(date, sensor_field):
+                plain = Path(thumbs_pzone_path, f"{pz_name}_{date}_{sensor_field}.tif")
+                if plain.exists():
+                    return plain
+                for cand in sorted(thumbs_pzone_path.glob(f"{pz_name}_{date}_*.tif")):
+                    if "".join(cand.stem.split("_")[2:]) == sensor_field:
+                        return cand
+                return plain
+
+            left_path = _thumb_file(left_date, left_sensor)
+            right_path = _thumb_file(right_date, right_sensor)
 
             # Make Thumbs from them
             left = gmc_thumb.Thumb(left_path)
@@ -176,7 +186,13 @@ class Pair:
 
         # Metadata
         self.pa_pz_name = left.th_pz_name
-        self.pa_key = f"{self.pa_pz_name}_{left.th_date}-{left.th_sensor}_{right.th_date}-{right.th_sensor}"
+        # th_res_tag ("3m", or "") keeps two resolutions of one date+sensor apart;
+        # empty for untagged thumbs, so those keys are unchanged.
+        _lt, _rt = getattr(left, "th_res_tag", ""), getattr(right, "th_res_tag", "")
+        self.pa_key = (
+            f"{self.pa_pz_name}_{left.th_date}-{left.th_sensor}{_lt}"
+            f"_{right.th_date}-{right.th_sensor}{_rt}"
+        )
         self.pa_left = left
         self.pa_right = right
 

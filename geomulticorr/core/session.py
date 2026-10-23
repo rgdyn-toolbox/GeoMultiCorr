@@ -841,6 +841,7 @@ class Session:
         self,
         source,
         layer: str | None = None,
+        bounds: "tuple[float, float, float, float] | None" = None,
     ) -> gu.Vector:
         """Normalise any AOI/polygon *source* into a session-CRS ``gu.Vector``.
 
@@ -850,15 +851,22 @@ class Session:
         Args:
             source: Vector, raster, or path to one of them.
             layer: Layer name for multi-layer vector files. Ignored otherwise.
+            bounds: Optional ``(left, bottom, right, top)`` in the **session CRS**.
+                Only the features whose bounding box meets it are kept — and,
+                for a file path, only those are read from disk — *before* the
+                reprojection, so a continental inventory costs what the area of
+                interest costs. Features are selected, never clipped. An empty
+                selection returns an empty vector instead of raising.
 
         Returns:
             gu.Vector: Features reprojected to ``self.epsg``.
 
         Raises:
             TypeError: If *source* is not a supported type.
-            ValueError: If the source contains no features.
+            ValueError: If the source contains no features (and *bounds* is None).
         """
         raster_suffixes = (".tif", ".tiff")
+        bounds_requested = bounds is not None
         if isinstance(source, gu.Vector):
             vec = source
         elif isinstance(source, gu.Raster):
@@ -873,14 +881,38 @@ class Session:
                 read_kwargs = {"engine": "pyogrio"}
                 if layer is not None:
                     read_kwargs["layer"] = layer
+                if bounds is not None:
+                    import pyogrio
+                    from rasterio.warp import transform_bounds
+                    info = pyogrio.read_info(str(path), layer=layer)
+                    src_crs = info.get("crs")
+                    read_kwargs["bbox"] = (
+                        tuple(transform_bounds(rio_crs.CRS.from_epsg(self.epsg), src_crs,
+                                               *bounds, densify_pts=21))
+                        if src_crs else tuple(bounds)
+                    )
                 vec = gu.Vector(gpd.read_file(str(path), **read_kwargs))
+                bounds = None  # already applied on read
         else:
             raise TypeError(
                 "source must be a file path, gu.Vector, gu.Raster, or GeoDataFrame "
                 f"(got {type(source).__name__})."
             )
 
+        if bounds is not None and not vec.ds.empty:
+            from rasterio.warp import transform_bounds
+            from shapely.geometry import box
+            src_bounds = (
+                transform_bounds(rio_crs.CRS.from_epsg(self.epsg), vec.crs,
+                                 *bounds, densify_pts=21)
+                if vec.crs is not None else tuple(bounds)
+            )
+            hit = vec.ds.sindex.query(box(*src_bounds), predicate="intersects")
+            vec = gu.Vector(vec.ds.iloc[np.sort(hit)])
+
         if vec.ds.empty:
+            if bounds_requested:
+                return gu.Vector(gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{self.epsg}"))
             raise ValueError(f"No features found in vector source: {source!r}")
 
         # A CRS-less source cannot be reprojected — it can only be declared.
@@ -1449,7 +1481,7 @@ class Session:
         # rather than dying on an opaque KeyError('th_path').
         if new.empty:
             logger.warning(
-                f"update_thumbs: no thumb matching <pzone>_YYYY-MM-DD_<sensor>.tif "
+                f"update_thumbs: no thumb matching <pzone>_YYYY-MM-DD_<sensor>[_<res>m].tif "
                 f"found under {opt_root} ({', '.join(glob_patterns)}); pzone names "
                 f"may not contain '_'"
             )
@@ -3590,6 +3622,10 @@ class Session:
         hillshade_altitude: float = 45.0,
         md_azimuths: Sequence[float] = DEFAULT_MD_AZIMUTHS,
         z_factor: float = 1.0,
+        resolution_in_name: bool = True,
+        mask_vector: "gu.Vector | gpd.GeoDataFrame | str | pathlib.Path | None" = None,
+        mask_buffer_value: float = 0.0,
+        mask_layer: str | None = None,
     ) -> dict[str, list[pathlib.Path]]:
         """Bulk sieve: crop all mosaics in ``georasters_map`` to each pzone AOI.
 
@@ -3644,6 +3680,23 @@ class Session:
             hillshade_altitude: Light altitude of both hillshades (°).
             md_azimuths: Light azimuths averaged by ``"mdhillshade"``.
             z_factor: Vertical exaggeration applied to both hillshades.
+            resolution_in_name: Append the output resolution to the thumb name,
+                ``<pz>_<date>_<sensor>_<res>m.tif`` (``3m``, ``10m``, ``1p5m``;
+                the point is spelled ``p``). ``False`` keeps the old
+                three-field names. Not applied to ``"reference_dem"``.
+            mask_vector: Polygons (path, GeoDataFrame or ``gu.Vector``) of regions
+                useless for correlation (forest, very high/low contrast...).
+                Pixels inside are set to ``0`` in optical and hillshade thumbs
+                (ASP ignores 0); float DEM/slope thumbs get their nodata
+                (``-9999``), since 0 is a valid elevation/slope there. The mask
+                is rasterised once per pzone on the output grid. A large file
+                (e.g. a continental inventory) is cropped to the pzone grid plus
+                the buffer *before* it is reprojected, per pzone, so only nearby
+                polygons are read, reprojected and buffered. Existing
+                thumbs are not rewritten: use ``skip_existing=False``.
+            mask_buffer_value: Buffer (CRS units, metres) applied to the polygons
+                before masking, as in ``vec.buffer(100).create_mask(raster)``.
+            mask_layer: Layer name when *mask_vector* is a multi-layer file.
 
         Returns:
             Dict mapping pzone name to the list of thumb paths written (for
@@ -3697,6 +3750,12 @@ class Session:
 
         written: dict[str, list[pathlib.Path]] = {}
 
+        if mask_vector is not None and image_type == "reference_dem":
+            logger.warning("mask_vector is ignored for image_type='reference_dem'")
+            mask_vector = None
+
+        res_tag = f"_{target_resolution:g}".replace(".", "p") + "m" if resolution_in_name else ""
+
         for pz in self.get_pzones_overview().iloc:
             if pzone_filter is not None and pz["pz_name"] not in pzone_filter:
                 continue
@@ -3714,6 +3773,47 @@ class Session:
                 canon_bounds, canon_size = self._compute_canonical_grid(
                     pz_vec, self.epsg, target_resolution
                 )
+
+            # Polygon mask on the output grid, built once per pzone (not per date).
+            pz_mask = None
+            if mask_vector is not None:
+                # Crop first, reproject second: only the polygons near this pzone
+                # (grid + buffer margin) are read and reprojected, so a continental
+                # inventory costs what the pzone costs.  The buffer is applied after
+                # reprojection, in metres, so the crop margin is only a pre-filter.
+                mask_vec = self._normalize_vector_source(
+                    mask_vector, layer=mask_layer,
+                    bounds=(canon_bounds.left - mask_buffer_value,
+                            canon_bounds.bottom - mask_buffer_value,
+                            canon_bounds.right + mask_buffer_value,
+                            canon_bounds.top + mask_buffer_value),
+                )
+                if len(mask_vec.ds) and mask_buffer_value:
+                    mask_vec = mask_vec.buffer(mask_buffer_value)
+                _tmpl = gu.Raster.from_array(
+                    np.zeros((canon_size[1], canon_size[0]), dtype="uint8"),
+                    transform=rio_transform.from_bounds(
+                        canon_bounds.left, canon_bounds.bottom, canon_bounds.right,
+                        canon_bounds.top, canon_size[0], canon_size[1]),
+                    crs=rio_crs.CRS.from_epsg(self.epsg),
+                    nodata=None,
+                )
+                if len(mask_vec.ds) == 0:
+                    pz_mask = np.zeros((canon_size[1], canon_size[0]), dtype=bool)
+                else:
+                    pz_mask = np.asarray(np.ma.getdata(mask_vec.create_mask(_tmpl).data),
+                                         dtype=bool).reshape(canon_size[1], canon_size[0])
+                del mask_vec, _tmpl  # free the cropped polygons before the next pzone
+                frac = float(pz_mask.mean())
+                logger.info(f"Polygon mask on {pz['pz_name']}: {frac:.1%} of the grid")
+                if frac == 0:
+                    logger.info(f"No mask polygon intersects {pz['pz_name']}: nothing masked")
+                    pz_mask = None
+                elif frac > 0.8:
+                    logger.warning(f"mask_vector covers {frac:.0%} of the pzone grid")
+                if skip_existing:
+                    logger.info("mask_vector: existing thumbs are skipped, not re-masked "
+                                "(use skip_existing=False)")
 
             pz_name = pz["pz_name"]
             if image_type == "opt":
@@ -3767,12 +3867,12 @@ class Session:
                     sensor = groups.index[group_id][1]
 
                     if image_type == "opt":
-                        thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}.tif"
+                        thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}{res_tag}.tif"
                         outputs = [(IMAGE_TYPE_OPTICAL, pathlib.Path(pz_opticals, thumb_name))]
                     elif image_type == "dem":
                         # Same <pz>_<date>_<sensor> name in every product folder:
                         # the folder carries the type.
-                        thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}.tif"
+                        thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}{res_tag}.tif"
                         outputs = [(t, pathlib.Path(folder, thumb_name)) for t, folder in dem_outputs]
                     else:  # reference_dem
                         thumb_name = f"{pz['pz_name']}_dem.tif"
@@ -3835,13 +3935,21 @@ class Session:
 
                     if image_type == "dem":
                         pz_written.extend(
-                            self._write_dem_products(thumb, todo, terrain_params)
+                            self._write_dem_products(thumb, todo, terrain_params, mask=pz_mask)
                         )
                         done = ", ".join(t for t, _ in todo)
                         _summary_rows.append({"name": thumb_name, "sensor": sensor,
                                               "status": f"✓ {done}"})
                     else:
                         thumb_path = todo[0][1]
+                        if pz_mask is not None:
+                            # 0 is ASP's default ignored value; make it the nodata too.
+                            data = np.ma.getdata(thumb.data).copy()
+                            data[..., pz_mask] = 0
+                            thumb = gu.Raster.from_array(
+                                np.ma.masked_array(data, mask=np.ma.getmaskarray(thumb.data) | pz_mask),
+                                transform=thumb.transform, crs=thumb.crs, nodata=0,
+                            )
                         thumb.to_file(thumb_path, dtype=out_dtype)
                         pz_written.append(thumb_path)
                         _summary_rows.append({"name": thumb_name, "sensor": sensor, "status": "✓ done"})
@@ -3862,7 +3970,8 @@ class Session:
 
     @classmethod
     def _write_dem_products(cls, dem: gu.Raster, todo: list[tuple[str, pathlib.Path]],
-                            terrain_params: dict) -> list[pathlib.Path]:
+                            terrain_params: dict, mask: "np.ndarray | None" = None
+                            ) -> list[pathlib.Path]:
         """Write the DEM and/or its terrain products for one sieved DEM group.
 
         *dem* is already on the pzone's canonical grid; every product is derived
@@ -3871,6 +3980,10 @@ class Session:
         Each file is built with ``gu.Raster.from_array(..., nodata=…)`` rather
         than ``dem.copy()``, so it carries its own dtype and nodata instead of
         inheriting the DEM's.
+
+        *mask* (True = blank) is applied to each **derived** product, so slope
+        and shading are computed on the full DEM and the polygon edge is not
+        contaminated: hillshades get 0, DEM/slope their float nodata.
         """
         arr = np.ma.masked_invalid(np.ma.asarray(dem.data, dtype=np.float64))
         if arr.ndim == 3:
@@ -3891,6 +4004,8 @@ class Session:
                 else:  # slope, degrees
                     data = np.where(np.isfinite(prod), prod, nd).astype(np.float32)
                     nodata = nd
+            if mask is not None:
+                data = np.where(mask, nodata, data).astype(data.dtype)
             # Masked explicitly: handing geoutils a plain array that contains
             # the nodata value makes it warn and mask it anyway.
             out = gu.Raster.from_array(np.ma.masked_equal(data, nodata),

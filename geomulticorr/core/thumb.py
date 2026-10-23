@@ -31,11 +31,17 @@ from osgeo import gdal
 import geoutils as gu
 
 import geomulticorr.core.pair as gmc_pair
+from geomulticorr._logging import logger
 from geomulticorr.utils._image_types import image_type_of_thumb_path
 
 THUMBNAME_PATTERN = re.compile(
     "^([a-z]|[A-Z]|-|[0-9])+_[0-9]{4}(-[0-9]{2}){2}_.*.(tif|TIF)$"
 )
+
+
+# Optional 4th filename field: ground resolution in metres, '.' spelled 'p'
+# ("3m", "10m", "1p5m").  A '.' would be cut by ``name.split(".")``.
+RES_TAG_PATTERN = re.compile(r"^[0-9]+(p[0-9]+)?m$")
 
 
 class Thumb:
@@ -46,7 +52,9 @@ class Thumb:
     sensor and date. Thumbs are the fundamental building blocks for creating image pairs
     and performing correlation analysis.
     
-    The filename must match the pattern: ``<pzone>_YYYY-MM-DD_<sensor>.tif``
+    The filename must match the pattern ``<pzone>_YYYY-MM-DD_<sensor>.tif``,
+    optionally followed by the ground resolution in metres:
+    ``<pzone>_YYYY-MM-DD_<sensor>_<res>m.tif`` (``3m``, ``10m``, ``1p5m``).
     """
 
     def __init__(self, target_path):
@@ -66,7 +74,10 @@ class Thumb:
         :ivar th_key: Filename without extension (e.g., ``pzone_YYYY-MM-DD_sensor``).
         :ivar th_pz_name: Processing zone name extracted from filename.
         :ivar th_date: Acquisition date in ISO format (``YYYY-MM-DD``).
-        :ivar th_sensor: Sensor name (e.g., ``SPOT6``, ``Sentinel2``).
+        :ivar th_sensor: Sensor name (e.g., ``SPOT6``, ``Sentinel2``), without
+            the resolution tag.
+        :ivar th_res_tag: Resolution tag of the filename (``"3m"``), ``""`` when
+            the name has none.
         :ivar th_year: Year of acquisition as integer.
         :ivar th_date_dec: Decimal year for temporal interpolation.
         :ivar th_date_datetime: Acquisition date as pandas Timestamp.
@@ -90,7 +101,16 @@ class Thumb:
 
         self.th_path = str(target_path)
         self.th_key = target_path.name.split(".")[0]
-        self.th_pz_name, self.th_date, self.th_sensor = self.th_key.split("_")
+        fields = self.th_key.split("_")
+        if len(fields) == 3:
+            (self.th_pz_name, self.th_date, self.th_sensor), self.th_res_tag = fields, ""
+        elif len(fields) == 4 and RES_TAG_PATTERN.match(fields[3]):
+            self.th_pz_name, self.th_date, self.th_sensor, self.th_res_tag = fields
+        else:
+            raise ValueError(
+                f"thumb name {target_path.name!r}: expected "
+                f"<pzone>_YYYY-MM-DD_<sensor>[_<res>m].tif, e.g. ..._planetscope_3m.tif"
+            )
         self.th_year = int(self.th_date.split("-")[0])
         self.th_date_dec = self.th_year + (int(self.th_date.split("-")[1]) - 1) / 12
         self.th_date_datetime = pd.to_datetime(self.th_date)
@@ -113,6 +133,13 @@ class Thumb:
         # turn the column to ``object`` — the trap ``th_year``/``th_valid``
         # already fell into.
         self.th_res = self._read_resolution(ras)
+        if self.th_res_tag:
+            tag_res = float(self.th_res_tag[:-1].replace("p", "."))
+            if self.th_res == self.th_res and abs(tag_res - self.th_res) > 0.01 * tag_res:
+                logger.warning(
+                    f"{target_path.name}: filename says {self.th_res_tag} but the "
+                    f"header pixel size is {self.th_res:g}; the header is used"
+                )
     #END def
 
     @staticmethod
