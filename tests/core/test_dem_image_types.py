@@ -154,8 +154,8 @@ class TestSieveDem:
         session, root, *_ = project
         for t in ("dem", "hillshade", "mdhillshade", "slope"):
             names = sorted(p.name for p in session.thumb_dir(PZ, t).glob("*.tif"))
-            assert names == [f"{PZ}_2019-08-14_pleiades.tif", f"{PZ}_2020-08-20_pleiades.tif",
-                             f"{PZ}_2021-08-03_uav.tif"], t
+            assert names == [f"{PZ}_2019-08-14_pleiades_3m.tif", f"{PZ}_2020-08-20_pleiades_3m.tif",
+                             f"{PZ}_2021-08-03_uav_3m.tif"], t
             assert session.pair_dir(PZ, t).is_dir()
         # nothing leaked into the optical folder or the correction DEM
         assert not list(session.thumb_dir(PZ, "opt").glob("*.tif"))
@@ -163,7 +163,7 @@ class TestSieveDem:
 
     def test_encodings(self, project):
         session, *_ = project
-        name = f"{PZ}_2019-08-14_pleiades.tif"
+        name = f"{PZ}_2019-08-14_pleiades_3m.tif"
         with rasterio.open(session.thumb_dir(PZ, "dem") / name) as ds:
             dem = ds.read(1)
             assert ds.dtypes[0] == "float32" and ds.nodata == -9999.0
@@ -181,7 +181,7 @@ class TestSieveDem:
 
     def test_voids_and_border_become_nodata(self, project):
         session, *_ = project
-        name = f"{PZ}_2019-08-14_pleiades.tif"
+        name = f"{PZ}_2019-08-14_pleiades_3m.tif"
         with rasterio.open(session.thumb_dir(PZ, "slope") / name) as ds:
             s = ds.read(1)
         assert (s[0] == -9999.0).all() and (s[:, -1] == -9999.0).all()
@@ -198,7 +198,7 @@ class TestSieveDem:
 
     def test_skip_existing_is_per_product(self, project):
         session, *_ = project
-        name = f"{PZ}_2019-08-14_pleiades.tif"
+        name = f"{PZ}_2019-08-14_pleiades_3m.tif"
         md = session.thumb_dir(PZ, "mdhillshade") / name
         slope = session.thumb_dir(PZ, "slope") / name
         before = md.stat().st_mtime_ns
@@ -264,8 +264,8 @@ class TestThumbsAndPairs:
 
     def test_pairs_never_cross_types(self, project):
         session, *_ = project
-        name_a = f"{PZ}_2019-08-14_pleiades.tif"
-        name_b = f"{PZ}_2020-08-20_pleiades.tif"
+        name_a = f"{PZ}_2019-08-14_pleiades_3m.tif"
+        name_b = f"{PZ}_2020-08-20_pleiades_3m.tif"
         a = Thumb(session.thumb_dir(PZ, "slope") / name_a)
         b = Thumb(session.thumb_dir(PZ, "mdhillshade") / name_b)
         with pytest.raises(AssertionError, match="image types"):
@@ -275,11 +275,11 @@ class TestThumbsAndPairs:
         session, *_ = project
         opt_dir = session.thumb_dir(PZ, "opt")
         src = session.thumb_dir(PZ, "hillshade")
-        for name in (f"{PZ}_2019-08-14_pleiades.tif", f"{PZ}_2020-08-20_pleiades.tif"):
+        for name in (f"{PZ}_2019-08-14_pleiades_3m.tif", f"{PZ}_2020-08-20_pleiades_3m.tif"):
             shutil.copy(src / name, opt_dir / name)
         try:
-            a = Thumb(opt_dir / f"{PZ}_2019-08-14_pleiades.tif")
-            b = Thumb(opt_dir / f"{PZ}_2020-08-20_pleiades.tif")
+            a = Thumb(opt_dir / f"{PZ}_2019-08-14_pleiades_3m.tif")
+            b = Thumb(opt_dir / f"{PZ}_2020-08-20_pleiades_3m.tif")
             pair = a + b
             assert a.th_type == "opt" and pair.pa_type == "opt"
             assert pair.pa_path == (session.pz_dir(PZ, "image_correlation") / pair.pa_key).absolute()
@@ -356,3 +356,188 @@ def test_every_pair_selecting_method_takes_image_type(method):
     """criterias cannot separate types: "hillshade" is a substring of "mdhillshade"."""
     import inspect
     assert "image_type" in inspect.signature(getattr(Session, method)).parameters
+
+
+# --------------------------------------------------------------------------- #
+class TestResolutionTagAndMask:
+    """Resolution token in the thumb name, and the polygon mask of sieve_bulk."""
+
+    @pytest.fixture(scope="class")
+    def masked(self, tmp_path_factory):
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        root = tmp_path_factory.mktemp("maskproj")
+        bank = root / "bank"
+        bank.mkdir()
+        _write_dem(bank / "pleiades_2019-08-14_dem.tif", 0)
+        session = open_gmc_session(root / "proj", epsg_code=EPSG)
+        session.insert_pzone([(X0 + 30, Y0 - 150), (X0 + 150, Y0 - 150),
+                              (X0 + 150, Y0 - 30), (X0 + 30, Y0 - 30)], PZ, "A")
+        session.map_georasters_bank(bank, image_type="dem", epsg_code=EPSG, max_workers=1)
+        poly = gpd.GeoDataFrame(geometry=[box(X0 + 40, Y0 - 100, X0 + 80, Y0 - 60)],
+                                crs=f"EPSG:{EPSG}")
+        common = dict(image_type="dem", target_resolution=RES, print_summary=False,
+                      terrain_products=("hillshade", "slope"))
+        session.sieve_bulk(mask_vector=poly, mask_buffer_value=10.0, **common)
+        ref = root / "plain"
+        plain = open_gmc_session(ref, epsg_code=EPSG)
+        plain.insert_pzone([(X0 + 30, Y0 - 150), (X0 + 150, Y0 - 150),
+                            (X0 + 150, Y0 - 30), (X0 + 30, Y0 - 30)], PZ, "A")
+        plain.map_georasters_bank(bank, image_type="dem", epsg_code=EPSG, max_workers=1)
+        plain.sieve_bulk(resolution_in_name=False, **common)
+        return session, plain, poly
+
+    def test_name_carries_resolution(self, masked):
+        session, plain, _ = masked
+        assert [p.name for p in session.thumb_dir(PZ, "slope").glob("*.tif")] == \
+            [f"{PZ}_2019-08-14_pleiades_3m.tif"]
+        assert [p.name for p in plain.thumb_dir(PZ, "slope").glob("*.tif")] == \
+            [f"{PZ}_2019-08-14_pleiades.tif"]
+
+    def test_thumb_parses_tag_and_keeps_bare_sensor(self, masked):
+        session, *_ = masked
+        t = Thumb(session.thumb_dir(PZ, "slope") / f"{PZ}_2019-08-14_pleiades_3m.tif")
+        assert (t.th_sensor, t.th_res_tag, t.th_res) == ("pleiades", "3m", 3.0)
+
+    def test_bad_fourth_field_rejected(self, masked):
+        session, *_ = masked
+        src = session.thumb_dir(PZ, "slope") / f"{PZ}_2019-08-14_pleiades_3m.tif"
+        bad = src.with_name(f"{PZ}_2019-08-14_pleiades_foo.tif")
+        shutil.copy(src, bad)
+        try:
+            with pytest.raises(ValueError, match="expected"):
+                Thumb(bad)
+        finally:
+            bad.unlink()
+
+    def test_pair_key_distinguishes_resolutions(self, masked):
+        session, *_ = masked
+        src = session.thumb_dir(PZ, "slope")
+        a = Thumb(src / f"{PZ}_2019-08-14_pleiades_3m.tif")
+        extra = src / f"{PZ}_2019-08-14_pleiades_10m.tif"
+        shutil.copy(a.th_path, extra)
+        try:
+            b = Thumb(extra)  # header says 3 m: warns, header wins
+            assert (a + b).pa_key != (b + a).pa_key
+            assert "pleiades3m" in (a + b).pa_key and "pleiades10m" in (a + b).pa_key
+        finally:
+            extra.unlink()
+
+    def test_untagged_pair_key_unchanged(self, masked):
+        _, plain, _ = masked
+        t = Thumb(plain.thumb_dir(PZ, "slope") / f"{PZ}_2019-08-14_pleiades.tif")
+        t2 = Thumb(plain.thumb_dir(PZ, "hillshade") / f"{PZ}_2019-08-14_pleiades.tif")
+        assert t.th_res_tag == ""
+        assert t2.th_sensor == "pleiades"
+
+    def test_mask_matches_buffered_polygon(self, masked):
+        import geoutils as gu
+
+        session, plain, poly = masked
+        name = f"{PZ}_2019-08-14_pleiades_3m.tif"
+        for t, nodata in (("slope", -9999.0), ("hillshade", 0)):
+            m = gu.Raster(str(session.thumb_dir(PZ, t) / name))
+            p = gu.Raster(str(plain.thumb_dir(PZ, t) / f"{PZ}_2019-08-14_pleiades.tif"))
+            expect = np.asarray(np.ma.getdata(gu.Vector(poly).buffer(10.0).create_mask(m).data), dtype=bool).squeeze()
+            got = np.ma.getmaskarray(m.data).squeeze()
+            assert expect.any() and not expect.all()
+            assert got[expect].all(), t
+            # outside the polygon the thumb equals the unmasked run
+            keep = ~expect & ~np.ma.getmaskarray(p.data).squeeze()
+            assert np.array_equal(np.ma.getdata(m.data).squeeze()[keep],
+                                  np.ma.getdata(p.data).squeeze()[keep]), t
+
+
+# --------------------------------------------------------------------------- #
+class TestMaskPolygonCrop:
+    """A polygon file far larger than the pzone is cropped per pzone, then reprojected."""
+
+    @pytest.fixture(scope="class")
+    def env(self, tmp_path_factory):
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        root = tmp_path_factory.mktemp("cropmask")
+        bank = root / "bank"
+        bank.mkdir()
+        _write_dem(bank / "pleiades_2019-08-14_dem.tif", 0)
+
+        def fresh(name):
+            s = open_gmc_session(root / name, epsg_code=EPSG)
+            s.insert_pzone([(X0 + 30, Y0 - 150), (X0 + 150, Y0 - 150),
+                            (X0 + 150, Y0 - 30), (X0 + 30, Y0 - 30)], PZ, "A")
+            s.map_georasters_bank(bank, image_type="dem", epsg_code=EPSG, max_workers=1)
+            return s
+
+        near = box(X0 + 40, Y0 - 100, X0 + 80, Y0 - 60)           # inside the pzone
+        edge = box(X0 + 152, Y0 - 100, X0 + 170, Y0 - 60)         # 2 m outside, reached by a 10 m buffer
+        far = [box(X0 + 5000 + 100 * i, Y0 + 5000, X0 + 5050 + 100 * i, Y0 + 5050)
+               for i in range(200)]                                # a "continental" file
+        small = gpd.GeoDataFrame(geometry=[near, edge], crs=f"EPSG:{EPSG}")
+        big = gpd.GeoDataFrame(geometry=[near, edge, *far], crs=f"EPSG:{EPSG}").to_crs(4326)
+        return root, fresh, small, big
+
+    COMMON = dict(image_type="dem", target_resolution=RES, print_summary=False,
+                  terrain_products=("slope",), skip_existing=False)
+
+    def _slope(self, session):
+        import geoutils as gu
+        f = next(session.thumb_dir(PZ, "slope").glob("*.tif"))
+        return np.ma.getmaskarray(gu.Raster(str(f)).data).squeeze()
+
+    def test_large_other_crs_file_equals_precropped(self, env):
+        _, fresh, small, big = env
+        a, b = fresh("a"), fresh("b")
+        a.sieve_bulk(mask_vector=small, mask_buffer_value=10.0, **self.COMMON)
+        b.sieve_bulk(mask_vector=big, mask_buffer_value=10.0, **self.COMMON)
+        ma, mb = self._slope(a), self._slope(b)
+        assert ma.sum() > 0
+        # 4326 round-trip moves the polygon by far less than a pixel
+        assert (ma != mb).sum() <= 0.01 * ma.size
+
+    def test_polygon_reaching_in_through_buffer_is_kept(self, env):
+        _, fresh, small, _ = env
+        edge_only = small.iloc[[1]]            # 2 m outside the grid
+        plain, no_buf, buf = fresh("c0"), fresh("c1"), fresh("c2")
+        plain.sieve_bulk(**self.COMMON)
+        no_buf.sieve_bulk(mask_vector=edge_only, mask_buffer_value=0.0, **self.COMMON)
+        buf.sieve_bulk(mask_vector=edge_only, mask_buffer_value=10.0, **self.COMMON)
+        base = self._slope(plain)
+        assert (self._slope(no_buf) == base).all()          # outside, no buffer: nothing
+        assert self._slope(buf).sum() > base.sum()          # reached in through the buffer
+
+    def test_far_polygons_mask_nothing(self, env):
+        _, fresh, _, big = env
+        plain, far = fresh("f0"), fresh("f1")
+        plain.sieve_bulk(**self.COMMON)
+        far.sieve_bulk(mask_vector=big.iloc[2:], mask_buffer_value=10.0, **self.COMMON)
+        assert (self._slope(far) == self._slope(plain)).all()
+
+    def test_path_input_reads_with_bbox(self, env, monkeypatch, tmp_path):
+        _, fresh, _, big = env
+        path = tmp_path / "inventory.gpkg"
+        big.to_file(path, driver="GPKG")
+        import geopandas as gpd
+        seen = {}
+        real = gpd.read_file
+
+        def spy(*a, **kw):
+            seen.update(kw)
+            return real(*a, **kw)
+
+        monkeypatch.setattr(gpd, "read_file", spy)
+        s = fresh("g")
+        vec = s._normalize_vector_source(path, bounds=(X0 + 30, Y0 - 150, X0 + 150, Y0 - 30))
+        assert "bbox" in seen
+        assert len(vec.ds) == 1 and vec.crs.to_epsg() == EPSG  # 202 in the file, 1 inside the bounds
+
+    def test_bounds_none_unchanged_and_empty_still_raises(self, env):
+        import geopandas as gpd
+        _, fresh, _, big = env
+        s = fresh("h")
+        assert len(s._normalize_vector_source(big).ds) == len(big)
+        with pytest.raises(ValueError, match="No features"):
+            s._normalize_vector_source(gpd.GeoDataFrame(geometry=[], crs=4326))
+        empty = s._normalize_vector_source(big.iloc[2:], bounds=(X0, Y0 - 150, X0 + 150, Y0))
+        assert len(empty.ds) == 0
