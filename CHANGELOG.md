@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.4] — 2026-10-23
+
+### Added
+- **Resolution in thumb names.** `sieve_bulk` now writes `<pz>_<date>_<sensor>_<res>m.tif`
+  (`..._planetscope_3m.tif`; whole metres as `3m`/`10m`, fractional with `p`: `1p5m`).
+  `resolution_in_name=False` restores the old three-field names. `Thumb` accepts both forms (new `th_res_tag`; `th_sensor` stays the bare sensor; `th_res` is still read from the header and a mismatch with the name is warned about).
+- **Polygon mask in `sieve_bulk`** — `mask_vector`, `mask_buffer_value` (metres), `mask_layer`.
+  Rasterised once per pzone on the output grid (`buffer(...).create_mask(...)`); masked pixels are `0` in optical and hillshade thumbs (ASP ignores 0) and the float nodata (`-9999`) in DEM/slope thumbs, applied after the terrain products are derived. Existing thumbs are not re-masked unless `skip_existing=False`. A large polygon file (e.g. a continental glacier inventory) is cropped per pzone **before** it is reprojected (`read_file(bbox=…)` for paths, spatial index otherwise; features selected, never clipped), so memory and time follow the pzone, not the file; the buffer is applied after reprojection, in metres.
+
+### Changed
+- `Pair.pa_key` carries the resolution tag of each thumb that has one
+  (`...-planetscope3m_...`), so one date+sensor at two resolutions gives distinct pairs. Keys of untagged thumbs are unchanged. `Pair(path)` finds tagged thumbs again.
+
+### Known limitation
+- `Session._thumb_resolution_lookup` is keyed on `(pzone, date, sensor)`; the same date+sensor at two resolutions in one pzone is ambiguous for the correlation-parameter explorer.
+
 ## [0.7.3] — 2026-10-19
 
 ### Added
