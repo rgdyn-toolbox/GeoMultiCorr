@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: gmc_env.yml
+          environment-name: gmc_env
+          cache-environment: true
+
+      - name: Install GeoMultiCorr
+        shell: micromamba-shell {0}
+        run: pip install -e . --no-deps
+
+      - name: Tests with coverage
+        shell: micromamba-shell {0}
+        run: pytest tests/ --cov=geomulticorr --cov-report=xml -q
+
+      - name: Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          file: coverage.xml
+          format: cobertura
