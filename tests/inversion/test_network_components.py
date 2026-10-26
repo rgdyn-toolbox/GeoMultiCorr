@@ -53,7 +53,7 @@ def _pair(d1, d2, s1=None, s2=None):
         left.th_sensor = s1
     if s2 is not None:
         right.th_sensor = s2
-    return SimpleNamespace(pa_key=f"PZ_{d1}-{s1}_{d2}-{s2}", pa_dt_days=30,
+    return SimpleNamespace(pa_key=f"PZ_{d1}_{s1}__{d2}_{s2}", pa_dt_days=30,
                            pa_left=left, pa_right=right)
 
 

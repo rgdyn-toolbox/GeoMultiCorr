@@ -266,7 +266,7 @@ class TestPairModeTwo:
         # Pair mode-2 constructor would try to load these
         # (will fail on raster I/O, but path construction is what we test)
         from geomulticorr.core.pair import Pair
-        image_corr_dir = optical_dir.parent / "image_correlation" / "test_pz_2024-01-01-sentinel2_2024-01-15-sentinel2"
+        image_corr_dir = optical_dir.parent / "image_correlation" / "test_pz_2024-01-01_sentinel2__2024-01-15_sentinel2"
         image_corr_dir.mkdir(parents=True, exist_ok=True)
 
         # Mode-2 would construct: Pair(session=session, target_path=image_corr_dir)
@@ -303,7 +303,7 @@ class TestTIOInversionDir:
 
     def test_pzone_name_is_the_first_pa_key_segment(self):
         """inversion_dir and the figure routing both derive the pzone this way."""
-        pa_key = "PasDeLours_2021-01-01-spot_2022-03-01-spot"
+        pa_key = "PasDeLours_2021-01-01_spot__2022-03-01_spot"
         assert pa_key.split("_")[0] == "PasDeLours"
 
     def test_run_parameters_land_beside_the_direction_inputs(self, temp_project_new):

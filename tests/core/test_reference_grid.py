@@ -138,7 +138,7 @@ class TestBuildReferenceGridFromPair:
         ).to_file(str(ew))
 
         class _FakePair:
-            pa_key = "TestPz_2024-01-01-ps_2024-01-15-ps"
+            pa_key = "TestPz_2024-01-01_ps__2024-01-15_ps"
             pa_ew_path = ew
 
         session.build_reference_grid("TestPz", from_pair=_FakePair())

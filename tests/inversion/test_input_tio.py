@@ -164,7 +164,7 @@ class TestOptionalBinaries:
     def test_missing_binaries_do_not_raise_at_construction(self, tmp_path, caplog_gmc):
         session = SimpleNamespace(_legacy_layout=False,
                                   pz_dir=lambda pz, kind=None: tmp_path / pz / str(kind))
-        pairs = [SimpleNamespace(pa_key="PZ_2020-01-01-s_2020-02-01-s")]
+        pairs = [SimpleNamespace(pa_key="PZ_2020-01-01_s__2020-02-01_s", pa_pz_name="PZ")]
         inv = TIOInversion(session, pairs, "t", tio_binaries_dir=tmp_path / "nowhere")
         assert inv.invers_pixel_omp_bin is None
         assert inv.lect_depl_cumule_lin_bin is None

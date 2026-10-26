@@ -52,7 +52,7 @@ def test_no_false_positives_inside_words(name):
 
 
 def test_tokens_are_safe_in_thumb_and_pair_names():
-    """Thumb splits its name on '_', Pair splits each side of pa_key on '-'."""
+    """Thumb splits its name on '_', Thumb splits its name on '_', and Pair splits pa_key into the two th_keys on '__'."""
     tokens = {t for _, t in DEM_SENSOR_PATTERNS} | {DEM_SENSOR_FALLBACK}
     for token in tokens:
         assert "_" not in token and "-" not in token and token == token.lower()

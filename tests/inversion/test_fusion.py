@@ -225,7 +225,7 @@ def _pair(tmp_path, d1, d2, fn, sensor="spot6", *, rows=H):
     ns = _write_pair_raster(tmp_path / f"{d1}_{d2}_NS.tif", fn("NS", t1, t2), rows=rows)
     fmt = lambda d: f"{d[:4]}-{d[4:6]}-{d[6:]}"
     return SimpleNamespace(
-        pa_key=f"PZ_{fmt(d1)}-{sensor}_{fmt(d2)}-{sensor}",
+        pa_key=f"PZ_{fmt(d1)}_{sensor}__{fmt(d2)}_{sensor}",
         pa_left=SimpleNamespace(th_date=fmt(d1), th_sensor=sensor),
         pa_right=SimpleNamespace(th_date=fmt(d2), th_sensor=sensor),
         pa_ew_path=ew, pa_ns_path=ns,

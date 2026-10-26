@@ -8,6 +8,7 @@ The image type is carried by the folder — ``elevation/<type>/`` for thumbs and
 from __future__ import annotations
 
 import os
+import pathlib
 import shutil
 from unittest.mock import patch
 
@@ -420,7 +421,7 @@ class TestResolutionTagAndMask:
         try:
             b = Thumb(extra)  # header says 3 m: warns, header wins
             assert (a + b).pa_key != (b + a).pa_key
-            assert "pleiades3m" in (a + b).pa_key and "pleiades10m" in (a + b).pa_key
+            assert "pleiades_3m" in (a + b).pa_key and "pleiades_10m" in (a + b).pa_key
         finally:
             extra.unlink()
 
@@ -541,3 +542,94 @@ class TestMaskPolygonCrop:
             s._normalize_vector_source(gpd.GeoDataFrame(geometry=[], crs=4326))
         empty = s._normalize_vector_source(big.iloc[2:], bounds=(X0, Y0 - 150, X0 + 150, Y0))
         assert len(empty.ds) == 0
+
+
+# --------------------------------------------------------------------------- #
+class TestPairKeyWithResolutionTag:
+    """pa_key = the two th_keys (pzone once) joined by '__'; Pair(path) parses it back."""
+
+    @pytest.fixture()
+    def thumbs(self, project):
+        session, *_ = project
+        src = session.thumb_dir(PZ, "slope")
+        made = []
+        for stem in (f"{PZ}_2019-08-14_pleiades_3m", f"{PZ}_2020-08-20_pleiades_3m"):
+            assert (src / f"{stem}.tif").exists()
+        # an untagged copy of the second date, to mix tagged and untagged sides
+        plain = src / f"{PZ}_2020-08-20_pleiades.tif"
+        shutil.copy(src / f"{PZ}_2020-08-20_pleiades_3m.tif", plain)
+        made.append(plain)
+        yield session, src
+        for p in made:
+            p.unlink()
+
+    def test_key_has_underscore_before_tag_and_matches_th_key(self, thumbs):
+        session, src = thumbs
+        a = Thumb(src / f"{PZ}_2019-08-14_pleiades_3m.tif")
+        b = Thumb(src / f"{PZ}_2020-08-20_pleiades_3m.tif")
+        key = (a + b).pa_key
+        assert key == f"{PZ}_2019-08-14_pleiades_3m__2020-08-20_pleiades_3m"
+        assert key == f"{a.th_key}__{b.th_key.split('_', 1)[1]}"
+
+    def test_untagged_and_mixed_keys(self, thumbs):
+        session, src = thumbs
+        a = Thumb(src / f"{PZ}_2020-08-20_pleiades.tif")
+        b = Thumb(src / f"{PZ}_2019-08-14_pleiades_3m.tif")
+        assert (b + a).pa_key == f"{PZ}_2019-08-14_pleiades_3m__2020-08-20_pleiades"
+        assert (a + b).pa_key == f"{PZ}_2020-08-20_pleiades__2019-08-14_pleiades_3m"
+
+    @pytest.mark.parametrize("left,right", [("_3m", "_3m"), ("_3m", ""), ("", "_3m")])
+    def test_pair_path_round_trip(self, thumbs, left, right):
+        session, src = thumbs
+        if left == "" and right == "_3m":
+            lp, rp = f"{PZ}_2020-08-20_pleiades.tif", f"{PZ}_2019-08-14_pleiades_3m.tif"
+        elif left == "_3m" and right == "":
+            lp, rp = f"{PZ}_2019-08-14_pleiades_3m.tif", f"{PZ}_2020-08-20_pleiades.tif"
+        else:
+            lp, rp = f"{PZ}_2019-08-14_pleiades_3m.tif", f"{PZ}_2020-08-20_pleiades_3m.tif"
+        pair = Thumb(src / lp) + Thumb(src / rp)
+        pair.pa_path.mkdir(parents=True, exist_ok=True)
+        again = Pair(session, target_path=pair.pa_path)
+        assert again.pa_key == pair.pa_key == pair.pa_path.name
+        assert pathlib.Path(again.pa_left.th_path).name == lp
+        assert pathlib.Path(again.pa_right.th_path).name == rp
+
+    def test_hyphenated_sensor_round_trips(self, thumbs):
+        """'sentinel-2' used to break the date-sensor split of the old key."""
+        session, src = thumbs
+        names = [f"{PZ}_2019-08-14_sentinel-2.tif", f"{PZ}_2020-08-20_sentinel-2.tif"]
+        for n in names:
+            shutil.copy(src / f"{PZ}_2019-08-14_pleiades_3m.tif", src / n)
+        try:
+            pair = Thumb(src / names[0]) + Thumb(src / names[1])
+            assert pair.pa_key == f"{PZ}_2019-08-14_sentinel-2__2020-08-20_sentinel-2"
+            pair.pa_path.mkdir(parents=True, exist_ok=True)
+            again = Pair(session, target_path=pair.pa_path)
+            assert again.pa_key == pair.pa_key
+        finally:
+            for n in names:
+                (src / n).unlink()
+
+    @pytest.mark.parametrize("name", [f"{PZ}_2019-08-14__pleiades.tif",
+                                      f"{PZ}_2019-08-14_.tif",
+                                      f"{PZ}_2019-08-14_pleiades__3m.tif"])
+    def test_thumb_rejects_empty_fields(self, thumbs, name):
+        """'__' must never occur inside a th_key: it is the pa_key separator."""
+        session, src = thumbs
+        bad = src / name
+        shutil.copy(src / f"{PZ}_2019-08-14_pleiades_3m.tif", bad)
+        try:
+            with pytest.raises(ValueError):
+                Thumb(bad)
+        finally:
+            bad.unlink()
+
+    def test_old_format_path_is_refused_with_a_hint(self, thumbs):
+        session, src = thumbs
+        old = session.pz_dir(PZ, "image_correlation") / f"{PZ}_2019-08-14-pleiades_2020-08-20-pleiades"
+        old.mkdir(parents=True, exist_ok=True)
+        try:
+            with pytest.raises(AssertionError, match="update_pairs"):
+                Pair(session, target_path=old)
+        finally:
+            old.rmdir()

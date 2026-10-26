@@ -42,7 +42,7 @@ def _make_pair(tmp_path):
     this method depends on nothing but the two mask paths.
     """
     pair = Pair.__new__(Pair)
-    pair.pa_key = "TestPz_2024-01-01-planetscope_2024-01-15-planetscope"
+    pair.pa_key = "TestPz_2024-01-01_planetscope__2024-01-15_planetscope"
     pair.pa_path = tmp_path
     pair.pa_ew_mask_path = tmp_path / f"{pair.pa_key}-F_EWmask.tif"
     pair.pa_ns_mask_path = tmp_path / f"{pair.pa_key}-F_NSmask.tif"
