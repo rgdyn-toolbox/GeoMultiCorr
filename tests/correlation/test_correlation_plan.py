@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pytest
 
 from geomulticorr.correlation._correlation_plan import (
+    _jsonable,
+    input_params_differ_from_file,
     PLAN_ASSUMPTION_KEYS,
     PLAN_PARAM_KEYS,
     PLAN_SCHEMA_VERSION,
@@ -213,3 +216,136 @@ class TestParamsFileComparison:
     def test_flag_mismatch_is_detected(self, asp_helper, tmp_path):
         path = self._write(asp_helper, tmp_path / "p.txt", save_disparity_difference=True)
         assert params_differ_from_file(path, SCALARS, save_disparity_difference=False) is True
+
+
+class TestJsonable:
+    def test_numpy_scalar_becomes_python_scalar(self):
+        out = _jsonable(np.float32(1.5))
+        assert out == 1.5 and type(out) is float
+
+    def test_numpy_int_becomes_python_int(self):
+        out = _jsonable(np.int64(7))
+        assert out == 7 and type(out) is int
+
+    def test_multi_element_array_degrades_to_repr(self):
+        arr = np.array([1, 2, 3])
+        assert _jsonable(arr) == repr(arr)
+
+    def test_item_that_raises_degrades_to_repr(self):
+        class Odd:
+            def item(self):
+                raise ValueError("no scalar here")
+
+            def __repr__(self):
+                return "<Odd>"
+
+        assert _jsonable(Odd()) == "<Odd>"
+
+
+class TestParseParamsFileUnreadable:
+    def test_directory_in_place_of_file_gives_empty_dict(self, tmp_path):
+        assert parse_params_file(tmp_path) == {}
+
+    def test_read_error_is_warned_not_raised(self, monkeypatch, tmp_path, caplog_gmc):
+        import pathlib
+
+        path = tmp_path / "p.txt"
+        path.write_text("corr-kernel 21 21\n")
+
+        def boom(self, *a, **k):
+            raise OSError("disk gone")
+
+        monkeypatch.setattr(pathlib.Path, "read_text", boom)
+        assert parse_params_file(path) == {}
+        assert "Could not read correlation parameters" in caplog_gmc.text
+
+
+class TestInputParamsDifferFromFile:
+    def _file(self, tmp_path, *lines):
+        path = tmp_path / "p.txt"
+        path.write_text("".join(f"{ln}\n" for ln in lines))
+        return path
+
+    def test_missing_file_counts_as_different(self, tmp_path):
+        assert input_params_differ_from_file(tmp_path / "absent.txt", {}) is True
+
+    def test_optical_file_without_input_lines_is_unchanged(self, tmp_path):
+        path = self._file(tmp_path, "corr-kernel 21 21")
+        assert input_params_differ_from_file(path, {"nodata_value": None}) is False
+
+    def test_nodata_line_present_but_none_requested_is_different(self, tmp_path):
+        path = self._file(tmp_path, "corr-kernel 21 21", "nodata-value -9999")
+        assert input_params_differ_from_file(path, {"nodata_value": None}) is True
+
+    def test_nodata_value_mismatch_is_different(self, tmp_path):
+        path = self._file(tmp_path, "corr-kernel 21 21", "nodata-value -9999")
+        assert input_params_differ_from_file(path, {"nodata_value": 0}) is True
+
+    def test_nodata_value_match_is_unchanged(self, tmp_path):
+        path = self._file(tmp_path, "corr-kernel 21 21", "nodata-value -9999")
+        assert input_params_differ_from_file(path, {"nodata_value": -9999}) is False
+
+    @pytest.mark.parametrize(
+        "flag, asp_key",
+        [
+            ("individual_normalization", "individually-normalize"),
+            ("pre_normalization", "force-use-entire-range"),
+        ],
+    )
+    def test_flag_requested_but_absent_is_different(self, tmp_path, flag, asp_key):
+        path = self._file(tmp_path, "corr-kernel 21 21")
+        assert input_params_differ_from_file(path, {flag: True}) is True
+
+    @pytest.mark.parametrize(
+        "flag, asp_key",
+        [
+            ("individual_normalization", "individually-normalize"),
+            ("pre_normalization", "force-use-entire-range"),
+        ],
+    )
+    def test_flag_present_but_not_requested_is_different(self, tmp_path, flag, asp_key):
+        path = self._file(tmp_path, "corr-kernel 21 21", asp_key)
+        assert input_params_differ_from_file(path, {flag: False}) is True
+
+    def test_flag_present_and_requested_is_unchanged(self, tmp_path):
+        path = self._file(tmp_path, "corr-kernel 21 21", "individually-normalize")
+        assert input_params_differ_from_file(
+            path, {"individual_normalization": True}
+        ) is False
+
+
+class TestParamsDifferFromFileEdges:
+    # The SGM/MGM override always injects kernel, subpixel kernel and cost mode,
+    # so a file that is "unchanged" must carry those three plus the flag.
+    BASE = (
+        "corr-kernel 21 21",
+        "subpixel-kernel 21 21",
+        "cost-mode 2",
+        "save-left-right-disparity-difference",
+    )
+
+    def _file(self, tmp_path, *lines):
+        path = tmp_path / "p.txt"
+        path.write_text("".join(f"{ln}\n" for ln in lines))
+        return path
+
+    def test_missing_file_counts_as_different(self, tmp_path):
+        assert params_differ_from_file(tmp_path / "absent.txt", SCALARS) is True
+
+    def test_params_absent_from_effective_are_not_compared(self, tmp_path):
+        path = self._file(tmp_path, *self.BASE)
+        assert params_differ_from_file(path, {"corr_kernel": (21, 21)}) is False
+
+    def test_none_search_with_a_search_line_on_disk_is_different(self, tmp_path):
+        path = self._file(
+            tmp_path,
+            "corr-search -5 -5 5 5",
+            "save-left-right-disparity-difference",
+        )
+        assert params_differ_from_file(path, {"corr_search": None}) is True
+
+    def test_none_search_without_a_search_line_is_unchanged(self, tmp_path):
+        path = self._file(tmp_path, *self.BASE)
+        assert params_differ_from_file(
+            path, {"corr_search": None, "corr_kernel": (21, 21)}
+        ) is False

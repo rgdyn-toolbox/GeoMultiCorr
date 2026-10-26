@@ -378,3 +378,50 @@ class TestOrchestrator:
         assert doc["calibration"]["n_overlap"] == 4
         assert doc["fused"]["n_dates"] == 10
         assert "written_utc" in doc
+
+
+class TestSeriesValidationAndHelpers:
+    """Guards on the input series and the small date helpers."""
+
+    def test_missing_component_raises_keyerror(self):
+        ref = reference()
+        with pytest.raises(KeyError, match="lacks"):
+            calibrate_to_reference(secondary_biased().drop_vars("NS"), ref)
+
+    def test_series_without_time_dimension_raises(self):
+        ref = reference()
+        sec = secondary_biased().isel(time=0, drop=True)
+        with pytest.raises(ValueError, match="no 'time' dimension"):
+            calibrate_to_reference(sec, ref)
+
+    def test_wrong_dimension_order_raises(self):
+        ref = reference()
+        sec = secondary_biased().transpose("y", "x", "time")
+        with pytest.raises(ValueError, match=r"must be \(time, y, x\)"):
+            calibrate_to_reference(sec, ref)
+
+    def test_dates_of_falls_back_to_the_time_axis(self):
+        from geomulticorr.inversion.fusion import _dates_of
+
+        ds = _series(["20200101", "20210601"], lambda c, t: t).drop_vars("date")
+        assert _dates_of(ds) == ["20200101", "20210601"]
+
+    @pytest.mark.parametrize(
+        "value", ["20200131", "2020-01-31", pd.Timestamp("2020-01-31")]
+    )
+    def test_as_timestamp_accepts_compact_and_iso_dates(self, value):
+        from geomulticorr.inversion.fusion import _as_timestamp
+
+        assert _as_timestamp(value) == pd.Timestamp("2020-01-31")
+
+    def test_trace_summary_is_none_for_an_all_nan_variable(self):
+        ref, sec = reference(), secondary_biased()
+        corrected, fit = calibrate_to_reference(sec, ref)
+        fused = fuse_series(ref, corrected)
+        fit["offset"] = fit["offset"] * np.nan
+        doc = build_fusion_parameters(
+            reference_dir="/r", secondary_dir="/s", reference_label="a",
+            secondary_label="b", fit=fit, fused=fused, components=("EW", "NS"))
+        assert doc["calibration"]["per_component"]["EW"]["offset"] == {
+            "median": None, "p5": None, "p95": None}
+        assert doc["calibration"]["per_component"]["EW"]["rate_m_yr"]["median"] is not None

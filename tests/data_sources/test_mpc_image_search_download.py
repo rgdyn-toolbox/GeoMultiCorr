@@ -94,9 +94,14 @@ class _FakeStac:
         self.items_by_collection = items_by_collection
         self.queries = []
 
-    def search(self, collections, intersects, datetime, query):
-        self.queries.append({"collections": collections, "datetime": datetime, "query": query})
-        return SimpleNamespace(items=lambda: iter(self.items_by_collection[collections[0]]))
+    def search(self, collections, intersects=None, datetime=None, query=None, ids=None):
+        self.queries.append(
+            {"collections": collections, "datetime": datetime, "query": query, "ids": ids}
+        )
+        found = self.items_by_collection[collections[0]]
+        if ids is not None:
+            found = [i for i in found if i.id in ids]
+        return SimpleNamespace(items=lambda: iter(found))
 
 
 @pytest.fixture
@@ -203,3 +208,256 @@ class TestAoiCoercion:
     def test_unsupported(self):
         with pytest.raises(TypeError):
             ImageFinder._coerce_to_wgs84_geometry(42)
+
+
+# ---------------------------------------------------------------------------
+# search: footprints that miss the AOI, id resolution, bulk download, crop
+# ---------------------------------------------------------------------------
+import logging  # noqa: E402
+
+import numpy as np  # noqa: E402
+import rasterio  # noqa: E402
+from rasterio.transform import from_origin  # noqa: E402
+
+L8_ID_B = "LC08_L2SP_232083_20230701_20230707_02_T1"
+L8_ID_C = "LC08_L2SP_232084_20230701_20230707_02_T1"
+
+
+def _make_finder(monkeypatch, items_by_collection):
+    stac = _FakeStac(items_by_collection)
+    monkeypatch.setattr(mod.pystac_client.Client, "open", lambda *a, **k: stac)
+    f = ImageFinder(ImageCollectionCatalog.default(), aoi=AOI, year_range=(2023, 2023), month_range=(6, 8))
+    f._fake = stac
+    return f
+
+
+def _l8_item(item_id, month=7):
+    assets = {
+        "nir08": pystac.Asset(href=f"https://x/{item_id}_B5.TIF?sig=s"),
+        "red": pystac.Asset(href=f"https://x/{item_id}_B4.TIF?sig=s"),
+        "green": pystac.Asset(href=f"https://x/{item_id}_B3.TIF?sig=s"),
+        "mtl.xml": pystac.Asset(href=f"https://x/{item_id}_MTL.xml?sig=s"),
+    }
+    return _item(item_id, month=month, assets=assets)
+
+
+@pytest.fixture
+def bulk(monkeypatch, tmp_path):
+    items = [_l8_item(L8_ID_B), _l8_item(L8_ID_C)]
+    f = _make_finder(monkeypatch, {"landsat-c2-l2": items, "sentinel-2-l2a": []})
+    gdf = f.search_metadata(["L8_SR"])
+    sleeps = []
+    monkeypatch.setattr(mod._time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(mod.planetary_computer, "sign", lambda item: item)
+    f._sleeps = sleeps
+    f._gdf = gdf
+    f._out = tmp_path / "out"
+    return f
+
+
+class TestSearchEdges:
+    def test_item_outside_aoi_is_dropped(self, monkeypatch):
+        far = pystac.Item(
+            id="far",
+            geometry=mapping(box(10.0, 10.0, 10.1, 10.1)),
+            bbox=[10.0, 10.0, 10.1, 10.1],
+            datetime=datetime(2023, 7, 1, tzinfo=timezone.utc),
+            properties={"eo:cloud_cover": 1.0},
+        )
+        f = _make_finder(monkeypatch, {"landsat-c2-l2": [far, _item("near", month=7)]})
+        assert list(f.search_metadata(["L8_SR"])["image_id"]) == ["near"]
+
+
+class TestResolveItem:
+    def test_cache_hit_is_re_signed(self, finder, monkeypatch):
+        signed = []
+        monkeypatch.setattr(mod.planetary_computer, "sign", lambda it: signed.append(it.id) or it)
+        finder.search_metadata(["L8_SR"])
+        assert finder._resolve_item("L8_SR", "b").id == "b"
+        assert signed == ["b"]
+
+    def test_miss_searches_by_id_and_caches(self, finder):
+        got = finder._resolve_item("L8_SR", "a")
+        assert got.id == "a"
+        assert finder._fake.queries[-1]["ids"] == ["a"]
+        assert finder._item_cache["L8_SR/a"] is got
+
+    def test_not_found(self, finder):
+        with pytest.raises(RuntimeError, match="not found"):
+            finder._resolve_item("L8_SR", "zzz")
+
+
+class TestBulkValidation:
+    def test_bad_mode(self, bulk):
+        with pytest.raises(ValueError, match="mode"):
+            bulk.bulk_download(bulk._gdf, output_dir=bulk._out, mode="zip")
+
+    def test_bad_organize_by(self, bulk):
+        with pytest.raises(ValueError, match="organize_by"):
+            bulk.bulk_download(bulk._gdf, output_dir=bulk._out, mode="full", organize_by="nope")
+
+    def test_missing_columns(self, bulk):
+        with pytest.raises(ValueError, match="missing required columns"):
+            bulk.bulk_download(bulk._gdf.drop(columns=["image_id"]), output_dir=bulk._out)
+
+
+class TestBulkDownload:
+    @pytest.fixture(autouse=True)
+    def _record(self, monkeypatch):
+        self.crops, self.assets = [], []
+
+        def crop(self_, item, bands, out_path, *, overwrite):
+            self.crops.append((item.id, list(bands), out_path))
+            return out_path
+
+        def asset(item, key, out_dir, *, overwrite, rename_prefix=None, chunk_bytes=0):
+            self.assets.append((item.id, key, out_dir, rename_prefix))
+            return out_dir / f"{rename_prefix or item.id}_{key}"
+
+        monkeypatch.setattr(ImageFinder, "_download_crop", crop)
+        monkeypatch.setattr(ImageFinder, "_download_asset_file", staticmethod(asset))
+
+    @pytest.mark.parametrize("tqdm_on", [True, False])
+    def test_crop_mode_names_and_metadata_prefix(self, bulk, monkeypatch, tqdm_on):
+        monkeypatch.setattr(mod, "_HAS_TQDM", tqdm_on and mod._HAS_TQDM)
+        out = bulk.bulk_download(bulk._gdf, output_dir=bulk._out, file_basename="pz")
+        assert len(self.crops) == 2
+        _id, bands, path = self.crops[0]
+        assert bands == ["nir08", "red", "green"]
+        assert path.parent == bulk._out / "L8_SR"
+        assert path.name == f"pz_2023-07-01_{_id}.tif"
+        prefixes = [a[3] for a in self.assets]
+        assert all(p.startswith("pz_2023-07-01_") for p in prefixes)
+        assert len(out) == 4  # two rasters + two metadata files
+
+    def test_no_metadata_and_max_images_and_bands_override(self, bulk):
+        out = bulk.bulk_download(
+            bulk._gdf, output_dir=bulk._out, download_metadata=False,
+            max_images=1, bands_override=["red"],
+        )
+        assert len(out) == 1 and self.assets == []
+        assert self.crops[0][1] == ["red"]
+
+    def test_full_mode_default_layout(self, bulk):
+        bulk.bulk_download(bulk._gdf, output_dir=bulk._out, mode="full", download_metadata=False)
+        dirs = {a[2] for a in self.assets}
+        assert dirs == {bulk._out / "L8_SR" / L8_ID_B, bulk._out / "L8_SR" / L8_ID_C}
+        assert all(d.is_dir() for d in dirs)
+
+    def test_full_mode_sensor_pathrow_layout_and_metadata(self, bulk):
+        bulk.bulk_download(
+            bulk._gdf, output_dir=bulk._out, mode="full", organize_by="sensor_pathrow"
+        )
+        assert bulk._out / "LANDSAT8" / "232_083" / L8_ID_B in {a[2] for a in self.assets}
+        assert any(a[1] == "mtl.xml" and a[3] is None for a in self.assets)
+
+    def test_organize_by_ignored_in_crop_mode(self, bulk, caplog):
+        with caplog.at_level(logging.WARNING, logger="mpc_image_search_download"):
+            bulk.bulk_download(
+                bulk._gdf, output_dir=bulk._out, organize_by="sensor_pathrow",
+                download_metadata=False,
+            )
+        assert "ignored in crop mode" in caplog.text
+        assert self.crops[0][2].parent == bulk._out / "L8_SR"
+
+    def test_missing_metadata_asset_warns(self, bulk, caplog):
+        for it in bulk._item_cache.values():
+            del it.assets["mtl.xml"]
+        with caplog.at_level(logging.WARNING, logger="mpc_image_search_download"):
+            out = bulk.bulk_download(bulk._gdf, output_dir=bulk._out)
+        assert "not found on item" in caplog.text and len(out) == 2
+
+    def test_throttle_sleeps_between_scenes(self, bulk):
+        bulk.bulk_download(bulk._gdf, output_dir=bulk._out, throttle_s=0.25, download_metadata=False)
+        assert bulk._sleeps == [0.25, 0.25]
+
+    def test_retry_then_success_uses_exponential_backoff(self, bulk, monkeypatch):
+        calls = {"n": 0}
+
+        def flaky(self_, item, bands, out_path, *, overwrite):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise OSError("transient")
+            return out_path
+
+        monkeypatch.setattr(ImageFinder, "_download_crop", flaky)
+        bulk.bulk_download(
+            bulk._gdf, output_dir=bulk._out, max_images=1, download_metadata=False,
+            retry_backoff_s=0.5,
+        )
+        assert bulk._sleeps == [0.5, 1.0]
+
+    def test_retries_exhausted_raises(self, bulk, monkeypatch):
+        def boom(self_, item, bands, out_path, *, overwrite):
+            raise OSError("down")
+
+        monkeypatch.setattr(ImageFinder, "_download_crop", boom)
+        with pytest.raises(RuntimeError, match="Last error: down"):
+            bulk.bulk_download(
+                bulk._gdf, output_dir=bulk._out, max_retries=1, retry_backoff_s=0.5,
+                download_metadata=False,
+            )
+        assert bulk._sleeps == [0.5]
+
+
+class TestDownloadCrop:
+    @staticmethod
+    def _write(path, west, north, res, size, value=1):
+        data = np.full((size, size), value, dtype="uint16")
+        with rasterio.open(
+            path, "w", driver="GTiff", width=size, height=size, count=1, dtype="uint16",
+            crs="EPSG:4326", transform=from_origin(west, north, res, res), nodata=0,
+        ) as dst:
+            dst.write(data, 1)
+        return str(path)
+
+    def _item_for(self, **hrefs):
+        return _item(assets={k: pystac.Asset(href=v) for k, v in hrefs.items()})
+
+    @pytest.fixture
+    def finder_(self, monkeypatch):
+        return _make_finder(monkeypatch, {"landsat-c2-l2": []})
+
+    def test_multiband_crop_has_descriptions_and_aoi_extent(self, finder_, tmp_path):
+        a = self._write(tmp_path / "a.tif", 5.95, 45.15, 0.002, 100, value=7)
+        b = self._write(tmp_path / "b.tif", 5.95, 45.15, 0.002, 100, value=9)
+        out = tmp_path / "crop.tif"
+        got = finder_._download_crop(self._item_for(red=a, green=b), ["red", "green"], out, overwrite=False)
+        assert got == out
+        with rasterio.open(out) as src:
+            assert src.count == 2 and src.descriptions == ("red", "green")
+            assert (src.width, src.height) == (50, 50)
+            assert src.read(1).max() == 7 and src.read(2).max() == 9
+
+    def test_no_bands_raises(self, finder_, tmp_path):
+        with pytest.raises(ValueError, match="at least one band"):
+            finder_._download_crop(_item(), [], tmp_path / "x.tif", overwrite=False)
+
+    def test_existing_output_skipped_unless_overwrite(self, finder_, tmp_path):
+        a = self._write(tmp_path / "a.tif", 5.95, 45.15, 0.002, 100)
+        out = tmp_path / "crop.tif"
+        out.write_bytes(b"old")
+        item = self._item_for(red=a)
+        assert finder_._download_crop(item, ["red"], out, overwrite=False) is None
+        assert out.read_bytes() == b"old"
+        assert finder_._download_crop(item, ["red"], out, overwrite=True) == out
+        with rasterio.open(out) as src:
+            assert src.count == 1
+
+    def test_missing_asset_key(self, finder_, tmp_path):
+        with pytest.raises(KeyError, match="nir08"):
+            finder_._download_crop(_item(), ["nir08"], tmp_path / "x.tif", overwrite=False)
+
+    def test_aoi_outside_raster(self, finder_, tmp_path):
+        a = self._write(tmp_path / "far.tif", 20.0, 30.1, 0.002, 100)
+        # rasterio raises WindowError before the module's own "does not intersect" guard
+        with pytest.raises(rasterio.errors.WindowError):
+            finder_._download_crop(self._item_for(red=a), ["red"], tmp_path / "x.tif", overwrite=False)
+
+    def test_bands_on_different_grids_raise(self, finder_, tmp_path):
+        a = self._write(tmp_path / "a.tif", 5.95, 45.15, 0.002, 100)
+        b = self._write(tmp_path / "b.tif", 5.95, 45.15, 0.004, 50)
+        with pytest.raises(RuntimeError, match="grid differs"):
+            finder_._download_crop(
+                self._item_for(red=a, green=b), ["red", "green"], tmp_path / "x.tif", overwrite=False
+            )

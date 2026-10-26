@@ -108,3 +108,38 @@ class TestBuildCorrelationParams:
         assert "corr-kernel 9 9" in content
     # END def
 # END class
+
+class TestBuildCorrelationParamsInputFlags:
+    """Pre-processing flags and the default parameter-file location."""
+
+    @pytest.fixture
+    def asp_helper(self):
+        with patch('shutil.which', return_value="/fake/parallel_stereo"):
+            yield ASP(session=None, asp_bin_dir=None)
+
+    def test_pre_alignment_and_normalization_lines(self, asp_helper, tmp_path):
+        lines = asp_helper.build_correlation_params(
+            pre_alignment="Epipolar",
+            pre_normalization=True,
+            params_file_path=tmp_path / "p.txt",
+        )
+        assert "alignment-method Epipolar\n" in lines
+        assert "force-use-entire-range\n" in lines
+
+    def test_individual_normalization_line(self, asp_helper, tmp_path):
+        lines = asp_helper.build_correlation_params(
+            individual_normalization=True, params_file_path=tmp_path / "p.txt"
+        )
+        assert "individually-normalize\n" in lines
+
+    def test_flags_are_absent_by_default(self, asp_helper, tmp_path):
+        text = "".join(
+            asp_helper.build_correlation_params(params_file_path=tmp_path / "p.txt")
+        )
+        assert "alignment-method" not in text
+        assert "force-use-entire-range" not in text
+
+    def test_default_file_is_corr_params_txt_in_cwd(self, asp_helper, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        asp_helper.write_correlation_parameters_file(["corr-kernel 21 21\n"])
+        assert (tmp_path / "corr_params.txt").read_text() == "corr-kernel 21 21\n"

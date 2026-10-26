@@ -508,3 +508,54 @@ class TestStableAreaMaskCRS:
         with caplog_gmc.at_level("WARNING"):
             StableAreaMask(gdf).generate_mask(self._raster())
         assert "no CRS" in caplog_gmc.text
+
+
+class TestFilterPipelineCoverage:
+    """Pipeline arithmetic and apply() on MockRaster inputs."""
+
+    def test_pipeline_plus_pipeline(self):
+        a = OutlierFilter() + CCFilter(0.5)
+        b = SnowMask(enabled=False) + CloudMask(enabled=False)
+        out = a + b
+        assert isinstance(out, FilterPipeline)
+        assert [type(m).__name__ for m in out.masks] == [
+            "OutlierFilter", "CCFilter", "SnowMask", "CloudMask",
+        ]
+
+    def test_pipeline_plus_non_mask_raises(self):
+        fp = OutlierFilter() + CCFilter(0.5)
+        with pytest.raises(TypeError, match="Cannot add"):
+            fp + 3
+
+    def test_mask_plus_pipeline_prepends(self):
+        fp = CCFilter(0.5) + SnowMask(enabled=False)
+        out = OutlierFilter() + fp
+        assert isinstance(out, FilterPipeline)
+        assert type(out.masks[0]).__name__ == "OutlierFilter"
+        assert len(out.masks) == 3
+
+    def test_apply_masks_both_components(self):
+        from .conftest import MockRaster
+
+        x = MockRaster(data=ma.array(np.array([[1.0, 50.0, 2.0]])))
+        y = MockRaster(data=ma.array(np.array([[60.0, 1.0, 2.0]])))
+        xc, yc = FilterPipeline([OutlierFilter((-10, 10))]).apply(x, y)
+        assert list(xc.data.mask[0]) == [False, True, False]
+        assert list(yc.data.mask[0]) == [True, False, False]
+
+    def test_apply_keeps_existing_mask(self):
+        from .conftest import MockRaster
+
+        data = ma.array(np.array([[1.0, 2.0, 3.0]]), mask=[[True, False, False]])
+        r = MockRaster(data=data)
+        xc, _ = FilterPipeline([OutlierFilter((-10, 10))]).apply(r, r)
+        assert list(xc.data.mask[0]) == [True, False, False]
+
+    def test_apply_with_cc_kwarg(self):
+        from .conftest import MockRaster
+
+        r = MockRaster(data=ma.array(np.array([[1.0, 1.0]])))
+        cc = MockRaster(data=ma.array(np.array([[0.9, 0.1]])))
+        xc, yc = FilterPipeline([CCFilter(0.5)]).apply(r, r, cc=cc)
+        assert list(xc.data.mask[0]) == [False, True]
+        assert list(yc.data.mask[0]) == [False, True]

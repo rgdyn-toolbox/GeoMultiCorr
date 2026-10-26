@@ -407,3 +407,34 @@ class TestYearDecorations:
         for xi, h in zip(x, ha):
             if xi > 1e-9:
                 assert h == "left"
+
+
+class TestPointAndTangentValidation:
+    def test_two_dimensional_input_is_promoted_to_one_polyline(self):
+        poly = np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])
+        pts, tan = polyline_point_and_tangent(poly)
+        assert pts.shape == (1, 2) and tan.shape == (1, 2)
+        assert pts[0] == pytest.approx([1.0, 0.0])
+        assert tan[0] == pytest.approx([1.0, 0.0])
+
+    def test_wrong_trailing_dimension_raises(self):
+        with pytest.raises(ValueError, match="shape"):
+            polyline_point_and_tangent(np.zeros((2, 3, 3)))
+
+    def test_single_sample_polylines_raise(self):
+        with pytest.raises(ValueError, match="at least two samples"):
+            polyline_point_and_tangent(np.zeros((2, 1, 2)))
+
+
+class TestYearLabelFlip:
+    def test_angles_beyond_90_degrees_flip_back(self):
+        """A scale whose year angle exceeds 90° is rotated back by 180°."""
+
+        class _Scale:
+            @staticmethod
+            def year_angles():
+                return np.radians(np.array([120.0, 45.0, -120.0]))
+
+        _, _, rot, ha = year_label_placement(_Scale())
+        assert rot == pytest.approx([-60.0, 45.0, 60.0])
+        assert ha == ["right", "left", "right"]

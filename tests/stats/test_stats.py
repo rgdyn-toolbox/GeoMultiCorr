@@ -936,3 +936,32 @@ class TestResolveStatColumns:
         )
         assert cols["pa_n_corrections"] == 2
         assert cols["pa_const"] == 4
+
+
+class TestStatsEdgePaths:
+    """Multiband band selection and unreadable disparity rasters."""
+
+    def test_band_selects_requested_band_of_multiband_raster(self, tmp_path):
+        import rasterio
+        from rasterio.transform import from_bounds
+
+        path = tmp_path / "multi.tif"
+        with rasterio.open(
+            path, "w", driver="GTiff", height=4, width=4, count=2, dtype="float32",
+            crs="EPSG:32632", transform=from_bounds(0, 0, 40, 40, 4, 4),
+        ) as dst:
+            dst.write(np.full((4, 4), 1.0, dtype="float32"), 1)
+            dst.write(np.full((4, 4), 7.0, dtype="float32"), 2)
+        assert compute_raster_stats(path, band=2)["median"] == pytest.approx(7.0)
+        assert compute_raster_stats(path, band=1)["median"] == pytest.approx(1.0)
+
+    def test_unreadable_disparity_warns_and_keeps_spatial_none(
+        self, mock_pair, caplog_gmc
+    ):
+        mock_pair.pa_disparity_f_path.write_bytes(b"not a raster")
+        with caplog_gmc.at_level("WARNING"):
+            result = build_pair_metadata(mock_pair)
+        assert "Could not read spatial metadata" in caplog_gmc.text
+        for key in ("ncols", "nrows", "resolution_x", "resolution_y", "crs", "bounds"):
+            assert result[key] is None
+        assert result["pair_key"] == mock_pair.pa_key

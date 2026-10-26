@@ -283,3 +283,204 @@ class TestSearchMetadata:
         monkeypatch.setattr(finder._client.session, "post", lambda *a, **k: _Resp({"features": []}))
         gdf = finder.search_metadata()
         assert gdf.empty and "image_id" in gdf.columns
+
+
+# ---------------------------------------------------------------------------
+# Thumbnails, order polling/download, AOI-less estimate, contact sheet
+# ---------------------------------------------------------------------------
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import pandas as pd
+
+from geomulticorr.data_sources import planet_image_search_download as pmod
+from geomulticorr.data_sources.planet_image_search_download import plot_thumbnail_grid
+
+
+def test_feature_outside_the_aoi_is_dropped(monkeypatch):
+    finder = _finder()
+    far = {
+        "id": "far",
+        "geometry": mapping(box(20, 20, 21, 21)),
+        "properties": {"acquired": "2022-07-01T10:00:00Z", "instrument": "PSB.SD", "cloud_cover": 0.1},
+    }
+    monkeypatch.setattr(finder._client.session, "post", lambda *a, **k: _Resp({"features": [far]}))
+    assert finder.search_metadata().empty
+
+
+class _ThumbResp:
+    def __init__(self, content=b"png"):
+        self.content = content
+
+    def raise_for_status(self):
+        pass
+
+
+def _thumb_frame(ids=("a", "b")):
+    return gpd.GeoDataFrame(
+        {"image_id": list(ids), "acquisition_date": pd.to_datetime(["2022-07-01", "2022-07-02"][: len(ids)])},
+        geometry=[AOI] * len(ids),
+        crs="EPSG:4326",
+    )
+
+
+class TestDownloadThumbnails:
+    def test_downloads_names_and_skips_existing(self, tmp_path, monkeypatch):
+        finder = _finder()
+        calls = []
+
+        def get(url, params=None, timeout=None):
+            calls.append((url, params))
+            return _ThumbResp(b"PNGDATA")
+
+        monkeypatch.setattr(finder._client.session, "get", get)
+        paths = finder.download_thumbnails(_thumb_frame(), output_dir=tmp_path / "t", width=256, show_progress=False)
+        assert [p.name for p in paths] == ["2022-07-01_a.png", "2022-07-02_b.png"]
+        assert all(p.read_bytes() == b"PNGDATA" for p in paths)
+        assert calls[0][1] == {"width": 256} and "/items/a/thumb" in calls[0][0]
+
+        again = finder.download_thumbnails(_thumb_frame(), output_dir=tmp_path / "t", show_progress=False)
+        assert len(calls) == 2 and again == paths  # existing ones are not re-fetched
+
+        finder.download_thumbnails(_thumb_frame(("a",)), output_dir=tmp_path / "t", overwrite=True, show_progress=False)
+        assert len(calls) == 3
+
+    def test_progress_bar_and_string_dates(self, tmp_path, monkeypatch):
+        finder = _finder()
+        monkeypatch.setattr(finder._client.session, "get", lambda *a, **k: _ThumbResp())
+        gdf = _thumb_frame(("a",))
+        gdf["acquisition_date"] = ["2022-07-01T10:00:00"]  # plain strings, no strftime
+        (p,) = finder.download_thumbnails(gdf, output_dir=tmp_path, show_progress=True)
+        assert p.name == "2022-07-01_a.png"
+
+
+class TestOrderWithoutScenesFrame:
+    def test_estimate_falls_back_to_n_scenes_times_aoi_area(self, capsys):
+        finder = _finder()
+        req = finder.build_order_request(_scenes(3), order_name="o")
+        assert finder.submit_order(req, ledger_path="unused.json", dry_run=True, min_charge_km2=0.0) is None
+        out = capsys.readouterr().out
+        assert f"{3 * finder.aoi_area_km2:.1f} km2" in out and "Dry run" in out
+
+
+class _StreamResp:
+    def __init__(self, chunks=(b"ab", b"cd")):
+        self.chunks = chunks
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def raise_for_status(self):
+        pass
+
+    def iter_content(self, chunk_size):
+        return iter(self.chunks)
+
+
+class TestWaitAndDownloadOrder:
+    def _router(self, finder, states, results=None):
+        seq = list(states)
+        urls = []
+
+        def get(url, stream=False, timeout=None, **k):
+            urls.append(url)
+            if url.startswith(pmod.PLANET_ORDERS_URL):
+                state = seq.pop(0) if len(seq) > 1 else seq[0]
+                return _Resp({"state": state, "_links": {"results": results or []}})
+            return _StreamResp()
+
+        monkeypatch_target = finder._client.session
+        return get, urls, monkeypatch_target
+
+    def test_polls_until_success_then_downloads(self, tmp_path, monkeypatch):
+        finder = _finder()
+        sleeps = []
+        monkeypatch.setattr(pmod._time, "sleep", sleeps.append)
+        get, urls, sess = self._router(
+            finder, ["queued", "running", "success"],
+            results=[{"name": "sub/dir/a.zip", "location": "https://dl/a"}, {"name": "b.tif", "location": "https://dl/b"}],
+        )
+        monkeypatch.setattr(sess, "get", get)
+        out = finder.wait_and_download_order("o1", output_dir=tmp_path / "o", poll_interval_s=7)
+        assert sleeps == [7, 7]
+        assert [p.name for p in out] == ["a.zip", "b.tif"]  # server path components are dropped
+        assert (tmp_path / "o" / "a.zip").read_bytes() == b"abcd"
+        assert not list((tmp_path / "o").glob("*.part"))
+
+    def test_partial_counts_as_success_and_existing_files_are_kept(self, tmp_path, monkeypatch):
+        finder = _finder()
+        get, urls, sess = self._router(finder, ["partial"], results=[{"name": "a.zip", "location": "https://dl/a"}])
+        monkeypatch.setattr(sess, "get", get)
+        (tmp_path / "a.zip").write_bytes(b"old")
+        out = finder.wait_and_download_order("o1", output_dir=tmp_path)
+        assert out == [tmp_path / "a.zip"] and (tmp_path / "a.zip").read_bytes() == b"old"
+        assert "https://dl/a" not in urls
+        finder.wait_and_download_order("o1", output_dir=tmp_path, overwrite=True)
+        assert (tmp_path / "a.zip").read_bytes() == b"abcd"
+
+    @pytest.mark.parametrize("state", ["failed", "cancelled"])
+    def test_failed_orders_raise(self, tmp_path, monkeypatch, state):
+        finder = _finder()
+        get, _, sess = self._router(finder, [state])
+        monkeypatch.setattr(sess, "get", get)
+        with pytest.raises(RuntimeError, match=state):
+            finder.wait_and_download_order("o1", output_dir=tmp_path)
+
+    def test_timeout(self, tmp_path, monkeypatch):
+        finder = _finder()
+        get, _, sess = self._router(finder, ["running"])
+        monkeypatch.setattr(sess, "get", get)
+        monkeypatch.setattr(pmod._time, "sleep", lambda s: None)
+        with pytest.raises(TimeoutError, match="still 'running'"):
+            finder.wait_and_download_order("o1", output_dir=tmp_path, timeout_s=-1)
+
+
+class TestPlotThumbnailGrid:
+    def _thumbs(self, tmp_path, n):
+        paths = []
+        for i in range(n):
+            p = tmp_path / f"t{i}.png"
+            plt.imsave(p, np.random.default_rng(i).random((8, 8, 3)))
+            paths.append(p)
+        return paths
+
+    def test_without_metadata(self, tmp_path):
+        fig = plot_thumbnail_grid(self._thumbs(tmp_path, 3), ncols=2)
+        try:
+            assert len(fig.axes) == 4  # 2x2 grid, the spare cell is switched off
+            assert [ax.get_title() for ax in fig.axes[:3]] == [""] * 3
+        finally:
+            plt.close(fig)
+
+    def test_captions_with_and_without_optional_fields(self, tmp_path):
+        gdf = gpd.GeoDataFrame(
+            {
+                "acquisition_date": pd.to_datetime(["2022-07-01", "2022-07-02"]),
+                "instrument": ["PSB.SD", "PS2"],
+                "clear_percent": [95.0, np.nan],
+                "signed_view_angle": [2.5, np.nan],
+            },
+            geometry=[AOI] * 2,
+            crs="EPSG:4326",
+        )
+        fig = plot_thumbnail_grid(self._thumbs(tmp_path, 2), gdf, ncols=2)
+        try:
+            t0, t1 = fig.axes[0].get_title(), fig.axes[1].get_title()
+            assert "2022-07-01 PSB.SD" in t0 and "clear 95%" in t0 and "va +2.5" in t0
+            assert t1 == "2022-07-02 PS2"
+        finally:
+            plt.close(fig)
+
+    def test_string_dates_in_captions(self, tmp_path):
+        gdf = gpd.GeoDataFrame(
+            {"acquisition_date": ["2022-07-01T10:00:00"], "instrument": ["PS2"]}, geometry=[AOI], crs="EPSG:4326"
+        )
+        fig = plot_thumbnail_grid(self._thumbs(tmp_path, 1), gdf, ncols=1)
+        try:
+            assert fig.axes[0].get_title() == "2022-07-01 PS2"
+        finally:
+            plt.close(fig)

@@ -723,3 +723,89 @@ class TestDestriping:
         pipeline = MedianCentering() + AlongTrackDestriping() + AcrossTrackDestriping()
         assert isinstance(pipeline, CorrectionPipeline)
         assert len(pipeline.steps) == 3
+
+
+class TestCoverageGuards:
+    """Guard clauses and helpers on the corrections base classes."""
+
+    def test_load_gdf_accepts_gu_vector(self):
+        import geopandas as gpd
+        import geoutils as gu
+        from shapely.geometry import box
+
+        gdf = gpd.GeoDataFrame(geometry=[box(0, 0, 1, 1)], crs="EPSG:32632")
+        out = BaseCorrection._load_gdf(gu.Vector(gdf))
+        assert isinstance(out, gpd.GeoDataFrame)
+        assert len(out) == 1
+
+    def test_rasterize_no_valid_geometry_gives_all_false(self):
+        import geopandas as gpd
+        from affine import Affine
+        from shapely.geometry import Polygon
+
+        bowtie = Polygon([(0, 0), (10, 10), (10, 0), (0, 10)])  # self-intersecting
+        assert not bowtie.is_valid
+        gdf = gpd.GeoDataFrame(geometry=[bowtie], crs="EPSG:32632")
+        out = BaseCorrection._rasterize_moving_areas(
+            gdf, (4, 5), Affine(10.0, 0.0, 0.0, 0.0, -10.0, 0.0), "EPSG:32632"
+        )
+        assert out.shape == (4, 5)
+        assert not out.any()
+
+    def test_resolve_stable_mask_from_vector_file(self, tmp_path, flat_raster):
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        # Moving polygon over the left half of the 10x10 / 10 m grid.
+        gdf = gpd.GeoDataFrame(geometry=[box(0, -100, 50, 0)], crs="EPSG:32632")
+        path = tmp_path / "moving.gpkg"
+        gdf.to_file(path, driver="GPKG")
+        fit = BaseCorrection._resolve_stable_mask(
+            path, flat_raster.data, flat_raster.data.shape,
+            flat_raster.transform, crs="EPSG:32632",
+        )
+        assert not fit[:, :5].any()
+        assert fit[:, 5:].all()
+
+    def test_base_correction_repr(self):
+        assert repr(MedianCentering()) == "MedianCentering()"
+
+    def test_correction_plus_pipeline_prepends(self):
+        pipe = RampCorrection() + TopoCorrection()
+        out = MedianCentering() + pipe
+        assert isinstance(out, CorrectionPipeline)
+        assert [type(s).__name__ for s in out.steps] == [
+            "MedianCentering", "RampCorrection", "TopoCorrection",
+        ]
+
+    def test_pipeline_plus_pipeline_concatenates(self):
+        a = MedianCentering() + RampCorrection()
+        b = TopoCorrection() + DirectionalBiasCorrection()
+        out = a + b
+        assert len(out.steps) == 4
+        assert len(a.steps) == 2  # operands untouched
+
+    @pytest.mark.parametrize("cls", [TopoRampCorrection, SlopeRampCorrection])
+    def test_invalid_order_raises(self, cls):
+        with pytest.raises(ValueError, match="order must be"):
+            cls(order="cubic")
+
+    def test_topo_ramp_fit_requires_dem(self, flat_raster):
+        with pytest.raises(ValueError, match="requires dem="):
+            TopoRampCorrection().fit(flat_raster)
+
+    @pytest.mark.parametrize(
+        "kwargs, match",
+        [
+            ({"poly_order": 0}, "poly_order"),
+            ({"min_bin_count": 0}, "min_bin_count"),
+            ({"angle": "x"}, "angle must be"),
+        ],
+    )
+    def test_directional_bias_invalid_args(self, kwargs, match):
+        with pytest.raises(ValueError, match=match):
+            DirectionalBiasCorrection(**kwargs)
+
+    def test_destriping_wavelength_min_must_be_positive(self):
+        with pytest.raises(ValueError, match="wavelength_min must be > 0"):
+            AlongTrackDestriping(wavelength_min=0)

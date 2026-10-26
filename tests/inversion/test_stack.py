@@ -230,3 +230,56 @@ class TestSharedDiscovery:
         assert ds.attrs["inversion_name"] == "t"
         assert ds.attrs["pzone"] == "PZ"
         assert ds["EW"].shape == (5, 6, 5)
+
+
+class TestStackEdgePaths:
+    def test_dask_available_false_when_import_fails(self, monkeypatch):
+        import sys
+
+        from geomulticorr.inversion import _stack
+
+        monkeypatch.setitem(sys.modules, "dask", None)
+        assert _stack._dask_available() is False
+
+    def test_dask_available_true_when_importable(self):
+        pytest.importorskip("dask")
+        from geomulticorr.inversion import _stack
+
+        assert _stack._dask_available() is True
+
+    def test_no_date_with_every_component_raises(self, tmp_path):
+        write_tot_stack(tmp_path, ["20200101"], "EW", _linear(0.5))
+        write_tot_stack(tmp_path, ["20210101"], "NS", _linear(0.5))
+        with pytest.raises(FileNotFoundError, match="No date has every"):
+            load_cumulative_stack(tmp_path)
+
+    def test_auto_chunks_without_dask_load_eagerly(self, inv_dir, monkeypatch, caplog_gmc):
+        from geomulticorr.inversion import _stack
+
+        monkeypatch.setattr(_stack, "_dask_available", lambda: False)
+        with caplog_gmc.at_level("INFO"):
+            ds = load_cumulative_stack(inv_dir)
+        assert ds["EW"].chunks is None
+        assert "dask not available" in caplog_gmc.text
+        assert ds["EW"].shape == (5, 6, 5)
+
+    def test_write_with_only_magn_raises(self, inv_dir, tmp_path):
+        ds = load_cumulative_stack(inv_dir, chunks=None)
+        only_magn = ds[["EW"]].rename({"EW": "magn"})
+        with pytest.raises(ValueError, match="nothing to write"):
+            write_cumulative_stack(only_magn, tmp_path / "out")
+
+    def test_calibration_skips_variables_the_fit_lacks(self, inv_dir, tmp_path):
+        import pandas as pd
+
+        ds = load_cumulative_stack(inv_dir, chunks=None)
+        first = [ds[c].isel(time=0, drop=True) for c in ("EW", "NS")]
+        fit = xr.Dataset(
+            {"offset": xr.concat(first, dim=pd.Index(["EW", "NS"], name="component"))}
+        )
+        out = tmp_path / "out"
+        write_cumulative_stack(ds, out, fit=fit)
+        assert (out / "calibration" / "EW_offset.tif").exists()
+        assert (out / "calibration" / "NS_offset.tif").exists()
+        assert not (out / "calibration" / "EW_rms.tif").exists()
+        assert not (out / "calibration" / "EW_n_valid.tif").exists()

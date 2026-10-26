@@ -248,3 +248,12 @@ class TestLazyRastersStayLazy:
         lazy = self._on_disk(tmp_path)
         loaded = gu.Raster(str(tmp_path / "r.tif"), load_data=True)
         assert grid_key(lazy) == grid_key(loaded)
+
+
+class TestDescribeGridCrsWithoutEpsg:
+    def test_crs_lacking_to_epsg_falls_back_to_str(self):
+        class _Odd:
+            data = np.zeros((4, 5))
+            crs = "WGS84"
+
+        assert describe_grid(_Odd()).endswith("WGS84")

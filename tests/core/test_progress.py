@@ -46,6 +46,7 @@ printing from inside the block goes into the console's buffer, not the terminal.
 
 import io
 import logging
+import sys
 
 import pytest
 from rich.console import Console, Group
@@ -233,6 +234,22 @@ class TestNonTtyFallback:
 
     def test_live_capable_false_for_a_plain_file(self, file_console):
         assert _live_capable(file_console) is False
+    # END def
+
+    @staticmethod
+    def _jupyter_console():
+        import types
+        return types.SimpleNamespace(is_terminal=False, is_jupyter=True)
+
+    def test_live_capable_false_in_jupyter_without_ipywidgets(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "ipywidgets", None)  # import raises ImportError
+        assert _live_capable(self._jupyter_console()) is False
+    # END def
+
+    def test_live_capable_true_in_jupyter_with_ipywidgets(self, monkeypatch):
+        import types
+        monkeypatch.setitem(sys.modules, "ipywidgets", types.ModuleType("ipywidgets"))
+        assert _live_capable(self._jupyter_console()) is True
     # END def
 
     def test_emits_progress_during_the_loop_not_only_at_the_end(

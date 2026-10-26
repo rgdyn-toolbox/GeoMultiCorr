@@ -179,3 +179,96 @@ class TestBuildCorrevalCmd:
         assert result[-1] == "/tmp/output-F"
     # END def
 # END class
+
+class TestRunCorrelationCorrevalFailure:
+    @pytest.fixture
+    def asp_helper(self):
+        with patch('shutil.which', return_value="/fake/bin"):
+            yield ASP(session=None, asp_bin_dir=None)
+
+    def test_corr_eval_failure_is_logged_and_stereo_code_returned(
+        self, asp_helper, tmp_path, caplog_gmc
+    ):
+        ok = MagicMock(returncode=0, stdout="", stderr="")
+        bad = MagicMock(returncode=1, stdout="", stderr="corr_eval blew up")
+        with patch(
+            "geomulticorr.correlation.correlation.subprocess.run",
+            side_effect=[ok, bad],
+        ) as run:
+            code = asp_helper.run_correlation(
+                "l.tif", "r.tif", tmp_path / "out" / "pair", correval=True
+            )
+        assert code == 0
+        assert run.call_count == 2
+        assert "ASP corr_eval error" in caplog_gmc.text
+        assert "corr_eval blew up" in caplog_gmc.text
+
+
+class TestRunForPair:
+    @pytest.fixture
+    def asp_helper(self):
+        with patch('shutil.which', return_value="/fake/bin"):
+            yield ASP(session=None, asp_bin_dir=None)
+
+    @staticmethod
+    def _pair(tmp_path, status):
+        pair = MagicMock()
+        pair.get_status.return_value = status
+        pair.pa_key = "k"
+        pair.pa_path = tmp_path / "pair"
+        pair.pa_path.mkdir()
+        pair.pa_left_link_path = tmp_path / "l.tif"
+        pair.pa_right_link_path = tmp_path / "r.tif"
+        return pair
+
+    def test_complete_pair_is_skipped(self, asp_helper, tmp_path, monkeypatch):
+        called = []
+        monkeypatch.setattr(asp_helper, "run_correlation", lambda **k: called.append(k))
+        assert asp_helper.run_for_pair(self._pair(tmp_path, "complete")) == 0
+        assert called == []
+
+    def test_clipped_pair_forwards_algorithm_and_kernel(
+        self, asp_helper, tmp_path, monkeypatch
+    ):
+        called = []
+        monkeypatch.setattr(
+            asp_helper, "run_correlation", lambda **k: called.append(k) or 0
+        )
+        pair = self._pair(tmp_path, "clipped")
+        code = asp_helper.run_for_pair(
+            pair, corr_algorithm="asp_mgm", corr_kernel=(9, 9), correval=False
+        )
+        assert code == 0
+        (kw,) = called
+        assert kw["corr_algorithm"] == "asp_mgm"
+        assert kw["corr_kernel"] == (9, 9)
+        assert kw["out_prefix"] == pair.pa_path / "k"
+        assert kw["corr_params_file"] == pair.pa_path / "corr_params.txt"
+        assert (pair.pa_path / "corr_params.txt").exists()
+
+    def test_defaults_are_asp_bm_21(self, asp_helper, tmp_path, monkeypatch):
+        called = []
+        monkeypatch.setattr(
+            asp_helper, "run_correlation", lambda **k: called.append(k) or 0
+        )
+        asp_helper.run_for_pair(self._pair(tmp_path, "clipped"))
+        assert called[0]["corr_algorithm"] == "asp_bm"
+        assert called[0]["corr_kernel"] == (21, 21)
+
+
+class TestWriteBashScriptIsterre:
+    def test_isterre_script_loads_modules_and_micromamba(self, tmp_path):
+        with patch('shutil.which', return_value="/fake/bin"):
+            asp = ASP(session=None, asp_bin_dir=None)
+        pair = MagicMock()
+        pair.pa_key = "k"
+        pair.pa_path = tmp_path / "pair"
+        pair.pa_left_link_path = tmp_path / "l.tif"
+        pair.pa_right_link_path = tmp_path / "r.tif"
+
+        script = asp.write_bash_script(pair, cluster="isterre", conda_env="myenv")
+        text = script.read_text()
+        assert "source /soft/env.bash" in text
+        assert "module load stereopipeline/3.6.0" in text
+        assert "micromamba activate myenv" in text
+        assert "conda activate" not in text

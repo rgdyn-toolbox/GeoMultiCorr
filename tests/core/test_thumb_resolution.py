@@ -97,3 +97,41 @@ class TestLayerRoundTrip:
         merged = pd.concat([old, new], ignore_index=True)
         assert pd.api.types.is_float_dtype(merged["th_res"])
         assert np.isnan(merged["th_res"].iloc[0])
+
+
+class TestThumbDelegates:
+    """One-line wrappers around gdal / geoutils."""
+
+    def test_repr_names_the_object(self, thumb_file):
+        text = repr(Thumb(thumb_file))
+        assert "GMC_Thumb" in text
+        assert "Chimborazo" in text
+        assert "planetscope" in text
+
+    def test_get_ds_opens_a_gdal_dataset(self, thumb_file):
+        ds = Thumb(thumb_file).get_ds()
+        assert ds is not None
+        assert ds.RasterXSize == ds.RasterYSize
+
+    def test_get_raster_returns_a_geoutils_raster(self, thumb_file):
+        import geoutils as gu
+
+        ras = Thumb(thumb_file).get_raster()
+        assert isinstance(ras, gu.Raster)
+        assert ras.res[0] == pytest.approx(3.0)
+
+    def test_show_info_delegates_to_raster_info(self, thumb_file, monkeypatch):
+        import geoutils as gu
+
+        calls = []
+        monkeypatch.setattr(gu.Raster, "info", lambda self, *a, **k: calls.append(1))
+        Thumb(thumb_file).show_info()
+        assert calls == [1]
+
+    def test_plot_delegates_to_raster_plot(self, thumb_file, monkeypatch):
+        import geoutils as gu
+
+        calls = []
+        monkeypatch.setattr(gu.Raster, "plot", lambda self, *a, **k: calls.append(1))
+        Thumb(thumb_file).plot()
+        assert calls == [1]

@@ -14,6 +14,7 @@
 # ---------------------------------------------------------------------------- #
 """DINAMIS SPOT 6/7: credentials, filename grammar and templates, URL signing."""
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -237,3 +238,255 @@ class TestStreamDownload:
         with pytest.raises(RuntimeError):
             _finder(stub_stac)._stream_download("https://x/a.tif", out, timeout=5)
         assert not out.exists() and not list(tmp_path.glob("*.part"))
+
+
+# ---------------------------------------------------------------------------
+# AOI coercion, search, downloads, COG clips
+# ---------------------------------------------------------------------------
+import copy
+
+import geopandas as gpd
+import numpy as np
+import rasterio
+from rasterio.transform import from_origin
+from shapely.geometry import mapping
+
+AOI = box(6.0, 45.0, 6.1, 45.1)
+
+
+@pytest.fixture
+def mk(monkeypatch, stub_stac):
+    """Build a finder with the TLD_* variables pre-registered for cleanup."""
+    monkeypatch.setenv("TLD_ACCESS_KEY", "ak")
+    monkeypatch.setenv("TLD_SECRET_KEY", "sk")
+
+    def _mk(aoi=AOI, **kw):
+        return DinamisImageFinder(DinamisClient(access_key="ak", secret_key="sk"), aoi, **kw)
+
+    return _mk
+
+
+def _stac_item(item_id, dt, cloud=None, platform="SPOT-7"):
+    props = {"datetime": dt, "platform": platform}
+    if cloud is not None:
+        props["eo:cloud_cover"] = cloud
+    return {
+        "id": item_id,
+        "properties": props,
+        "geometry": mapping(AOI),
+        "assets": ITEM["assets"],
+    }
+
+
+def _stub_search(finder, items):
+    seen = {}
+
+    def search(**kw):
+        seen.update(kw)
+        return SimpleNamespace(items_as_dicts=lambda: iter(items))
+
+    finder.client._stac = SimpleNamespace(search=search)
+    return seen
+
+
+class TestAoiCoercion:
+    def test_geodataframe_in_another_crs_is_reprojected(self, mk):
+        gdf = gpd.GeoDataFrame(geometry=[AOI], crs="EPSG:4326").to_crs(2154)
+        b = mk(gdf).bbox
+        assert b == pytest.approx((6.0, 45.0, 6.1, 45.1), abs=1e-6)
+
+    def test_geodataframe_already_wgs84_is_kept(self, mk):
+        gdf = gpd.GeoDataFrame(geometry=[AOI], crs="EPSG:4326")
+        assert mk(gdf).bbox == (6.0, 45.0, 6.1, 45.1)
+
+    def test_shapely_and_geojson_mapping(self, mk):
+        assert mk(AOI).bbox == (6.0, 45.0, 6.1, 45.1)
+        assert mk(mapping(AOI)).bbox == (6.0, 45.0, 6.1, 45.1)
+
+
+class TestSearchMetadata:
+    def test_default_range_sort_and_cache(self, mk):
+        f = mk(year_range=(2018, 2019))
+        seen = _stub_search(f, [_stac_item("b", "2018-08-01T10:00:00Z", cloud=5), _stac_item("a", "2018-06-01T10:00:00Z")])
+        gdf = f.search_metadata(limit=7)
+        assert seen["datetime"] == "2018-01-01/2019-12-31" and seen["limit"] == 7
+        assert seen["bbox"] == f.bbox and seen["collections"] == [f.collection]
+        assert list(gdf["image_id"]) == ["a", "b"]  # ascending date
+        assert gdf.crs.to_epsg() == 4326 and set(f._item_cache) == {"a", "b"}
+        assert gdf.loc[1, "cloud_percent"] == 5
+
+    def test_explicit_dates_override_and_open_end(self, mk):
+        f = mk()
+        seen = _stub_search(f, [])
+        f.search_metadata(date_start="2019-01-01")
+        assert seen["datetime"] == "2019-01-01/.."
+        f.search_metadata(date_end="2020-01-01")
+        assert seen["datetime"] == "../2020-01-01"
+
+    def test_month_and_cloud_filters(self, mk):
+        f = mk(month_range=(6, 8), cloud_max=20)
+        _stub_search(f, [
+            _stac_item("winter", "2018-01-10T10:00:00Z"),
+            _stac_item("cloudy", "2018-07-10T10:00:00Z", cloud=80),
+            _stac_item("ok", "2018-07-11T10:00:00Z", cloud=10),
+            _stac_item("unknown_cloud", "2018-07-12T10:00:00Z"),
+        ])
+        assert set(f.search_metadata()["image_id"]) == {"ok", "unknown_cloud"}
+
+    def test_no_rows_gives_typed_empty_frame(self, mk):
+        f = mk()
+        _stub_search(f, [])
+        gdf = f.search_metadata()
+        assert gdf.empty and gdf.crs.to_epsg() == 4326
+        assert {"image_id", "acquisition_date", "assets"} <= set(gdf.columns)
+
+
+class TestDownloadImages:
+    def _patch_stream(self, monkeypatch):
+        calls = []
+
+        def fake(self, href, out_path, timeout=300.0):
+            calls.append((href, Path(out_path), timeout))
+            Path(out_path).write_bytes(b"x")
+
+        monkeypatch.setattr(DinamisImageFinder, "_stream_download", fake)
+        return calls
+
+    def test_missing_image_id_column(self, mk, tmp_path):
+        with pytest.raises(ValueError, match="image_id"):
+            mk().download_images(pd.DataFrame({"x": [1]}), output_dir=tmp_path)
+
+    def test_metadata_sibling_is_appended_by_default(self, mk, tmp_path, monkeypatch):
+        calls = self._patch_stream(monkeypatch)
+        f = mk()
+        f._item_cache["scene-1"] = ITEM
+        out = f.download_images(pd.DataFrame({"image_id": ["scene-1"]}), output_dir=tmp_path / "o", show_progress=False)
+        assert [p.name for p in out] == ["IMG_S7P_201806231000132.tif", "IMG_S7P_201806231000132_metadata.xml"]
+        assert len(calls) == 2 and all(c[2] == 300.0 for c in calls)
+
+    def test_metadata_can_be_disabled(self, mk, tmp_path, monkeypatch):
+        self._patch_stream(monkeypatch)
+        f = mk()
+        f._item_cache["scene-1"] = ITEM
+        out = f.download_images(
+            pd.DataFrame({"image_id": ["scene-1"]}), output_dir=tmp_path, download_metadata=False, show_progress=False
+        )
+        assert len(out) == 1
+
+    def test_unknown_asset_warns_and_is_skipped(self, mk, tmp_path, monkeypatch, caplog):
+        calls = self._patch_stream(monkeypatch)
+        f = mk()
+        f._item_cache["scene-1"] = ITEM
+        with caplog.at_level(logging.WARNING, logger="dinamis_spot_image_search_download"):
+            out = f.download_images(
+                pd.DataFrame({"image_id": ["scene-1"]}), output_dir=tmp_path, assets=("src_xs",),
+                download_metadata=False, show_progress=False,
+            )
+        assert out == [] and calls == []
+        assert any("not found on item" in r.message for r in caplog.records)
+
+    def test_existing_file_is_skipped_unless_overwrite(self, mk, tmp_path, monkeypatch):
+        calls = self._patch_stream(monkeypatch)
+        f = mk()
+        f._item_cache["scene-1"] = ITEM
+        frame = pd.DataFrame({"image_id": ["scene-1"]})
+        kw = dict(output_dir=tmp_path, download_metadata=False, show_progress=False)
+        f.download_images(frame, **kw)
+        assert len(calls) == 1
+        out = f.download_images(frame, **kw)
+        assert len(calls) == 1 and len(out) == 1  # returned, not re-downloaded
+        f.download_images(frame, overwrite=True, **kw)
+        assert len(calls) == 2
+
+    def test_max_images_and_progress_bar(self, mk, tmp_path, monkeypatch):
+        calls = self._patch_stream(monkeypatch)
+        f = mk()
+        f._item_cache.update({"a": ITEM, "b": ITEM})
+        f.download_images(
+            pd.DataFrame({"image_id": ["a", "b"]}), output_dir=tmp_path, download_metadata=False, max_images=1,
+            show_progress=True,
+        )
+        assert len(calls) == 1
+
+
+class TestDownloadCogClip:
+    HREF_NAME = PAN_HREF.split("?")[0].rsplit("/", 1)[1]
+
+    def _raster(self, tmp_path, bounds=(5.9, 44.9, 6.2, 45.2)):
+        path = tmp_path / self.HREF_NAME
+        w = 60
+        res = (bounds[2] - bounds[0]) / w
+        data = np.arange(w * w, dtype="uint16").reshape(1, w, w)
+        with rasterio.open(
+            path, "w", driver="GTiff", height=w, width=w, count=1, dtype="uint16", crs="EPSG:4326",
+            transform=from_origin(bounds[0], bounds[3], res, res),
+        ) as dst:
+            dst.write(data)
+        return path
+
+    def _item(self, path):
+        item = copy.deepcopy(ITEM)
+        item["assets"]["src_pan"]["href"] = str(path)
+        return item
+
+    def test_clips_to_the_aoi(self, mk, tmp_path, monkeypatch):
+        monkeypatch.setattr(mod, "_sign_href", lambda h: h)
+        f = mk()
+        f._item_cache["scene-1"] = self._item(self._raster(tmp_path))
+        out = f.download_cog_clip(
+            pd.DataFrame({"image_id": ["scene-1"]}), output_dir=tmp_path / "clips", assets=("src_pan",),
+            show_progress=False,
+        )
+        assert len(out) == 1 and out[0].name == "IMG_S7P_201806231000132_clip.tif"
+        with rasterio.open(out[0]) as src:
+            assert 0 < src.width < 60 and 0 < src.height < 60
+            assert src.bounds.left == pytest.approx(6.0, abs=0.01) and src.bounds.top == pytest.approx(45.1, abs=0.01)
+
+    def test_existing_clip_is_skipped_unless_overwrite(self, mk, tmp_path, monkeypatch):
+        monkeypatch.setattr(mod, "_sign_href", lambda h: h)
+        f = mk()
+        f._item_cache["scene-1"] = self._item(self._raster(tmp_path))
+        frame = pd.DataFrame({"image_id": ["scene-1"]})
+        kw = dict(output_dir=tmp_path / "c", assets=("src_pan",), show_progress=False)
+        (out,) = f.download_cog_clip(frame, **kw)
+        out.write_bytes(b"sentinel")
+        f.download_cog_clip(frame, **kw)
+        assert out.read_bytes() == b"sentinel"
+        f.download_cog_clip(frame, overwrite=True, **kw)
+        assert out.read_bytes() != b"sentinel"
+
+    def test_unknown_asset_warns(self, mk, tmp_path, monkeypatch, caplog):
+        f = mk()
+        f._item_cache["scene-1"] = ITEM
+        with caplog.at_level(logging.WARNING, logger="dinamis_spot_image_search_download"):
+            out = f.download_cog_clip(pd.DataFrame({"image_id": ["scene-1"]}), output_dir=tmp_path, show_progress=False)
+        assert out == [] and any("not found on item" in r.message for r in caplog.records)
+
+    def test_scene_missing_the_aoi_is_skipped_not_fatal(self, mk, tmp_path, monkeypatch, caplog):
+        monkeypatch.setattr(mod, "_sign_href", lambda h: h)
+        far = self._raster(tmp_path, bounds=(10.0, 10.0, 10.3, 10.3))
+        f = mk()
+        f._item_cache["far"] = self._item(far)
+        with caplog.at_level(logging.WARNING, logger="dinamis_spot_image_search_download"):
+            out = f.download_cog_clip(
+                pd.DataFrame({"image_id": ["far"]}), output_dir=tmp_path / "c", assets=("src_pan",), show_progress=False
+            )
+        assert out == [] and any("does not overlap the AOI" in r.message for r in caplog.records)
+
+
+class TestResolveAndNames:
+    def test_search_path_caches_the_item(self, mk):
+        f = mk()
+        calls = []
+
+        def search(**kw):
+            calls.append(kw)
+            return SimpleNamespace(items_as_dicts=lambda: iter([ITEM]))
+
+        f.client._stac = SimpleNamespace(search=search)
+        assert f._resolve_item("scene-1") is ITEM
+        assert f._resolve_item("scene-1") is ITEM
+        assert len(calls) == 1 and calls[0]["ids"] == ["scene-1"]
+
+    def test_name_fields_delegates(self):
+        assert DinamisImageFinder.name_fields(ITEM, "src_pan") == mod._name_fields(ITEM, "src_pan")

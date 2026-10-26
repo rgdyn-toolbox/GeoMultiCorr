@@ -480,3 +480,27 @@ class TestFitFourierStripeProfile:
         _, _, profile = _jitter_profile()
         with pytest.raises(ValueError, match="wavelength_max"):
             fit_fourier_stripe_profile(profile, 4.0, wavelength_min=400.0, wavelength_max=100.0)
+
+class TestFourierStripeProfileGuards:
+    """Edge paths of fit_fourier_stripe_profile()."""
+
+    def test_detrend_false_is_finite(self):
+        _, _, profile = _jitter_profile()
+        model, meta = fit_fourier_stripe_profile(
+            profile + 5.0, 4.0, wavelength_min=200.0, detrend=False
+        )
+        assert np.all(np.isfinite(model))
+        assert model.shape == profile.shape
+
+    def test_auto_detect_without_candidate_raises(self):
+        # 3 samples: the only positive frequency has wavelength > span/2.
+        with pytest.raises(ValueError, match="Cannot auto-detect"):
+            fit_fourier_stripe_profile(
+                np.array([0.0, 1.0, 0.0]), 1.0, wavelength_min=None, min_valid=3
+            )
+
+    @pytest.mark.parametrize("wl", [0.0, -5.0])
+    def test_non_positive_wavelength_min_raises(self, wl):
+        _, _, profile = _jitter_profile()
+        with pytest.raises(ValueError, match="wavelength_min must be > 0"):
+            fit_fourier_stripe_profile(profile, 4.0, wavelength_min=wl)

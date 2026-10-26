@@ -722,3 +722,23 @@ class TestFormatDtSpan:
         """The group key must stay stable, or plans stop replaying."""
         _edges, labels = geometric_dt_bins([30.0, 2500.0], ratio=3.0)
         assert all(label.startswith("dt") and label.endswith("d") for label in labels)
+
+
+class TestGuardsAndFallbacks:
+    def test_noise_floor_rejects_non_positive_kernel(self):
+        with pytest.raises(ValueError, match="kernel_px must be positive"):
+            noise_floor_m(3.0, 0.2, kernel_px=0)
+
+    def test_snr_is_infinite_when_the_noise_floor_underflows(self):
+        """Valid positive inputs whose product underflows to 0.0 must not divide by zero."""
+        assert snr(1.0, 365.0, 1e-200, 1e-200) == math.inf
+
+    def test_assign_dt_bin_above_range_takes_the_last_label(self):
+        assert assign_dt_bin(5.0, [0, 1, 2], ["a", "b"]) == "b"
+
+    def test_assign_dt_bin_nan_takes_the_first_label(self):
+        """NaN fails every comparison, so only the final fallback can label it."""
+        assert assign_dt_bin(float("nan"), [0, 1, 2], ["a", "b"]) == "a"
+
+    def test_assign_dt_bin_without_labels_is_empty(self):
+        assert assign_dt_bin(5.0, [], []) == ""

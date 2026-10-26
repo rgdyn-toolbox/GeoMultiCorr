@@ -653,3 +653,23 @@ class TestQuietContext:
             logger.setLevel(original)
     # END def
 # END class
+
+
+class TestSearchAndTimerMethods:
+    """The logger.search / logger.timer shortcuts emit at their own levels."""
+
+    @pytest.mark.parametrize(
+        "method, level", [("search", SEARCH), ("timer", TIMER)]
+    )
+    def test_emits_one_record_at_its_level(self, caplog_gmc, method, level):
+        with caplog_gmc.at_level(level, logger="GMC"):
+            getattr(logger, method)("hello %s", "world")
+        records = [r for r in caplog_gmc.records if r.levelno == level]
+        assert len(records) == 1
+        assert records[0].getMessage() == "hello world"
+
+    @pytest.mark.parametrize("method", ["search", "timer"])
+    def test_silent_when_level_disabled(self, caplog_gmc, method):
+        with caplog_gmc.at_level(logging.ERROR, logger="GMC"):
+            getattr(logger, method)("should not appear")
+        assert "should not appear" not in caplog_gmc.text

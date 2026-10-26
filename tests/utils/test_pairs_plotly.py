@@ -208,3 +208,40 @@ class TestDegenerateInput:
         frame = pairs_frame_from_indices(dates_iso, [(0, 1)])
         for view in pp.VIEW_BUILDERS:
             assert len(pp.VIEW_BUILDERS[view](frame).data) > 0
+
+
+class TestHelpers:
+    def test_flatten_with_gaps_empty(self):
+        x, y = pp._flatten_with_gaps(np.empty((0, 5, 2)))
+        assert x.size == 0 and y.size == 0
+
+    def test_flatten_with_gaps_separates_curves_by_nan(self):
+        curves = np.arange(2 * 3 * 2, dtype=float).reshape(2, 3, 2)
+        x, y = pp._flatten_with_gaps(curves)
+        assert len(x) == len(y) == 2 * 4
+        assert np.isnan(x[3]) and np.isnan(x[7])
+
+    @pytest.mark.parametrize("by", ["direction", "sensor", "pzone", "dt"])
+    def test_network_groups_partition_the_frame(self, frame, by):
+        groups = pp._network_groups(frame, by, 3)
+        assert groups
+        for _label, mask, color in groups:
+            assert mask.shape == (len(frame),)
+            assert isinstance(color, str)
+        assert np.logical_or.reduce([m for _, m, _ in groups]).all()
+
+    def test_network_groups_dt_respects_class_count(self, frame):
+        assert len(pp._network_groups(frame, "dt", 2)) <= 2
+
+    def test_network_groups_unknown_color_by_raises(self, frame):
+        with pytest.raises(ValueError, match="Unknown color_by"):
+            pp._network_groups(frame, "nope", 3)
+
+    def test_qualitative_colors_small_and_large_palettes(self):
+        small = pp._qualitative_colors(3)
+        large = pp._qualitative_colors(15)
+        assert len(small) == 3 and len(large) == 15
+        assert len(set(large)) > len(set(small))
+
+    def test_qualitative_colors_zero_returns_one(self):
+        assert len(pp._qualitative_colors(0)) == 1
