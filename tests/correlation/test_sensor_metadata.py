@@ -10,15 +10,24 @@ from __future__ import annotations
 
 import re
 
+import numpy as np
 import pytest
+import rasterio
+from rasterio.transform import from_origin
 
+from geomulticorr.correlation import supported_sensors as ss
 from geomulticorr.correlation.supported_sensors import (
     _GENERIC_XML_DATE_PATTERNS,
     _GENERIC_XML_TIME_PATTERNS,
     _XML_DATE_TAGS,
     _XML_TIME_TAGS,
+    _extract_time_components,
+    _gdal_info_json,
     _parse_date_from_xml,
     extract_acquisition_date,
+    search_date_in_filename,
+    sensor_normalize,
+    sensors,
 )
 
 # How ESA actually writes the granule sensing time in every MTD_TL.xml.
@@ -135,3 +144,205 @@ class TestExtractAcquisitionDate:
         (tmp_path / name).touch()
         got = extract_acquisition_date(tmp_path / name, sensor="lc08")
         assert got is not None and got.strftime("%Y-%m-%d") == "2023-03-01"
+
+
+class TestSensorNormalize:
+    """One row per family branch of the sensor-name normaliser."""
+
+    @pytest.mark.parametrize("text", ["", None])
+    def test_empty_input_is_unknown_without_family(self, text):
+        assert sensor_normalize(text) == {"sensor": "unknown", "platform": None}
+
+    @pytest.mark.parametrize(
+        "text, sensor, platform, family",
+        [
+            ("sentinel-2a", "sentinel-2", "sentinel-A", "sentinel"),
+            ("LC08", "landsat8", "landsat8", "landsat"),
+            ("landsat 8", "landsat8", "landsat8", "landsat"),
+            ("spot 6", "spot6", "spot6", "spot"),
+            ("pleiades 1a", "pleiades", "pleiades-1a", "pleiades"),
+            ("pneo 3", "pleiadesneo", "pleiadesneo3", "pleiades"),
+            ("pneo", "pleiadesneo", None, "pleiades"),
+            ("PSScene", "planetscope", "planetscope", "planetscope"),
+            ("re3", "rapideye", "rapideye-3", "rapideye"),
+            ("rapideye", "rapideye", None, "rapideye"),
+            ("wv2", "worldview2", "worldview2", "worldview"),
+            ("worldview-3", "worldview3", "worldview3", "worldview"),
+            ("geoeye-1", "geoeye1", "geoeye1", "geoeye"),
+            ("qb1", "quickbird", "quickbird", "quickbird"),
+            ("ikonos", "ikonos", "ikonos", "ikonos"),
+            ("swissimage", "aerial", "swissimage", "aerial"),
+            ("drone", "aerial", "aerial", "aerial"),
+            ("hillshade", "dem", None, "dem"),
+            ("dem", "dem", None, "dem"),
+        ],
+    )
+    def test_family_branches(self, text, sensor, platform, family):
+        assert sensor_normalize(text) == {
+            "sensor": sensor,
+            "platform": platform,
+            "family": family,
+        }
+
+    def test_unrecognised_text_is_unknown_with_a_none_family(self):
+        assert sensor_normalize("foo") == {
+            "sensor": "unknown",
+            "platform": None,
+            "family": None,
+        }
+
+    def test_s2_tile_code_is_read_as_sentinel(self):
+        """Documents the greedy tile-code branch: ``t31tgk`` is taken as Sentinel-2."""
+        assert sensor_normalize("t31tgk")["family"] == "sentinel"
+
+    @pytest.mark.parametrize("text,platform", [
+        ("ple", None), ("pl1a", "pleiades-1a"), ("PHR1A", "pleiades-1a"),
+        ("pleiades 1b", "pleiades-1b"),
+    ])
+    def test_short_pleiades_tokens_do_not_crash(self, text, platform):
+        out = sensor_normalize(text)
+        assert out["family"] == "pleiades" and out["sensor"] == "pleiades"
+        assert out["platform"] == platform
+
+
+class TestSensorsHelper:
+    def test_one_name_gives_lower_and_upper(self):
+        assert sensors(["x"]) == "x|X"
+
+    def test_two_names_are_pipe_joined(self):
+        assert sensors(["a", "B"]) == "a|A|b|B"
+
+    def test_none_default_is_not_iterable(self):
+        """The ``None`` default cannot be iterated; callers must pass names."""
+        with pytest.raises(TypeError):
+            sensors()
+
+
+class TestTimeComponents:
+    def test_bare_time_after_planet_date(self):
+        assert _extract_time_components("PSScene_20170801_094239_x.tif") == (9, 42, 39)
+
+    def test_plain_colon_time(self):
+        assert _extract_time_components("scene at 10:30:45 UTC") == (10, 30, 45)
+
+    def test_no_time_returns_none(self):
+        assert _extract_time_components("nothing here") is None
+
+
+class TestSearchDateFallbacks:
+    def test_impossible_date_is_rejected(self):
+        assert search_date_in_filename("img_20210230.tif") is None
+
+    def test_impossible_date_with_time_is_rejected_by_every_pattern(self):
+        """The 14-digit and T-separated patterns retry on the first 8 digits, then give up."""
+        assert search_date_in_filename("img_20210230123000.tif") is None
+        assert search_date_in_filename("img_20210230T123000.tif") is None
+
+    def test_valid_date_still_found(self):
+        assert search_date_in_filename("img_20210228.tif") == "2021-02-28"
+
+
+class TestGdalInfoJson:
+    def test_missing_file_gives_empty_dict(self, tmp_path):
+        assert _gdal_info_json(tmp_path / "nope.tif") == {}
+
+    def test_gdal_failure_gives_empty_dict(self, monkeypatch, tmp_path):
+        def boom(_path):
+            raise RuntimeError("gdal exploded")
+
+        monkeypatch.setattr(ss.gdal, "Open", boom)
+        assert _gdal_info_json(tmp_path / "x.tif") == {}
+
+    def test_readable_raster_gives_info(self, tmp_path):
+        path = tmp_path / "ok.tif"
+        with rasterio.open(
+            path, "w", driver="GTiff", width=4, height=3, count=1, dtype="uint8",
+            crs="EPSG:32632", transform=from_origin(500000, 4649000, 3, 3),
+        ) as dst:
+            dst.write(np.ones((1, 3, 4), "uint8"))
+        info = _gdal_info_json(path)
+        assert info["size"] == [4, 3]
+
+
+class TestExtractAcquisitionDateCandidates:
+    PS_NAME = "PSScene_20170801_094239_3B.tif"
+    PS_XML = "<eop:acquisitionDate>2017-08-01T09:42:39Z</eop:acquisitionDate>"
+    OTHER_XML = "<IMAGING_DATE>2016-01-01</IMAGING_DATE>"
+
+    def test_same_stem_sidecar_is_a_candidate(self, tmp_path):
+        (tmp_path / self.PS_NAME).touch()
+        (tmp_path / "PSScene_20170801_094239_3B.xml").write_text(self.PS_XML)
+        got = extract_acquisition_date(tmp_path / self.PS_NAME)
+        assert got is not None
+        assert got.strftime("%Y-%m-%d %H:%M:%S") == "2017-08-01 09:42:39"
+
+    def test_date_and_time_token_pick_the_right_xml_among_several_scenes(self, tmp_path):
+        """A decoy sorted first, and another scene with a different date, must lose."""
+        (tmp_path / self.PS_NAME).touch()
+        (tmp_path / "20170801_000000_decoy.xml").write_text(self.OTHER_XML)
+        (tmp_path / "20170801_094239_meta.xml").write_text(self.PS_XML)
+        (tmp_path / "20180101_000000.xml").write_text(self.OTHER_XML)
+        got = extract_acquisition_date(tmp_path / self.PS_NAME)
+        assert got is not None
+        assert got.strftime("%Y-%m-%d %H:%M:%S") == "2017-08-01 09:42:39"
+
+    def test_unreadable_candidate_is_skipped_and_filename_is_the_fallback(self, tmp_path):
+        """A directory named ``*.xml`` raises OSError on read; extraction must carry on."""
+        name = "LC08_L1TP_232083_20230301_20230307_02_T1_B8.TIF"
+        (tmp_path / name).touch()
+        (tmp_path / "aaa.xml").mkdir()
+        got = extract_acquisition_date(tmp_path / name, sensor="lc08")
+        assert got is not None and got.strftime("%Y-%m-%d") == "2023-03-01"
+
+    def test_date_that_fails_strptime_returns_none(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ss, "search_date_in_filename", lambda _f: "2021-02-30")
+        (tmp_path / "x.tif").touch()
+        assert extract_acquisition_date(tmp_path / "x.tif") is None
+
+
+class TestPleiadesFromFilename:
+    """A Pléiades file must resolve to sensor + family through the real detection chain
+    (``re_searcher`` over ``supported_sensors``, then ``sensor_normalize``), like SPOT/PlanetScope."""
+
+    @staticmethod
+    def _detect(filename):
+        from geomulticorr.core.session import re_searcher
+
+        token = re_searcher(filename.lower(), ss.sensors(ss.supported_sensors))
+        return sensor_normalize(token)
+
+    @pytest.mark.parametrize("filename,sensor,platform", [
+        ("chim_2016-11-17_pleiades.tif", "pleiades", None),
+        ("pz_2020-01-01_pléiades.tif", "pleiades", None),
+        ("pz_2020-01-01_pleiades-1b.tif", "pleiades", None),
+        ("pz_2020-01-01_pleiades_1a.tif", "pleiades", None),
+        ("pz_2020-01-01_phr1a.tif", "pleiades", "pleiades-1a"),
+        ("pz_2020-01-01_PHR1B.tif", "pleiades", "pleiades-1b"),
+        ("pz_2020-01-01_ple.tif", "pleiades", None),
+        ("pz_2020-01-01_pleiades-neo.tif", "pleiadesneo", None),
+        ("pz_2020-01-01_pneo.tif", "pleiadesneo", None),
+    ])
+    def test_filename_gives_sensor_and_family(self, filename, sensor, platform):
+        out = self._detect(filename)
+        assert out["sensor"] == sensor
+        assert out["family"] == "pleiades"
+        assert out["platform"] == platform
+
+    def test_neo_is_listed_before_plain_pleiades(self):
+        """Alternation takes the first match, so the longer token must come first."""
+        lst = ss.supported_sensors
+        assert lst.index("pleiades-neo") < lst.index("pleiades")
+
+    @pytest.mark.parametrize("text,sensor,platform", [
+        ("pleiades", "pleiades", None),
+        ("pléiades", "pleiades", None),
+        ("pleiades-1b", "pleiades", "pleiades-1b"),
+        ("pleiades 1a", "pleiades", "pleiades-1a"),
+        ("pleiades-neo", "pleiadesneo", None),
+        ("pleiades neo 3", "pleiadesneo", "pleiadesneo3"),
+        ("PHR1A", "pleiades", "pleiades-1a"),
+        ("PNEO4", "pleiadesneo", "pleiadesneo4"),
+    ])
+    def test_sensor_normalize_variants(self, text, sensor, platform):
+        out = sensor_normalize(text)
+        assert (out["sensor"], out["platform"], out["family"]) == (sensor, platform, "pleiades")

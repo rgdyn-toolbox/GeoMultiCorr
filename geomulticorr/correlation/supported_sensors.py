@@ -129,7 +129,7 @@ supported_sensors = [
         "sentinel2", "sentinel-2", "s2", "s2a", "s2b", "msi", "T32TLR", "T31TGL",
         # SPOT / Airbus VHR
         "spot4", "spot5", "spot6", "spot7", "sp4", "sp5", "sp6", "sp7", "s4p", "s5p", "s6p", "s7p",
-        "pleiades", "pléiades", "pleiades-neo", "pneo", "ple",
+        "pleiades-neo", "pneo", "pleiades", "pléiades", "phr1a", "phr1b", "ple",
         # Planet
         "planetscope", "planet", "psscene", "superdove", "ps2", "ps2sd", "pscope", "analyticms",
         # Maxar family
@@ -396,18 +396,19 @@ def sensor_normalize(text: Optional[str]) -> dict:
         num = next(g for g in m.groups() if g)
         return out(f"spot{num}", platform=f"spot{num}", family="spot")
 
-    # --- Pléiades 1A/1B
-    m = re.search(r"\b(pl[eé]iades)\s*(1a|1b)\b|\bple\b|\bpl1[ab]\b|\bphr[1-2]a\b|\bphr[1-2]b\b", t)
-    if m:
-        var = m.group(2).lower()
-        return out("pleiades", platform=f"pleiades-{var}", family="pleiades")
-
-    # --- Pléiades Neo (Neo1/Neo2)
+    # --- Pléiades Neo (Neo1/Neo2) — checked first: "pleiades-neo" would otherwise read as Pléiades
     m = re.search(r"\b(pl[eé]iades[-\s]?neo|pneo)\s*(\d+)?\b", t)
     if m:
         var = m.group(2)
         plat = f"pleiadesneo{var}" if var else None
         return out("pleiadesneo", platform=plat, family="pleiades")
+
+    # --- Pléiades 1A/1B (variant optional: a bare "pleiades" is still Pléiades)
+    m = re.search(r"\bpl[eé]iades(?:[-\s]?(1[ab]))?\b|\bple\b|\bpl1[ab]\b|\bphr[1-2][ab]\b", t)
+    if m:
+        variant = re.search(r"[12][ab]", m.group(0))
+        plat = f"pleiades-{variant.group(0)}" if variant else None
+        return out("pleiades", platform=plat, family="pleiades")
 
     # --- PlanetScope (PS2, PS2.SD / SuperDove, PSScene)
     m = re.search(r"\b(superdove|ps2\.?sd|psscene|planetscope|ps2|psb|planet|analyticms)\b", t)

@@ -245,12 +245,14 @@ class Pzone:
         
         # Get all the moving areas
         mas = self.get_moving_areas(n_clusters, mode)
+        if not mas:
+            raise ValueError("No complete pair to build the moving areas from")
 
         # Extract the first - it will be the base
         basic = mas[0]
 
         # For each other moving area geoim
-        for ma in mas[3:]:
+        for ma in mas[1:]:
 
             # We check if the basic geoim and the current
             # have exactly the same shape

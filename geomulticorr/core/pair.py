@@ -389,12 +389,12 @@ status    : {self.pa_status}
         try:
             return self.pa_xDisp
         except AttributeError:
-            self.pa_xDisp = gu.Raster(
+            raw = gu.Raster(
                 str(self.pa_disparity_f_path), load_pixels=True, nBands=1
             )
-            # Get Metadata
-            pxSizeX, _ = self.pa_xDisp.res
-            return self.pa_xDisp * pxSizeX
+            pxSizeX, _ = raw.res
+            self.pa_xDisp = raw * pxSizeX
+            return self.pa_xDisp
 
     def get_yDisp_raster(self):
         """
@@ -409,12 +409,13 @@ status    : {self.pa_status}
         try:
             return self.pa_yDisp
         except AttributeError:
-            self.pa_yDisp = gu.Raster(
+            raw = gu.Raster(
                 str(self.pa_disparity_f_path), load_pixels=True, nBands=2
             )
-            # Get Metadata
-            _, pxSizeY = self.pa_xDisp.res
-            return self.pa_yDisp * (pxSizeY * -1.0)  # Flip NS sign (ASP uses upper-left corner convention)
+            _, pxSizeY = raw.res
+            # Flip NS sign (ASP uses upper-left corner convention)
+            self.pa_yDisp = raw * (pxSizeY * -1.0)
+            return self.pa_yDisp
 
     def get_xVel(self):
         """
@@ -626,7 +627,7 @@ status    : {self.pa_status}
 
         # Check if the snr is already existing for this pair
         if self.pa_cc_raw_path.exists():
-            return self.get_snr_geoim()
+            return True
 
         # Get Left and Right normalized thumbs
         left_p = self.pa_raw_left_path
@@ -1231,8 +1232,8 @@ status    : {self.pa_status}
         - ``x``: EW displacement (metres)
         - ``y``: NS displacement (metres)
         - ``vm``: Velocity magnitude (metres/year)
-        - ``vx``: EW velocity (pixels/year)
-        - ``vy``: NS velocity (pixels/year)
+        - ``vx``: EW velocity (metres/year)
+        - ``vy``: NS velocity (metres/year)
         
         :param mode: Mode identifier (case-insensitive).
         :type mode: str
@@ -1244,18 +1245,23 @@ status    : {self.pa_status}
         """
         match mode.lower():
             case "m":
-                target = self.get_magn_geoim()
+                x, y = self.get_xDisp_raster(), self.get_yDisp_raster()
+                return (x * x + y * y) ** 0.5
             case "x":
-                target = self.get_dispX_geoim()
+                return self.get_xDisp_raster()
             case "y":
-                target = self.get_dispY_geoim()
+                return self.get_yDisp_raster()
             case "vm":
-                target = self.get_vmagn_geoim()
+                x, y = self.get_xDisp_raster(), self.get_yDisp_raster()
+                return ((x * x + y * y) ** 0.5) / self.pa_dt_years
             case "vx":
-                target = self.get_vx_geoim()
+                return self.get_xVel()
             case "vy":
-                target = self.get_vy_geoim()
-        return target
+                return self.get_yVel()
+            case _:
+                raise ValueError(
+                    f"Unknown mode {mode!r}; expected one of m, x, y, vm, vx, vy"
+                )
 
     def get_slice(self, geoLine, mode="m"):
         """
