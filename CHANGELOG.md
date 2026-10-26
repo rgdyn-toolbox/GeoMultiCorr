@@ -1,5 +1,39 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Pléiades is detected from a bare file name**, like SPOT and PlanetScope. A file such as
+  `..._pleiades.tif`, `..._pléiades.tif`, `..._pleiades-1b.tif` or `..._pleiades-neo.tif` used to come
+  out as `sensor="unknown"`, so `sieve_bulk` refused it and registered thumbs carried no family. The
+  variant is now optional (`pleiades` → sensor `pleiades`, family `pleiades`, platform `None`;
+  `phr1a` → platform `pleiades-1a`), the Neo branch is checked first, `pleiades-neo` is listed before
+  `pleiades` in `supported_sensors` (the shorter token shadowed it), and `phr1a`/`phr1b` are recognised.
+- `sensor_normalize("ple" | "pl1a" | "PHR1A")` no longer raises `AttributeError`.
+- `Pair.get_xDisp_raster` / `get_yDisp_raster` now cache and return the **scaled (metre)** raster on
+  every call. Before, the first call returned the scaled raster and later calls the raw cached one, and
+  the Y getter failed unless the X getter had run first.
+- `Pair.corr_eval` returns `True` when the raw CC file already exists (it called a method that does
+  not exist).
+- `Pair.get_interesting_geoim(mode)` — and so `get_slice` / `get_slices` — works again: it uses the real
+  getters (`x`/`y`/`vx`/`vy`), computes `m` as √(x²+y²) and `vm` as `m / pa_dt_years`, and raises the
+  documented `ValueError` for an unknown mode. The docstring now says velocities are in metres/year.
+- `Pzone.add_moving_areas` sums every map after the first (it skipped the 2nd–4th, iterating `mas[3:]`)
+  and raises a clear `ValueError` when the pzone has no complete pair.
+
+### Tests
+- +393 offline tests (2081 → 2474), total coverage **71 % → 81 %**. New: `test_pair_methods.py`,
+  `test_pzone_methods.py`, `test_hpc_tools.py`; extended for the USGS M2M, DINAMIS, Planet, GEE and MPC
+  modules (now 85–99 %), `InversionExtractor` (42 % → 99 %), `supported_sensors`, `corrections`, `fit`,
+  `masks`, `corr_params`, `correlation`, `fusion`, `_stack` and others. `corrections`, `fit`, `masks`,
+  `corr_params`, `correlation`, `_correlation_plan`, `stats` and `hpc_tools` are at 100 %.
+
+### Known quirks (documented by tests, not changed)
+- `corr_params.assign_dt_bin` returns the last label for a value below the first edge.
+- `supported_sensors.sensors()` with no argument raises `TypeError`.
+- Only the matched token reaches `sensor_normalize`, so a variant in the file name (`1b`, `neo3`) is
+  not carried into the platform column.
+
 ## [0.8.0] — 2026-10-26
 
 ### Changed (breaking)
