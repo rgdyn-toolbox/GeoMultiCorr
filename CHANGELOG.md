@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.0] — 2026-10-26
+
+### Changed (breaking)
+- **`pa_key` is now the two `th_key`s joined by `__`, pzone written once**:
+  `Chimborazo_2016-11-17_planetscope_3m__2017-08-14_planetscope_3m` (untagged: `Chimborazo_2016-11-17_planetscope__2017-08-14_planetscope`). Each side reads exactly like the thumb it comes from, tag included; the old `-` between date and sensor is gone. The key is also the pair folder name, so every file inside (`…-F.tif`, `…-F_EW.tif`, `…_CorrParameters.txt`) is renamed.
+- `Pair(path)` parses the key by splitting on `__` and rebuilds the exact thumb names. This also fixes pairs whose sensor contains a `-` (`sentinel-2`), which the old parser could not reload.
+- `Thumb` rejects a name with an empty field (`pz_2020-01-01__x.tif`, `pz_2020-01-01_.tif`), so `__`  cannot appear inside a `th_key`.
+- **Migration:** pair folders, `Pairs` geodatabase rows and correlation plans made with an older version use the old key and no longer resolve. Delete the old pair folders and run `update_pairs` again (thumbs are unaffected). `get_pairs(criterias=…)` strings written in the old key shape must be updated.
+
 ## [0.7.4] — 2026-10-23
 
 ### Added
