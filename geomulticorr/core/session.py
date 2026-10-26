@@ -4152,7 +4152,7 @@ class Session:
                                              row["pa_right_sensor"])
             # pa_path is built as ".../image_correlation/{pa_key}", so the
             # basename IS the key by construction.  Re-formatting it from the
-            # date/sensor components would be a second source of truth that
+            # thumb components would be a second source of truth that
             # drifts the moment Pair's key format changes.
             pa_key = pathlib.Path(str(row["pa_path"])).name
             if (

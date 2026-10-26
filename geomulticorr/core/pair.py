@@ -110,7 +110,9 @@ class Pair:
         :raises AssertionError: If left and right are from different pzones, or if they are the same thumb.
         
         :ivar pa_pz_name: Processing zone name.
-        :ivar pa_key: Unique pair identifier.
+        :ivar pa_key: Pair identifier, the two thumb keys joined by ``__`` with the
+            pzone written once: ``<pz>_<date>_<sensor>[_<res>m]__<date>_<sensor>[_<res>m]``.
+            Unique within one image type; also the pair folder name.
         :ivar pa_left: Left (earlier) Thumb.
         :ivar pa_right: Right (later) Thumb.
         :ivar pa_dt_days: Temporal baseline in days.
@@ -139,33 +141,20 @@ class Pair:
                 pa_type is not None and parent.exists()
             ), "this path is not leading to a well-formed pair"
 
-            # Get metadata about the thumbs component of the pair
-            left_year, left_month, left_day, left_sensor = target_path.name.split("_")[
-                1
-            ].split("-")
-            right_year, right_month, right_day, right_sensor = target_path.name.split(
-                "_"
-            )[2].split("-")
-            left_date = f"{left_year}-{left_month}-{left_day}"
-            right_date = f"{right_year}-{right_month}-{right_day}"
-            pz_name = target_path.name.split("_")[0]
-
-            # Reconstruct their path.  A sensor field may carry the thumb's
-            # resolution tag ("planetscope3m" <- "..._planetscope_3m.tif"), so the
-            # thumb is found by comparing the name with its "_" removed.
+            # The key is {pz}_{th_key_L minus pz}__{th_key_R minus pz}: "__" never
+            # occurs inside a th_key (Thumb rejects empty fields), so splitting on
+            # it gives the two thumb names back exactly.
+            pz_name, _, rest = target_path.name.partition("_")
+            parts = rest.split("__")
+            assert len(parts) == 2 and all(parts) and pz_name, (
+                f"{target_path.name!r}: this path is not leading to a well-formed pair "
+                f"(expected <pzone>_<date>_<sensor>[_<res>m]__<date>_<sensor>[_<res>m]; "
+                f"pairs made with an older GeoMultiCorr must be recreated with update_pairs)"
+            )
             thumbs_pzone_path = session.thumb_dir(pz_name, pa_type)
-
-            def _thumb_file(date, sensor_field):
-                plain = Path(thumbs_pzone_path, f"{pz_name}_{date}_{sensor_field}.tif")
-                if plain.exists():
-                    return plain
-                for cand in sorted(thumbs_pzone_path.glob(f"{pz_name}_{date}_*.tif")):
-                    if "".join(cand.stem.split("_")[2:]) == sensor_field:
-                        return cand
-                return plain
-
-            left_path = _thumb_file(left_date, left_sensor)
-            right_path = _thumb_file(right_date, right_sensor)
+            left_path, right_path = (
+                Path(thumbs_pzone_path, f"{pz_name}_{part}.tif") for part in parts
+            )
 
             # Make Thumbs from them
             left = gmc_thumb.Thumb(left_path)
@@ -186,13 +175,11 @@ class Pair:
 
         # Metadata
         self.pa_pz_name = left.th_pz_name
-        # th_res_tag ("3m", or "") keeps two resolutions of one date+sensor apart;
-        # empty for untagged thumbs, so those keys are unchanged.
-        _lt, _rt = getattr(left, "th_res_tag", ""), getattr(right, "th_res_tag", "")
-        self.pa_key = (
-            f"{self.pa_pz_name}_{left.th_date}-{left.th_sensor}{_lt}"
-            f"_{right.th_date}-{right.th_sensor}{_rt}"
-        )
+        # The two th_keys minus the (shared) pzone, joined by "__": the key reads
+        # exactly like the thumbs it is made of, tag included, and a
+        # date+sensor at two resolutions gives two distinct keys.
+        _rest = [t.th_key.split("_", 1)[1] for t in (left, right)]
+        self.pa_key = f"{self.pa_pz_name}_{_rest[0]}__{_rest[1]}"
         self.pa_left = left
         self.pa_right = right
 

@@ -726,8 +726,8 @@ class TIOInversion:
 
         # Derive pzone from first pair (all pairs must be from same pzone)
         first_pair = self.pairs[0]
-        # Extract pzone from pair key format: {pzone}_{date1}-{sensor1}_{date2}-{sensor2}
-        pzone_name = first_pair.pa_key.split("_")[0]
+        # Pair key format: {pzone}_{date1}_{sensor1}[_{res}m]__{date2}_{sensor2}[_{res}m]
+        pzone_name = first_pair.pa_pz_name
 
         self.inversion_dir = resolve_inversion_dir(session, pzone_name, inversion_name)
 

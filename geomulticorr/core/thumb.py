@@ -102,6 +102,13 @@ class Thumb:
         self.th_path = str(target_path)
         self.th_key = target_path.name.split(".")[0]
         fields = self.th_key.split("_")
+        # No empty field: "__" is the separator of Pair.pa_key between the two
+        # thumb keys, so it must never occur inside a th_key.
+        if not all(fields):
+            raise ValueError(
+                f"thumb name {target_path.name!r}: empty field (a '__' or a trailing "
+                f"'_'); expected <pzone>_YYYY-MM-DD_<sensor>[_<res>m].tif"
+            )
         if len(fields) == 3:
             (self.th_pz_name, self.th_date, self.th_sensor), self.th_res_tag = fields, ""
         elif len(fields) == 4 and RES_TAG_PATTERN.match(fields[3]):

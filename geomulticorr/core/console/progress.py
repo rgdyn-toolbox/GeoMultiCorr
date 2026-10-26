@@ -114,7 +114,7 @@ class BatchProgress:
     The rendered live region is a :class:`rich.console.Group` of exactly two
     renderables — the item label on the first row, the bar on the second::
 
-        PasDeLours_2016-08-16-planetscope_2017-07-03-planetscope
+        PasDeLours_2016-08-16_planetscope__2017-07-03_planetscope
          42% ━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━ 105/250 • 0:04:12
 
     This is the layout already used by ``Session.map_georasters`` and

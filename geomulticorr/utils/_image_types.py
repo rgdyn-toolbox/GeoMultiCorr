@@ -22,7 +22,7 @@
 The image-type table: which kinds of thumbs a pzone can hold, and where.
 
 The image type is carried by the **folder**, never by the filename, so the
-``<pz>_<date>_<sensor>`` filename and the ``pa_key`` format stay untouched::
+``<pz>_<date>_<sensor>[_<res>m]`` filename and the ``pa_key`` format stay untouched::
 
     <pz>/optical/<pz>_<date>_<sensor>.tif                    -> "opt"
     <pz>/elevation/<type>/<pz>_<date>_<sensor>.tif           -> "dem" | "hillshade" | ...
