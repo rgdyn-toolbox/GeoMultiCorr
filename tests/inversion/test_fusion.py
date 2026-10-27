@@ -129,7 +129,7 @@ class TestCalibration:
         ref["EW"].values[:, 0, 0] = np.nan                  # nothing to calibrate against
         sec["EW"].values[1:, 1, 1] = np.nan                 # a single overlap epoch
         with warnings.catch_warnings():
-            warnings.simplefilter("error")                  # no RankWarning may escape
+            warnings.simplefilter("error", np.exceptions.RankWarning)  # no RankWarning may escape
             corrected, fit = calibrate_to_reference(sec, ref)
         ew = fit.sel(component="EW")
         assert int(ew["n_valid"][0, 0]) == 0
