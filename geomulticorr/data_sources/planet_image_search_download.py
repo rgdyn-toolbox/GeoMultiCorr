@@ -85,6 +85,7 @@ from shapely.geometry.base import BaseGeometry as _BaseGeometry
 # Optional progress bar
 try:
     from tqdm import tqdm as _tqdm
+
     _HAS_TQDM = True
 except Exception:
     _HAS_TQDM = False
@@ -228,28 +229,62 @@ class PlanetImageFinder:
         """Return the Data API filter tree for the configured constraints."""
         y0, y1 = self.year_range
         clauses: List[dict] = [
-            {"type": "GeometryFilter", "field_name": "geometry",
-             "config": _mapping(self.aoi_geom)},
-            {"type": "DateRangeFilter", "field_name": "acquired",
-             "config": {"gte": f"{y0}-01-01T00:00:00Z",
-                        "lte": f"{y1}-12-31T23:59:59Z"}},
-            {"type": "RangeFilter", "field_name": "cloud_cover",
-             "config": {"lte": self.cloud_max / 100.0}},
-            {"type": "StringInFilter", "field_name": "quality_category",
-             "config": ["standard"]},
-            {"type": "StringInFilter", "field_name": "ground_control",
-             "config": ["true"]},
+            {
+                "type": "GeometryFilter",
+                "field_name": "geometry",
+                "config": _mapping(self.aoi_geom),
+            },
+            {
+                "type": "DateRangeFilter",
+                "field_name": "acquired",
+                "config": {
+                    "gte": f"{y0}-01-01T00:00:00Z",
+                    "lte": f"{y1}-12-31T23:59:59Z",
+                },
+            },
+            {
+                "type": "RangeFilter",
+                "field_name": "cloud_cover",
+                "config": {"lte": self.cloud_max / 100.0},
+            },
+            {
+                "type": "StringInFilter",
+                "field_name": "quality_category",
+                "config": ["standard"],
+            },
+            {
+                "type": "StringInFilter",
+                "field_name": "ground_control",
+                "config": ["true"],
+            },
         ]
         if self.clear_min is not None:
-            clauses.append({"type": "RangeFilter", "field_name": "clear_percent",
-                            "config": {"gte": float(self.clear_min)}})
+            clauses.append(
+                {
+                    "type": "RangeFilter",
+                    "field_name": "clear_percent",
+                    "config": {"gte": float(self.clear_min)},
+                }
+            )
         if self.instruments:
-            clauses.append({"type": "StringInFilter", "field_name": "instrument",
-                            "config": list(self.instruments)})
+            clauses.append(
+                {
+                    "type": "StringInFilter",
+                    "field_name": "instrument",
+                    "config": list(self.instruments),
+                }
+            )
         if self.max_view_angle is not None:
-            clauses.append({"type": "RangeFilter", "field_name": "view_angle",
-                            "config": {"gte": -float(self.max_view_angle),
-                                       "lte": float(self.max_view_angle)}})
+            clauses.append(
+                {
+                    "type": "RangeFilter",
+                    "field_name": "view_angle",
+                    "config": {
+                        "gte": -float(self.max_view_angle),
+                        "lte": float(self.max_view_angle),
+                    },
+                }
+            )
         return {"type": "AndFilter", "config": clauses}
 
     def search_metadata(self, page_size: int = 250) -> gpd.GeoDataFrame:
@@ -285,7 +320,9 @@ class PlanetImageFinder:
         rows: List[dict] = []
         for feat in features:
             props = feat["properties"]
-            acquired = _dt.datetime.fromisoformat(props["acquired"].replace("Z", "+00:00"))
+            acquired = _dt.datetime.fromisoformat(
+                props["acquired"].replace("Z", "+00:00")
+            )
             if not (self.month_range[0] <= acquired.month <= self.month_range[1]):
                 continue
             footprint = _shape(feat["geometry"])
@@ -315,20 +352,38 @@ class PlanetImageFinder:
                     "footprint_area_km2": footprint_km2,
                     "aoi_intersection_km2": inter_km2,
                     "aoi_coverage_percent": 100.0 * inter_km2 / self.aoi_area_km2,
-                    "overlap_ratio": inter_km2 / footprint_km2 if footprint_km2 else np.nan,
+                    "overlap_ratio": (
+                        inter_km2 / footprint_km2 if footprint_km2 else np.nan
+                    ),
                     "geometry": footprint,
                 }
             )
 
         if not rows:
             return gpd.GeoDataFrame(
-                columns=["image_id", "item_type", "acquisition_date", "acquired",
-                         "instrument", "cloud_percent", "clear_percent", "view_angle",
-                         "signed_view_angle", "satellite_azimuth", "sun_azimuth",
-                         "sun_elevation", "quality_category", "publishing_stage",
-                         "footprint_area_km2", "aoi_intersection_km2",
-                         "aoi_coverage_percent", "overlap_ratio", "geometry"],
-                geometry="geometry", crs="EPSG:4326",
+                columns=[
+                    "image_id",
+                    "item_type",
+                    "acquisition_date",
+                    "acquired",
+                    "instrument",
+                    "cloud_percent",
+                    "clear_percent",
+                    "view_angle",
+                    "signed_view_angle",
+                    "satellite_azimuth",
+                    "sun_azimuth",
+                    "sun_elevation",
+                    "quality_category",
+                    "publishing_stage",
+                    "footprint_area_km2",
+                    "aoi_intersection_km2",
+                    "aoi_coverage_percent",
+                    "overlap_ratio",
+                    "geometry",
+                ],
+                geometry="geometry",
+                crs="EPSG:4326",
             )
 
         gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326")
@@ -430,11 +485,19 @@ class PlanetImageFinder:
             image_id = getattr(row, "image_id")
             item_type = getattr(row, "item_type", self.item_type)
             date = getattr(row, "acquisition_date")
-            date_str = date.strftime("%Y-%m-%d") if hasattr(date, "strftime") else str(date)[:10]
+            date_str = (
+                date.strftime("%Y-%m-%d")
+                if hasattr(date, "strftime")
+                else str(date)[:10]
+            )
             out_path = out_dir / f"{date_str}_{image_id}.png"
             if not out_path.exists() or overwrite:
-                url = f"{PLANET_TILES_URL}/item-types/{item_type}/items/{image_id}/thumb"
-                resp = self._client.session.get(url, params={"width": width}, timeout=60)
+                url = (
+                    f"{PLANET_TILES_URL}/item-types/{item_type}/items/{image_id}/thumb"
+                )
+                resp = self._client.session.get(
+                    url, params={"width": width}, timeout=60
+                )
                 resp.raise_for_status()
                 out_path.write_bytes(resp.content)
             paths.append(out_path)
@@ -584,17 +647,23 @@ class PlanetImageFinder:
 
         print(f"Order name        : {order_request.get('name')}")
         print(f"Scenes            : {len(item_ids)}  (clip={clip})")
-        print(f"Estimated cost    : {est_km2:.1f} km2"
-              + (f"  (min charge {min_charge_km2} km2/asset)" if min_charge_km2 else ""))
+        print(
+            f"Estimated cost    : {est_km2:.1f} km2"
+            + (f"  (min charge {min_charge_km2} km2/asset)" if min_charge_km2 else "")
+        )
         if remaining is not None:
-            print(f"Quota remaining   : {remaining:.1f} km2 "
-                  f"({quota['used_km2']:.1f}/{quota['total_km2']:.1f} used)")
+            print(
+                f"Quota remaining   : {remaining:.1f} km2 "
+                f"({quota['used_km2']:.1f}/{quota['total_km2']:.1f} used)"
+            )
         if quota_budget_km2 is not None:
             print(f"Budget for order  : {quota_budget_km2:.1f} km2")
         if duplicates:
-            print(f"WARNING: {len(duplicates)} scene(s) already in the ledger "
-                  f"(possible double charge): {duplicates[:5]}"
-                  + (" ..." if len(duplicates) > 5 else ""))
+            print(
+                f"WARNING: {len(duplicates)} scene(s) already in the ledger "
+                f"(possible double charge): {duplicates[:5]}"
+                + (" ..." if len(duplicates) > 5 else "")
+            )
 
         if remaining is not None and est_km2 > remaining:
             raise RuntimeError(
@@ -672,21 +741,27 @@ class PlanetImageFinder:
                 raise TimeoutError(
                     f"Order {order_id} still {state!r} after {timeout_s:.0f}s"
                 )
-            LOGGER.info("order %s state=%s — waiting %.0fs", order_id, state, poll_interval_s)
+            LOGGER.info(
+                "order %s state=%s — waiting %.0fs", order_id, state, poll_interval_s
+            )
             _time.sleep(poll_interval_s)
 
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         results = order.get("_links", {}).get("results", [])
         written: List[Path] = []
-        iterator = _tqdm(results, desc="Order files", unit="file") if _HAS_TQDM else results
+        iterator = (
+            _tqdm(results, desc="Order files", unit="file") if _HAS_TQDM else results
+        )
         for result in iterator:
             name = Path(result["name"]).name
             out_path = out_dir / name
             if out_path.exists() and not overwrite:
                 written.append(out_path)
                 continue
-            with self._client.session.get(result["location"], stream=True, timeout=300) as r:
+            with self._client.session.get(
+                result["location"], stream=True, timeout=300
+            ) as r:
                 r.raise_for_status()
                 tmp = out_path.with_suffix(out_path.suffix + ".part")
                 with open(tmp, "wb") as f:
@@ -699,7 +774,7 @@ class PlanetImageFinder:
     # ---- helpers
     @staticmethod
     def _coerce_to_wgs84_geometry(
-        aoi: Union[gpd.GeoDataFrame, _BaseGeometry, Mapping]
+        aoi: Union[gpd.GeoDataFrame, _BaseGeometry, Mapping],
     ) -> _BaseGeometry:
         """Coerce AOI input (GeoDataFrame / shapely / GeoJSON-like) to a WGS84 shapely union."""
         if isinstance(aoi, gpd.GeoDataFrame):
@@ -757,7 +832,11 @@ def plot_thumbnail_grid(
         if images_gdf is not None and i < len(images_gdf):
             row = images_gdf.iloc[i]
             date = row["acquisition_date"]
-            date_str = date.strftime("%Y-%m-%d") if hasattr(date, "strftime") else str(date)[:10]
+            date_str = (
+                date.strftime("%Y-%m-%d")
+                if hasattr(date, "strftime")
+                else str(date)[:10]
+            )
             clear = row.get("clear_percent")
             sva = row.get("signed_view_angle")
             caption = f"{date_str} {row.get('instrument', '')}"

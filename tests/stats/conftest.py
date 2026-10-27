@@ -27,6 +27,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
 """Shared fixtures and lightweight mocks for the stats test module."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -37,7 +38,6 @@ import numpy.ma as ma
 import pytest
 import rasterio
 from rasterio.transform import from_bounds
-
 
 # ── lightweight mocks ──────────────────────────────────────────────────────────
 

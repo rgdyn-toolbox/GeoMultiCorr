@@ -35,6 +35,7 @@ Conventions
 - Azimuths are compass degrees (0 = north, clockwise); altitude is degrees
   above the horizon.
 """
+
 from __future__ import annotations
 
 from typing import Sequence
@@ -69,8 +70,9 @@ def _horn_gradients(dem: np.ndarray, res_x: float, res_y: float):
     return dzdx, dzdy
 
 
-def slope_degrees(dem: np.ndarray, res_x: float, res_y: float,
-                  method: str = "horn") -> np.ndarray:
+def slope_degrees(
+    dem: np.ndarray, res_x: float, res_y: float, method: str = "horn"
+) -> np.ndarray:
     """Slope magnitude in degrees.
 
     :param method: ``"horn"`` (3×3, NaN-propagating, used for correlation
@@ -85,12 +87,17 @@ def slope_degrees(dem: np.ndarray, res_x: float, res_y: float,
         dzdy, dzdx = np.gradient(dem, abs(res_y), abs(res_x))
     else:
         raise ValueError(f"Unknown slope method {method!r}; use 'horn' or 'gradient'")
-    return np.degrees(np.arctan(np.sqrt(dzdx ** 2 + dzdy ** 2)))
+    return np.degrees(np.arctan(np.sqrt(dzdx**2 + dzdy**2)))
 
 
-def hillshade(dem: np.ndarray, res_x: float, res_y: float,
-              azimuth: float = 315.0, altitude: float = 45.0,
-              z_factor: float = 1.0) -> np.ndarray:
+def hillshade(
+    dem: np.ndarray,
+    res_x: float,
+    res_y: float,
+    azimuth: float = 315.0,
+    altitude: float = 45.0,
+    z_factor: float = 1.0,
+) -> np.ndarray:
     """Single-light hillshade in ``[0, 1]`` (Burrough & McDonnell / ESRI formula).
 
     A flat surface returns ``sin(altitude)``. Unlike
@@ -103,18 +110,23 @@ def hillshade(dem: np.ndarray, res_x: float, res_y: float,
     dzdy = dzdy * z_factor
     zenith = np.radians(90.0 - altitude)
     az_math = np.radians((360.0 - azimuth + 90.0) % 360.0)
-    slope = np.arctan(np.sqrt(dzdx ** 2 + dzdy ** 2))
+    slope = np.arctan(np.sqrt(dzdx**2 + dzdy**2))
     aspect = np.arctan2(dzdy, -dzdx)
     aspect = np.where(aspect < 0, aspect + 2 * np.pi, aspect)
-    shade = (np.cos(zenith) * np.cos(slope)
-             + np.sin(zenith) * np.sin(slope) * np.cos(az_math - aspect))
+    shade = np.cos(zenith) * np.cos(slope) + np.sin(zenith) * np.sin(slope) * np.cos(
+        az_math - aspect
+    )
     return np.clip(shade, 0.0, 1.0)
 
 
-def multidirectional_hillshade(dem: np.ndarray, res_x: float, res_y: float,
-                               azimuths: Sequence[float] = DEFAULT_MD_AZIMUTHS,
-                               altitude: float = 45.0,
-                               z_factor: float = 1.0) -> np.ndarray:
+def multidirectional_hillshade(
+    dem: np.ndarray,
+    res_x: float,
+    res_y: float,
+    azimuths: Sequence[float] = DEFAULT_MD_AZIMUTHS,
+    altitude: float = 45.0,
+    z_factor: float = 1.0,
+) -> np.ndarray:
     """Mean of single-light hillshades over *azimuths*, in ``[0, 1]``.
 
     Averaging several light directions reduces the aspect dependence of a
@@ -131,25 +143,42 @@ def multidirectional_hillshade(dem: np.ndarray, res_x: float, res_y: float,
         raise ValueError("azimuths must contain at least one direction")
     acc = np.zeros(np.shape(dem), dtype=np.float64)
     for az in azimuths:
-        acc += hillshade(dem, res_x, res_y, azimuth=az, altitude=altitude,
-                         z_factor=z_factor)
+        acc += hillshade(
+            dem, res_x, res_y, azimuth=az, altitude=altitude, z_factor=z_factor
+        )
     return acc / len(azimuths)
 
 
-def terrain_product(name: str, dem: np.ndarray, res_x: float, res_y: float, *,
-                    azimuth: float = 315.0, altitude: float = 45.0,
-                    md_azimuths: Sequence[float] = DEFAULT_MD_AZIMUTHS,
-                    z_factor: float = 1.0) -> np.ndarray:
+def terrain_product(
+    name: str,
+    dem: np.ndarray,
+    res_x: float,
+    res_y: float,
+    *,
+    azimuth: float = 315.0,
+    altitude: float = 45.0,
+    md_azimuths: Sequence[float] = DEFAULT_MD_AZIMUTHS,
+    z_factor: float = 1.0,
+) -> np.ndarray:
     """Dispatch to the product named *name* (one of :data:`TERRAIN_PRODUCTS`)."""
     if name == "hillshade":
-        return hillshade(dem, res_x, res_y, azimuth=azimuth, altitude=altitude,
-                         z_factor=z_factor)
+        return hillshade(
+            dem, res_x, res_y, azimuth=azimuth, altitude=altitude, z_factor=z_factor
+        )
     if name == "mdhillshade":
-        return multidirectional_hillshade(dem, res_x, res_y, azimuths=md_azimuths,
-                                          altitude=altitude, z_factor=z_factor)
+        return multidirectional_hillshade(
+            dem,
+            res_x,
+            res_y,
+            azimuths=md_azimuths,
+            altitude=altitude,
+            z_factor=z_factor,
+        )
     if name == "slope":
         return slope_degrees(dem, res_x, res_y, method="horn")
-    raise ValueError(f"Unknown terrain product {name!r}; expected one of {TERRAIN_PRODUCTS}")
+    raise ValueError(
+        f"Unknown terrain product {name!r}; expected one of {TERRAIN_PRODUCTS}"
+    )
 
 
 def shade_to_uint8(shade: np.ndarray) -> np.ndarray:

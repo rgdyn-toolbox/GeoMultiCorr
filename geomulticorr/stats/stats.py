@@ -54,6 +54,7 @@ Geodatabase-sync helpers
     last_correction_block(stats_json)
     resolve_stat_columns(stats_json, metric_map, section, extra_cols)
 """
+
 from __future__ import annotations
 
 import copy
@@ -586,6 +587,8 @@ def save_final_corrected_stats(
     else:
         block = last_correction_block(js)
     return update_pair_stats(pair, "final_corrected_stats", copy.deepcopy(block))
+
+
 # END def
 
 
@@ -647,6 +650,8 @@ def save_raw_corr_stats(pair: Pair) -> dict:
         f"({len(raw)} raster(s) processed)"
     )
     return result
+
+
 # END def
 
 
@@ -670,7 +675,10 @@ def last_correction_block(stats_json: dict) -> dict:
     """
     corr = stats_json.get("correction_stats", {})
     return corr[list(corr)[-1]] if corr else {}
+
+
 # END def
+
 
 def resolve_stat_columns(
     stats_json: dict,
@@ -720,4 +728,6 @@ def resolve_stat_columns(
     for col, val in (extra_cols or {}).items():
         out[col] = val(stats_json) if callable(val) else val
     return out
+
+
 # END def

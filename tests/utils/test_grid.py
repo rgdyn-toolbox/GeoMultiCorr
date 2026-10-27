@@ -5,6 +5,7 @@ under the old shape-only guard that case was indistinguishable from a perfect
 match, so a misaligned DEM was used as-is and produced a silently wrong
 topographic correction.
 """
+
 import numpy as np
 import pytest
 import rasterio
@@ -20,7 +21,6 @@ from geomulticorr.utils._grid import (
     regrid_to_ref,
     write_binary_raster,
 )
-
 
 TRANSFORM = Affine(3.0, 0.0, 500000.0, 0.0, -3.0, 9900000.0)
 EPSG = 32717
@@ -71,9 +71,7 @@ class TestGridMatching:
 
     def test_float_noise_still_matches(self):
         """A transform that survived a write/read round-trip must match itself."""
-        noisy = Affine(
-            3.0 + 1e-13, 0.0, 500000.0 + 1e-11, 0.0, -3.0 - 1e-13, 9900000.0
-        )
+        noisy = Affine(3.0 + 1e-13, 0.0, 500000.0 + 1e-11, 0.0, -3.0 - 1e-13, 9900000.0)
         assert grids_match(_raster(), _raster(transform=noisy))
 
     def test_band_axis_is_squeezed(self):
@@ -136,7 +134,9 @@ class TestRegridToRef:
 
     def test_mismatched_grid_is_reprojected(self):
         src = _raster(32, 32)
-        ref = _raster(16, 16, transform=Affine(6.0, 0.0, 500000.0, 0.0, -6.0, 9900000.0))
+        ref = _raster(
+            16, 16, transform=Affine(6.0, 0.0, 500000.0, 0.0, -6.0, 9900000.0)
+        )
         out, regridded = regrid_to_ref(src, ref)
         assert regridded is True
         assert grids_match(out, ref)

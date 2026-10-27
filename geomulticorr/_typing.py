@@ -2,27 +2,27 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # _typing.py
 # creation date: 2026-05-07.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -56,7 +56,9 @@ if sys.version_info.minor >= 9:
     NDArrayNum = NDArray[Union[np.floating[Any], np.integer[Any]]]
     NDArrayBool = NDArray[np.bool_]
     # Define numerical (float or int) masked N-D array type
-    MArrayNum = np.ma.masked_array[Any, np.dtype[Union[np.floating[Any], np.integer[Any]]]]
+    MArrayNum = np.ma.masked_array[
+        Any, np.dtype[Union[np.floating[Any], np.integer[Any]]]
+    ]
     MArrayBool = np.ma.masked_array[Any, np.dtype[np.bool_]]
 
 # For backward compatibility before Python 3.9

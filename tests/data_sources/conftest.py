@@ -17,6 +17,7 @@
 Nothing here touches the network or a real credential: every test either
 exercises a pure function or replaces the one call that would leave the process.
 """
+
 import pytest
 
 #: every credential variable the data_sources modules read

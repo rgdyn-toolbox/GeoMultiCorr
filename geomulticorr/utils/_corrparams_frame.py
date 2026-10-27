@@ -59,6 +59,7 @@ Public API:
 - :func:`corrparams_stats` / :func:`format_corrparams_summary` — user-facing
   counts.
 """
+
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
@@ -79,35 +80,45 @@ from geomulticorr.correlation.corr_params import (
 
 #: Columns every correlation-parameters frame carries, in order.
 CORRPARAMS_FRAME_COLUMNS: tuple[str, ...] = (
-    "pa_key",         # pair key, the join back to Pair / the geodatabase
-    "pz",             # pzone name ("" when unknown)
-    "sensor_i",       # left sensor  ("" when unknown)
-    "sensor_j",       # right sensor ("" when unknown)
-    "dt_days",        # temporal baseline in whole days
-    "dt_years",       # dt_days / 365.25, rounded to 4 (matches Pair.pa_dt_years)
-    "resolution_m",   # GSD of the LEFT image — ASP disparity is in left pixels
-    "group",          # "<sensor>|<dt-bin>" — the parameter-set identity
+    "pa_key",  # pair key, the join back to Pair / the geodatabase
+    "pz",  # pzone name ("" when unknown)
+    "sensor_i",  # left sensor  ("" when unknown)
+    "sensor_j",  # right sensor ("" when unknown)
+    "dt_days",  # temporal baseline in whole days
+    "dt_years",  # dt_days / 365.25, rounded to 4 (matches Pair.pa_dt_years)
+    "resolution_m",  # GSD of the LEFT image — ASP disparity is in left pixels
+    "group",  # "<sensor>|<dt-bin>" — the parameter-set identity
     "velocity_m_yr",  # assumed surface velocity that drove the derivation
-    "disp_m",         # expected displacement, metres  (v * dt)
-    "disp_px",        # expected displacement, pixels  (disp_m / resolution_m)
-    "kernel_px",      # derived corr-kernel side
-    "footprint_m",    # kernel_px * resolution_m — the physical template size
-    "search_px",      # derived corr-search half-width
-    "snr",            # disp_m / noise_floor_m
-    "cost_index",     # relative runtime, 1.0 = ASP defaults
-    "source",         # "auto" | "group" | "override" — where the numbers came from
-    "flags",          # "; "-joined warnings, "" when clean
+    "disp_m",  # expected displacement, metres  (v * dt)
+    "disp_px",  # expected displacement, pixels  (disp_m / resolution_m)
+    "kernel_px",  # derived corr-kernel side
+    "footprint_m",  # kernel_px * resolution_m — the physical template size
+    "search_px",  # derived corr-search half-width
+    "snr",  # disp_m / noise_floor_m
+    "cost_index",  # relative runtime, 1.0 = ASP defaults
+    "source",  # "auto" | "group" | "override" — where the numbers came from
+    "flags",  # "; "-joined warnings, "" when clean
 )
 
 _DTYPES: dict[str, str] = {
-    "pa_key": "object", "pz": "object",
-    "sensor_i": "object", "sensor_j": "object",
-    "dt_days": "int64", "dt_years": "float64", "resolution_m": "float64",
-    "group": "object", "velocity_m_yr": "float64",
-    "disp_m": "float64", "disp_px": "float64",
-    "kernel_px": "int64", "footprint_m": "float64", "search_px": "float64",
-    "snr": "float64", "cost_index": "float64",
-    "source": "object", "flags": "object",
+    "pa_key": "object",
+    "pz": "object",
+    "sensor_i": "object",
+    "sensor_j": "object",
+    "dt_days": "int64",
+    "dt_years": "float64",
+    "resolution_m": "float64",
+    "group": "object",
+    "velocity_m_yr": "float64",
+    "disp_m": "float64",
+    "disp_px": "float64",
+    "kernel_px": "int64",
+    "footprint_m": "float64",
+    "search_px": "float64",
+    "snr": "float64",
+    "cost_index": "float64",
+    "source": "object",
+    "flags": "object",
 }
 
 #: Values of ``source``, in precedence order — later wins.  ``"auto"`` is the
@@ -126,20 +137,37 @@ SOURCE_ORDER: tuple[str, ...] = ("auto", "group", "override")
 #: does not, and :func:`relevant_corr_keys` drops them when they are None.
 CORR_MODE_KEYS: dict[str, set[str]] = {
     "asp_bm": {
-        "footprint_m", "c_px", "k", "coreg_px", "margin_px",
-        "velocity_m_yr", "flow_azimuth_deg", "strain_rate_per_yr",
-        "subpixel_mode", "dt_bin_ratio",
-        "explicit_search", "explicit_search_above_days",
-        "uniform_kernel", "uniform_kernel_px",
-        "uniform_search", "uniform_search_box",
+        "footprint_m",
+        "c_px",
+        "k",
+        "coreg_px",
+        "margin_px",
+        "velocity_m_yr",
+        "flow_azimuth_deg",
+        "strain_rate_per_yr",
+        "subpixel_mode",
+        "dt_bin_ratio",
+        "explicit_search",
+        "explicit_search_above_days",
+        "uniform_kernel",
+        "uniform_kernel_px",
+        "uniform_search",
+        "uniform_search_box",
     },
     # SGM/MGM force the kernel to 9x9, so footprint is inert there — listing it
     # would put a number in the stem that changed nothing about the run.
     "asp_sgm": {
-        "c_px", "k", "coreg_px", "margin_px",
-        "velocity_m_yr", "flow_azimuth_deg", "dt_bin_ratio",
-        "explicit_search", "explicit_search_above_days",
-        "uniform_search", "uniform_search_box",
+        "c_px",
+        "k",
+        "coreg_px",
+        "margin_px",
+        "velocity_m_yr",
+        "flow_azimuth_deg",
+        "dt_bin_ratio",
+        "explicit_search",
+        "explicit_search_above_days",
+        "uniform_search",
+        "uniform_search_box",
     },
 }
 CORR_MODE_KEYS["asp_mgm"] = set(CORR_MODE_KEYS["asp_sgm"])
@@ -367,7 +395,8 @@ def corrparams_frame_from_pairs(
             # under-report a patched group by orders of magnitude -- exactly the
             # figure someone consults before committing a night of compute.
             cost = cost_index(
-                (kernel, kernel), corr_search,
+                (kernel, kernel),
+                corr_search,
                 str(patch.get("corr_algorithm", corr_algorithm)),
             )
             # A patched value that violates what this pair actually needs is
@@ -433,7 +462,8 @@ def corrparams_frame_from_plan(plan: Mapping[str, Any]) -> pd.DataFrame:
         for name, block in (plan.get("groups") or {}).items()
     }
     overrides = {
-        str(name): dict(block or {}) for name, block in (plan.get("overrides") or {}).items()
+        str(name): dict(block or {})
+        for name, block in (plan.get("overrides") or {}).items()
     }
 
     return corrparams_frame_from_pairs(
@@ -445,7 +475,9 @@ def corrparams_frame_from_plan(plan: Mapping[str, Any]) -> pd.DataFrame:
         sensor_j=[p.get("sensor_j", "") for p in pairs],
         group_params=groups,
         params_by_pair=overrides,
-        **{key: assumptions[key] for key in _PLAN_ASSUMPTION_KEYS if key in assumptions},
+        **{
+            key: assumptions[key] for key in _PLAN_ASSUMPTION_KEYS if key in assumptions
+        },
     )
 
 
@@ -453,10 +485,20 @@ def corrparams_frame_from_plan(plan: Mapping[str, Any]) -> pd.DataFrame:
 #: an unknown key in an old plan file is ignored rather than raising a
 #: ``TypeError`` deep inside ``suggest_parameters``.
 _PLAN_ASSUMPTION_KEYS: tuple[str, ...] = (
-    "velocity_m_yr", "footprint_m", "c_px", "k", "coreg_px", "margin_px",
-    "flow_azimuth_deg", "strain_rate_per_yr", "corr_algorithm",
-    "subpixel_mode", "tau_days", "dt_bin_ratio",
-    "explicit_search", "explicit_search_above_days",
+    "velocity_m_yr",
+    "footprint_m",
+    "c_px",
+    "k",
+    "coreg_px",
+    "margin_px",
+    "flow_azimuth_deg",
+    "strain_rate_per_yr",
+    "corr_algorithm",
+    "subpixel_mode",
+    "tau_days",
+    "dt_bin_ratio",
+    "explicit_search",
+    "explicit_search_above_days",
 )
 
 
@@ -482,13 +524,19 @@ def group_table(frame: pd.DataFrame) -> pd.DataFrame:
             {
                 c: pd.Series(dtype=t)
                 for c, t in {
-                    "group": "object", "n_pairs": "int64",
-                    "sensor": "object", "resolution_m": "float64",
-                    "dt_min_days": "int64", "dt_max_days": "int64",
+                    "group": "object",
+                    "n_pairs": "int64",
+                    "sensor": "object",
+                    "resolution_m": "float64",
+                    "dt_min_days": "int64",
+                    "dt_max_days": "int64",
                     "dt_span": "object",
-                    "kernel_px": "int64", "footprint_m": "float64",
-                    "search_px": "float64", "snr_min": "float64",
-                    "cost_index": "float64", "n_flagged": "int64",
+                    "kernel_px": "int64",
+                    "footprint_m": "float64",
+                    "search_px": "float64",
+                    "snr_min": "float64",
+                    "cost_index": "float64",
+                    "n_flagged": "int64",
                 }.items()
             }
         )
@@ -505,7 +553,8 @@ def group_table(frame: pd.DataFrame) -> pd.DataFrame:
             # Presentation only — the group KEY stays the canonical days form,
             # because it is also a plan-JSON name and a figure-stem fragment.
             "dt_span": [
-                format_dt_span(lo, hi) for lo, hi in zip(
+                format_dt_span(lo, hi)
+                for lo, hi in zip(
                     grouped["dt_days"].min().to_numpy(),
                     grouped["dt_days"].max().to_numpy(),
                 )
@@ -559,11 +608,18 @@ def corrparams_stats(frame: pd.DataFrame, *, k: float = 3.0) -> dict:
     n = int(len(frame))
     if n == 0:
         return {
-            "n_pairs": 0, "n_groups": 0, "n_below_floor": 0, "n_flagged": 0,
-            "dt_min_days": None, "dt_max_days": None,
-            "kernel_min_px": None, "kernel_max_px": None,
-            "search_max_px": None, "n_auto_search": 0,
-            "total_cost": 0.0, "sensors": [],
+            "n_pairs": 0,
+            "n_groups": 0,
+            "n_below_floor": 0,
+            "n_flagged": 0,
+            "dt_min_days": None,
+            "dt_max_days": None,
+            "kernel_min_px": None,
+            "kernel_max_px": None,
+            "search_max_px": None,
+            "n_auto_search": 0,
+            "total_cost": 0.0,
+            "sensors": [],
         }
 
     snr_values = frame["snr"].to_numpy(dtype="float64")
@@ -609,8 +665,11 @@ def format_corrparams_summary(stats: dict, *, html: bool = True) -> str:
         f"{bold(str(n))} pairs in {bold(str(stats['n_groups']))} group(s)",
         f"Δt {stats['dt_min_days']}–{stats['dt_max_days']} d",
         f"kernel {stats['kernel_min_px']}–{stats['kernel_max_px']} px",
-        (f"search ≤ {stats['search_max_px']:.0f} px"
-         if stats.get("search_max_px") is not None else "search: ASP auto"),
+        (
+            f"search ≤ {stats['search_max_px']:.0f} px"
+            if stats.get("search_max_px") is not None
+            else "search: ASP auto"
+        ),
         f"cost {stats['total_cost']:.1f}×",
     ]
     if stats.get("n_below_floor"):

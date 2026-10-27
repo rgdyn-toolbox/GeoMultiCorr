@@ -19,6 +19,7 @@ from geomulticorr.corrections.fit import (
     fit_fourier_stripe_profile,
 )
 
+
 def _seam_field(angle_deg, nr=120, nc=180, res=3.0, noise=0.3, seed=0):
     """Synthetic displacement with a step seam whose normal is *angle_deg*.
 
@@ -245,9 +246,7 @@ class TestFitLinearWithPredictor:
         """Returns exactly 6 values: 4 floats, 1 ndarray, 1 float."""
         dem_arr = ma.filled(dem_raster.data, np.nan)
         fit_mask = np.ones((10, 10), dtype=bool)
-        result = fit_linear_with_predictor(
-            ramp_raster.data, dem_arr, fit_mask, 1e-6
-        )
+        result = fit_linear_with_predictor(ramp_raster.data, dem_arr, fit_mask, 1e-6)
         assert isinstance(result, tuple)
         assert len(result) == 6
         assert isinstance(result[4], np.ndarray)
@@ -283,9 +282,7 @@ class TestFitQuadraticWithPredictor:
         rng = np.random.default_rng(77)
         dem_arr = rng.uniform(100, 500, (20, 20))
         i, j = np.mgrid[:20, :20]
-        band_data = (
-            2.0 * i**2 - i * j + 5.0 * dem_arr + 3.0
-        )
+        band_data = 2.0 * i**2 - i * j + 5.0 * dem_arr + 3.0
         band = ma.array(band_data, mask=False)
         fit_mask = np.ones((20, 20), dtype=bool)
         g, a2, b2, cxy, ax, by, fp, surface, r2 = fit_quadratic_with_predictor(
@@ -309,9 +306,7 @@ class TestFitQuadraticWithPredictor:
         """Returns exactly 9 values."""
         dem_arr = ma.filled(dem_raster.data, np.nan)
         fit_mask = np.ones((10, 10), dtype=bool)
-        result = fit_quadratic_with_predictor(
-            ramp_raster.data, dem_arr, fit_mask, 1e-6
-        )
+        result = fit_quadratic_with_predictor(ramp_raster.data, dem_arr, fit_mask, 1e-6)
         assert isinstance(result, tuple)
         assert len(result) == 9
         assert isinstance(result[7], np.ndarray)
@@ -325,6 +320,7 @@ class TestFitQuadraticWithPredictor:
         )
         assert len(result) == 9
         assert isinstance(result[7], np.ndarray)
+
 
 class TestRotateCoords:
     """Tests for rotate_coords() — along-track projection."""
@@ -380,8 +376,11 @@ class TestFitDirectionalProfile:
         s = rotate_coords(xx, yy, 0.0)
         with pytest.raises(ValueError, match="too few populated bins"):
             fit_directional_profile(
-                s, field, np.ones_like(field, bool),
-                n_bins=4, min_bin_count=10_000_000,
+                s,
+                field,
+                np.ones_like(field, bool),
+                n_bins=4,
+                min_bin_count=10_000_000,
             )
 
     def test_profile_models_run(self):
@@ -479,7 +478,10 @@ class TestFitFourierStripeProfile:
     def test_invalid_band_raises(self):
         _, _, profile = _jitter_profile()
         with pytest.raises(ValueError, match="wavelength_max"):
-            fit_fourier_stripe_profile(profile, 4.0, wavelength_min=400.0, wavelength_max=100.0)
+            fit_fourier_stripe_profile(
+                profile, 4.0, wavelength_min=400.0, wavelength_max=100.0
+            )
+
 
 class TestFourierStripeProfileGuards:
     """Edge paths of fit_fourier_stripe_profile()."""

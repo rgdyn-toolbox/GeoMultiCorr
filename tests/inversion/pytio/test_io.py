@@ -6,6 +6,7 @@ The ``depl_cumule`` layout is a contract with the Fortran post-processor
 (float32 LE, pixel-interleaved, ``9999`` no-data), so the round trip is
 asserted at the byte level, not only through the reader.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -43,10 +44,13 @@ class TestListFiles:
 class TestDeplCumule:
     def test_round_trip_and_byte_layout(self, tmp_path):
         rng = np.random.default_rng(0)
-        cube = rng.normal(size=(3, 4, 5)).astype(np.float32)     # (date, y, x)
+        cube = rng.normal(size=(3, 4, 5)).astype(np.float32)  # (date, y, x)
         cube[1, 2, 3] = np.nan
-        da = xr.DataArray(cube, dims=("date", "y", "x"),
-                          coords={"date": ["20200101", "20210101", "20220101"]})
+        da = xr.DataArray(
+            cube,
+            dims=("date", "y", "x"),
+            coords={"date": ["20200101", "20210101", "20220101"]},
+        )
         path = tmp_path / "depl_cumule"
         io.write_depl_cumule(da, str(path))
 
@@ -57,8 +61,9 @@ class TestDeplCumule:
         assert raw[(2 * 5 + 3) * 3 + 1] == NODATA_OUT
         assert (tmp_path / "depl_cumule.hdr").exists()
 
-        back = io.read_depl_cumule(str(path), width=5, length=4, n_dates=3,
-                                   dates=da["date"].values)
+        back = io.read_depl_cumule(
+            str(path), width=5, length=4, n_dates=3, dates=da["date"].values
+        )
         assert back.dims == ("date", "y", "x")
         assert np.isnan(back.values[1, 2, 3])
         mask = np.isfinite(cube)
@@ -85,7 +90,9 @@ class TestPairStack:
 
     def test_load_with_explicit_shape(self, tmp_path):
         d1, d2, expected = self._write_pairs(tmp_path)
-        stack = io.load_pair_stack(str(tmp_path), d1, d2, template="{d1}_{d2}_EW", shape=(4, 3))
+        stack = io.load_pair_stack(
+            str(tmp_path), d1, d2, template="{d1}_{d2}_EW", shape=(4, 3)
+        )
         assert stack.dims == ("pair", "y", "x")
         assert list(stack["date2"].values) == d2
         np.testing.assert_allclose(np.asarray(stack), expected)
@@ -98,7 +105,9 @@ class TestPairStack:
     def test_lazy_when_dask_is_available(self, tmp_path):
         da = pytest.importorskip("dask.array")
         d1, d2, _ = self._write_pairs(tmp_path)
-        stack = io.load_pair_stack(str(tmp_path), d1, d2, template="{d1}_{d2}_EW", shape=(4, 3))
+        stack = io.load_pair_stack(
+            str(tmp_path), d1, d2, template="{d1}_{d2}_EW", shape=(4, 3)
+        )
         assert isinstance(stack.data, da.Array)
 
     def test_guess_shape_without_sidecar_raises(self, tmp_path):

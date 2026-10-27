@@ -2,27 +2,27 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # conftest.py
 # creation date: 2026-05-21.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -34,6 +34,7 @@ from unittest.mock import patch, MagicMock
 
 from geomulticorr.correlation import ASP
 
+
 @pytest.fixture
 def asp_helper(tmp_path):
     """ASP instance whose binaries are stub executables (no real ASP needed)."""
@@ -44,7 +45,10 @@ def asp_helper(tmp_path):
         exe.write_text("#!/bin/sh\nexit 0\n")
         exe.chmod(0o755)
     return ASP(session=None, asp_bin_dir=bin_dir)
-#END def
+
+
+# END def
+
 
 @pytest.fixture
 def mock_subprocess_success():
@@ -54,7 +58,10 @@ def mock_subprocess_success():
     result.stdout = "Success"
     result.stderr = ""
     return result
-#END def
+
+
+# END def
+
 
 @pytest.fixture
 def temp_output_dir(tmp_path):
@@ -62,6 +69,6 @@ def temp_output_dir(tmp_path):
     output_dir = tmp_path / "correlation_output"
     output_dir.mkdir()
     return output_dir
-#END def
 
 
+# END def

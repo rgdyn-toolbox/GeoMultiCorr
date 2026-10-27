@@ -48,6 +48,7 @@ whose stdout is a file (``nohup``, OAR, SLURM) the bar renders *nothing* until
 the loop ends, then dumps one final frame. Here, a non-tty console skips ``Live``
 entirely and emits throttled one-line progress records instead.
 """
+
 from __future__ import annotations
 
 import time

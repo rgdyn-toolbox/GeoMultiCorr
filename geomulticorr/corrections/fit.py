@@ -2,27 +2,27 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # fit.py
 # creation date: 2026-06-30.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -71,6 +71,7 @@ Public API:
 - :func:`compute_slope` — terrain slope magnitude in degrees, used by
   :class:`~geomulticorr.corrections.corrections.SlopeRampCorrection`.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -79,10 +80,10 @@ from scipy.interpolate import UnivariateSpline
 from scipy.signal.windows import tukey
 from scipy.stats import binned_statistic
 
-
 # --------------------------------------------------------------------------- #
 # Centering
 # --------------------------------------------------------------------------- #
+
 
 def compute_shift(
     band_ma: np.ma.MaskedArray,
@@ -124,6 +125,7 @@ def compute_shift(
 # Terrain helpers
 # --------------------------------------------------------------------------- #
 
+
 def compute_slope(dem_arr: np.ndarray, transform) -> np.ndarray:
     """Compute terrain slope magnitude in degrees from a DEM.
 
@@ -152,6 +154,7 @@ def compute_slope(dem_arr: np.ndarray, transform) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 # Linear spatial ramp (no external predictor)
 # --------------------------------------------------------------------------- #
+
 
 def fit_ramp_linear(
     band_ma: np.ma.MaskedArray,
@@ -207,7 +210,7 @@ def fit_ramp_linear(
     X1n = (X1v - X1_mean) / X1_std
     X2n = (X2v - X2_mean) / X2_std
 
-    A   = np.column_stack([np.ones(X1n.shape), X1n, X2n])
+    A = np.column_stack([np.ones(X1n.shape), X1n, X2n])
     ATA = A.T @ A + lambda_reg * np.eye(3)
     ATY = A.T @ Yv
     theta = np.linalg.solve(ATA, ATY)
@@ -228,6 +231,7 @@ def fit_ramp_linear(
 # --------------------------------------------------------------------------- #
 # Linear ramp + external predictor (DEM elevation or terrain slope)
 # --------------------------------------------------------------------------- #
+
 
 def fit_linear_with_predictor(
     band_ma: np.ma.MaskedArray,
@@ -287,37 +291,36 @@ def fit_linear_with_predictor(
     n_rows, n_cols = band_ma.shape
     row_grid, col_grid = np.mgrid[:n_rows, :n_cols]
 
-    row_v  = row_grid[fit_mask]
-    col_v  = col_grid[fit_mask]
+    row_v = row_grid[fit_mask]
+    col_v = col_grid[fit_mask]
     pred_v = predictor_arr[fit_mask]
-    y_v    = ma.filled(band_ma, np.nan)[fit_mask]
+    y_v = ma.filled(band_ma, np.nan)[fit_mask]
 
-    row_mean,  row_std  = row_v.mean(),  row_v.std()
-    col_mean,  col_std  = col_v.mean(),  col_v.std()
+    row_mean, row_std = row_v.mean(), row_v.std()
+    col_mean, col_std = col_v.mean(), col_v.std()
     pred_mean, pred_std = pred_v.mean(), pred_v.std()
 
-    row_n  = (row_v  - row_mean)  / row_std
-    col_n  = (col_v  - col_mean)  / col_std
-    pred_n = ((pred_v - pred_mean) / pred_std
-              if pred_std > 0 else np.zeros_like(pred_v))
+    row_n = (row_v - row_mean) / row_std
+    col_n = (col_v - col_mean) / col_std
+    pred_n = (pred_v - pred_mean) / pred_std if pred_std > 0 else np.zeros_like(pred_v)
 
-    A   = np.column_stack([np.ones(row_n.shape), row_n, col_n, pred_n])
+    A = np.column_stack([np.ones(row_n.shape), row_n, col_n, pred_n])
     ATA = A.T @ A + lambda_reg * np.eye(4)
     ATY = A.T @ y_v
     theta = np.linalg.solve(ATA, ATY)
     d_n, a_n, b_n, c_n = theta
 
-    a_row  = a_n / row_std
-    b_col  = b_n / col_std
+    a_row = a_n / row_std
+    b_col = b_n / col_std
     c_pred = c_n / pred_std if pred_std > 0 else 0.0
-    d      = d_n - a_row * row_mean - b_col * col_mean - c_pred * pred_mean
+    d = d_n - a_row * row_mean - b_col * col_mean - c_pred * pred_mean
 
     surface = a_row * row_grid + b_col * col_grid + c_pred * predictor_arr + d
 
     y_pred = A @ theta
     ss_res = np.sum((y_v - y_pred) ** 2)
     ss_tot = np.sum((y_v - y_v.mean()) ** 2)
-    r2     = float(1 - ss_res / ss_tot) if ss_tot != 0 else 0.0
+    r2 = float(1 - ss_res / ss_tot) if ss_tot != 0 else 0.0
 
     return float(a_row), float(b_col), float(c_pred), float(d), surface, r2
 
@@ -325,6 +328,7 @@ def fit_linear_with_predictor(
 # --------------------------------------------------------------------------- #
 # Quadratic ramp + external predictor
 # --------------------------------------------------------------------------- #
+
 
 def fit_quadratic_with_predictor(
     band_ma: np.ma.MaskedArray,
@@ -387,59 +391,75 @@ def fit_quadratic_with_predictor(
     n_rows, n_cols = band_ma.shape
     row_grid, col_grid = np.mgrid[:n_rows, :n_cols]
 
-    row_v  = row_grid[fit_mask]
-    col_v  = col_grid[fit_mask]
+    row_v = row_grid[fit_mask]
+    col_v = col_grid[fit_mask]
     pred_v = predictor_arr[fit_mask]
-    y_v    = ma.filled(band_ma, np.nan)[fit_mask]
+    y_v = ma.filled(band_ma, np.nan)[fit_mask]
 
-    row_mean,  row_std  = row_v.mean(),  row_v.std()
-    col_mean,  col_std  = col_v.mean(),  col_v.std()
+    row_mean, row_std = row_v.mean(), row_v.std()
+    col_mean, col_std = col_v.mean(), col_v.std()
     pred_mean, pred_std = pred_v.mean(), pred_v.std()
 
-    row_n  = (row_v  - row_mean)  / row_std
-    col_n  = (col_v  - col_mean)  / col_std
-    pred_n = ((pred_v - pred_mean) / pred_std
-              if pred_std > 0 else np.zeros_like(pred_v))
+    row_n = (row_v - row_mean) / row_std
+    col_n = (col_v - col_mean) / col_std
+    pred_n = (pred_v - pred_mean) / pred_std if pred_std > 0 else np.zeros_like(pred_v)
 
-    A = np.column_stack([
-        np.ones(row_n.shape),
-        row_n**2, col_n**2, row_n * col_n,
-        row_n, col_n, pred_n,
-    ])
+    A = np.column_stack(
+        [
+            np.ones(row_n.shape),
+            row_n**2,
+            col_n**2,
+            row_n * col_n,
+            row_n,
+            col_n,
+            pred_n,
+        ]
+    )
     ATA = A.T @ A + lambda_reg * np.eye(7)
     ATY = A.T @ y_v
     theta = np.linalg.solve(ATA, ATY)
     g, a2, b2, cxy, ax, by, fp = theta
 
-    row_full  = (row_grid      - row_mean)  / row_std
-    col_full  = (col_grid      - col_mean)  / col_std
-    pred_full = ((predictor_arr - pred_mean) / pred_std
-                 if pred_std > 0 else np.zeros_like(predictor_arr))
+    row_full = (row_grid - row_mean) / row_std
+    col_full = (col_grid - col_mean) / col_std
+    pred_full = (
+        (predictor_arr - pred_mean) / pred_std
+        if pred_std > 0
+        else np.zeros_like(predictor_arr)
+    )
 
     surface = (
-        a2  * row_full**2
-        + b2  * col_full**2
+        a2 * row_full**2
+        + b2 * col_full**2
         + cxy * row_full * col_full
-        + ax  * row_full
-        + by  * col_full
-        + fp  * pred_full
+        + ax * row_full
+        + by * col_full
+        + fp * pred_full
         + g
     )
 
     y_pred = A @ theta
     ss_res = np.sum((y_v - y_pred) ** 2)
     ss_tot = np.sum((y_v - y_v.mean()) ** 2)
-    r2     = float(1 - ss_res / ss_tot) if ss_tot != 0 else 0.0
+    r2 = float(1 - ss_res / ss_tot) if ss_tot != 0 else 0.0
 
     return (
-        float(g), float(a2), float(b2), float(cxy),
-        float(ax), float(by), float(fp),
-        surface, r2,
+        float(g),
+        float(a2),
+        float(b2),
+        float(cxy),
+        float(ax),
+        float(by),
+        float(fp),
+        surface,
+        r2,
     )
+
 
 # --------------------------------------------------------------------------- #
 # Directional (mosaic-seam) bias
 # --------------------------------------------------------------------------- #
+
 
 def rotate_coords(
     xx: np.ndarray,
@@ -530,9 +550,7 @@ def fit_directional_profile(
     s_fit = s[fit_mask]
     v_fit = values[fit_mask]
 
-    median, edges, _ = binned_statistic(
-        s_fit, v_fit, statistic="median", bins=n_bins
-    )
+    median, edges, _ = binned_statistic(s_fit, v_fit, statistic="median", bins=n_bins)
     count, _, _ = binned_statistic(s_fit, v_fit, statistic="count", bins=n_bins)
     centers = 0.5 * (edges[:-1] + edges[1:])
 
@@ -635,6 +653,7 @@ def estimate_directional_angle(
 # Fourier stripe / jitter destriping
 # --------------------------------------------------------------------------- #
 
+
 def fit_fourier_stripe_profile(
     profile: np.ndarray,
     spacing: float,
@@ -732,7 +751,9 @@ def fit_fourier_stripe_profile(
         span = n * spacing
         candidate = (freqs > 0.0) & (wavelength <= span / 2.0)
         if not candidate.any():
-            raise ValueError("Cannot auto-detect a jitter wavelength; set wavelength_min.")
+            raise ValueError(
+                "Cannot auto-detect a jitter wavelength; set wavelength_min."
+            )
         peak = np.argmax(np.where(candidate, np.abs(spectrum), -np.inf))
         wavelength_peak = float(wavelength[peak])
         wl_min = wavelength_peak / np.sqrt(2.0)

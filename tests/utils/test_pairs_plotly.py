@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Structural smoke tests for the interactive plotly pair views (_pairs_plotly)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -102,7 +103,9 @@ class TestChord:
         assert {a.text for a in fig.layout.annotations} == {"2020", "2021", "2022"}
 
     def test_year_labels_can_be_disabled(self, frame):
-        assert len(pp.figure_chord(frame, show_year_labels=False).layout.annotations) == 0
+        assert (
+            len(pp.figure_chord(frame, show_year_labels=False).layout.annotations) == 0
+        )
 
     def test_axes_locked_square(self, frame):
         fig = pp.figure_chord(frame)
@@ -158,7 +161,9 @@ class TestNetworkMirror:
         rng = pp.figure_network(frame, mirror_direction=True).layout.yaxis.range
         assert rng[0] < 0 < rng[1]
 
-    def test_forward_only_frame_unaffected_by_mirror(self, dates_iso, index_pairs_consecutive):
+    def test_forward_only_frame_unaffected_by_mirror(
+        self, dates_iso, index_pairs_consecutive
+    ):
         f = pairs_frame_from_indices(dates_iso, index_pairs_consecutive)
         on = pp.figure_network(f, mirror_direction=True).layout.yaxis.range
         off = pp.figure_network(f, mirror_direction=False).layout.yaxis.range
@@ -172,12 +177,18 @@ class TestNetworkMirror:
 
     def test_one_annotation_when_forward_only(self, dates_iso, index_pairs_consecutive):
         f = pairs_frame_from_indices(dates_iso, index_pairs_consecutive)
-        texts = [a.text for a in pp.figure_network(f, mirror_direction=True).layout.annotations]
+        texts = [
+            a.text
+            for a in pp.figure_network(f, mirror_direction=True).layout.annotations
+        ]
         assert len(texts) == 1
         assert "forward" in texts[0]
 
     def test_no_annotations_when_not_mirrored(self, frame):
-        assert len(pp.figure_network(frame, mirror_direction=False).layout.annotations) == 0
+        assert (
+            len(pp.figure_network(frame, mirror_direction=False).layout.annotations)
+            == 0
+        )
 
 
 class TestDtHist:

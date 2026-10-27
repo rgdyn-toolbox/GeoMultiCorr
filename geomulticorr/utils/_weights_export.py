@@ -52,6 +52,7 @@ Public API:
 - :func:`weights_figure_stem` — collision-free stem encoding the weighting setup.
 - :func:`save_weights_figure` — render and write one file per requested format.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -72,8 +73,17 @@ from geomulticorr.utils._weights_frame import relevant_weight_keys
 #: Order the parameters appear in a stem, so the same settings always produce
 #: byte-identical names regardless of dict ordering.
 _STEM_KEY_ORDER: tuple[str, ...] = (
-    "combine", "cc_gamma", "alpha", "beta", "gamma",
-    "sharpness", "slope", "min_weight", "w_min", "invert", "dt_range",
+    "combine",
+    "cc_gamma",
+    "alpha",
+    "beta",
+    "gamma",
+    "sharpness",
+    "slope",
+    "min_weight",
+    "w_min",
+    "invert",
+    "dt_range",
     "sensor_weights",
 )
 
@@ -137,11 +147,16 @@ def weights_figure_stem(
         every mode whenever it is set.
     :returns: The stem, without an extension.
     """
-    parts = [_slug(pz_name) or "all", _slug(inversion_name), "weights",
-             _slug(weight_mode)]
+    parts = [
+        _slug(pz_name) or "all",
+        _slug(inversion_name),
+        "weights",
+        _slug(weight_mode),
+    ]
 
-    relevant = relevant_weight_keys(weight_mode, params.get("combine"),
-                                    sensor_weights=params.get("sensor_weights"))
+    relevant = relevant_weight_keys(
+        weight_mode, params.get("combine"), sensor_weights=params.get("sensor_weights")
+    )
     for key in _STEM_KEY_ORDER:
         if key not in relevant or key not in params:
             continue
@@ -204,16 +219,20 @@ def save_weights_figure(
     view_kwargs = dict(view_kwargs or {})
 
     def _target(suffix: str) -> pathlib.Path:
-        return (out_dir / f"{stem}.{suffix}") if overwrite else _unique_path(
-            out_dir, stem, suffix)
+        return (
+            (out_dir / f"{stem}.{suffix}")
+            if overwrite
+            else _unique_path(out_dir, stem, suffix)
+        )
 
     written: dict[str, pathlib.Path] = {}
 
     if "html" in formats:
         from geomulticorr.utils._weights_plotly import figure_weights
 
-        kw = _filter_kwargs(view_kwargs, _accepted_kwargs(figure_weights),
-                            "figure_weights")
+        kw = _filter_kwargs(
+            view_kwargs, _accepted_kwargs(figure_weights), "figure_weights"
+        )
         path = _target("html")
         figure_weights(frame, title=title, **kw).write_html(
             str(path), include_plotlyjs=plotlyjs, full_html=True
@@ -237,8 +256,10 @@ def save_weights_figure(
         try:
             # plotly calls it `title`, matplotlib calls it `fig_name`
             fig, _ = builder(
-                frame, figsize=figsize or _DEFAULT_FIGSIZE,
-                fig_name=title or None, **kw,
+                frame,
+                figsize=figsize or _DEFAULT_FIGSIZE,
+                fig_name=title or None,
+                **kw,
             )
             for fmt in image_formats:
                 path = _target(fmt)

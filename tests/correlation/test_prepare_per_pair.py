@@ -7,6 +7,7 @@ pattern in ``tests/core/test_explore_step_range.py``: the method only needs
 ``get_pairs`` plus the pairs themselves, so a stub exercises the whole
 resolution chain with no geodatabase.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -48,7 +49,9 @@ def _stub_session(tmp_path, keys):
     pairs = [_StubPair(k, tmp_path) for k in keys]
     session = types.SimpleNamespace(
         get_pairs=lambda criterias="", image_type=None: list(pairs),
-        _corr_params_changed=lambda *a, **kw: Session._corr_params_changed(session, *a, **kw),
+        _corr_params_changed=lambda *a, **kw: Session._corr_params_changed(
+            session, *a, **kw
+        ),
         pairs=pairs,
     )
     return session
@@ -56,6 +59,7 @@ def _stub_session(tmp_path, keys):
 
 def _prepare(session, **kwargs):
     """Call the real method against the stub, with ASP's script writer faked."""
+
     def _fake_write_bash_script(pair, **kw):
         path = pair.pa_path / f"{pair.pa_key}_CorrelationJob.sh"
         path.write_text(f"# {kw.get('corr_kernel')}\n")
@@ -64,16 +68,23 @@ def _prepare(session, **kwargs):
 
     _fake_write_bash_script.calls = []
 
-    with patch("shutil.which", return_value="/fake/parallel_stereo"), patch(
-        "geomulticorr.correlation.correlation.ASP.write_bash_script",
-        side_effect=_fake_write_bash_script,
+    with (
+        patch("shutil.which", return_value="/fake/parallel_stereo"),
+        patch(
+            "geomulticorr.correlation.correlation.ASP.write_bash_script",
+            side_effect=_fake_write_bash_script,
+        ),
     ):
-        scripts = Session.prepare_pairs_correlation(session, print_summary=False, **kwargs)
+        scripts = Session.prepare_pairs_correlation(
+            session, print_summary=False, **kwargs
+        )
     return scripts, _fake_write_bash_script.calls
 
 
 def _kernel_of(pair) -> str:
-    return parse_params_file(pair.pa_path / f"{pair.pa_key}_CorrParameters.txt")["corr-kernel"]
+    return parse_params_file(pair.pa_path / f"{pair.pa_key}_CorrParameters.txt")[
+        "corr-kernel"
+    ]
 
 
 class TestBackwardCompatibility:
@@ -138,13 +149,19 @@ class TestPrecedence:
             groups={"g": {"params": {"corr_kernel": (15, 15)}}},
             pairs=[{"pa_key": "a", "group": "g"}],
         )
-        _prepare(session, corr_kernel=(21, 21), plan=plan,
-                 params_by_pair={"a": {"corr_kernel": (31, 31)}})
+        _prepare(
+            session,
+            corr_kernel=(21, 21),
+            plan=plan,
+            params_by_pair={"a": {"corr_kernel": (31, 31)}},
+        )
         assert _kernel_of(session.pairs[0]) == "31 31"
 
     def test_override_alone_needs_no_plan(self, tmp_path):
         session = _stub_session(tmp_path, ["a", "b"])
-        _prepare(session, corr_kernel=(21, 21), params_by_pair={"b": {"corr_kernel": (9, 9)}})
+        _prepare(
+            session, corr_kernel=(21, 21), params_by_pair={"b": {"corr_kernel": (9, 9)}}
+        )
         by_key = {p.pa_key: p for p in session.pairs}
         assert _kernel_of(by_key["a"]) == "21 21"
         assert _kernel_of(by_key["b"]) == "9 9"
@@ -202,10 +219,18 @@ class TestRegenerationOnChange:
     def test_a_group_change_alone_triggers_regeneration(self, tmp_path):
         session = _stub_session(tmp_path, ["a"])
         pairs = [{"pa_key": "a", "group": "g"}]
-        _prepare(session, plan=build_correlation_plan(
-            groups={"g": {"params": {"corr_kernel": (21, 21)}}}, pairs=pairs))
-        _, calls = _prepare(session, plan=build_correlation_plan(
-            groups={"g": {"params": {"corr_kernel": (15, 15)}}}, pairs=pairs))
+        _prepare(
+            session,
+            plan=build_correlation_plan(
+                groups={"g": {"params": {"corr_kernel": (21, 21)}}}, pairs=pairs
+            ),
+        )
+        _, calls = _prepare(
+            session,
+            plan=build_correlation_plan(
+                groups={"g": {"params": {"corr_kernel": (15, 15)}}}, pairs=pairs
+            ),
+        )
         assert calls
         assert _kernel_of(session.pairs[0]) == "15 15"
 

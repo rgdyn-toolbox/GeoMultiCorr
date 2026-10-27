@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Unit tests for the pure pair-layout geometry helpers (_pairs_geometry)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -57,7 +58,9 @@ class TestToDecimalYear:
     def test_matches_legacy_formula(self, dates_iso):
         """Regression lock — existing figures must not shift."""
         expected = np.array([_legacy_to_dec(d) for d in dates_iso])
-        np.testing.assert_allclose(to_decimal_year(dates_iso), expected, rtol=0, atol=1e-9)
+        np.testing.assert_allclose(
+            to_decimal_year(dates_iso), expected, rtol=0, atol=1e-9
+        )
 
     def test_monotonic(self, dates_iso):
         dec = to_decimal_year(dates_iso)
@@ -382,7 +385,9 @@ class TestYearDecorations:
 
     def test_tick_straddles_ring_center(self, dates_iso):
         scale = CircularTimeScale.from_dates(dates_iso)
-        segs = year_tick_segments(scale, outer_radius=1.0, ring_width=0.045, tick_length=0.075)
+        segs = year_tick_segments(
+            scale, outer_radius=1.0, ring_width=0.045, tick_length=0.075
+        )
         r1 = np.hypot(*segs[0, 0])
         r2 = np.hypot(*segs[0, 1])
         assert r1 == pytest.approx(1.0 - 0.045 / 2 - 0.075 / 2)
@@ -396,7 +401,9 @@ class TestYearDecorations:
 
     def test_label_rotation_kept_readable(self):
         """Labels are flipped in the left half so they never read upside-down."""
-        scale = CircularTimeScale(pd.Timestamp("2000-01-01"), pd.Timestamp("2012-01-01"))
+        scale = CircularTimeScale(
+            pd.Timestamp("2000-01-01"), pd.Timestamp("2012-01-01")
+        )
         _, _, rot, ha = year_label_placement(scale)
         assert np.all((rot >= -90) & (rot <= 90))
         assert set(ha) <= {"left", "right"}

@@ -5,6 +5,7 @@ methods (``pz_names``, ``pz_dir``, ``get_thumbs_overview``, ``get_thumbs``),
 so a recorder stands in. Thumbs and pairs are fakes whose ``+`` mimics
 ``Thumb.__add__`` (including its ``AssertionError`` on an invalid combination).
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -58,8 +59,11 @@ class FakeThumb:
             raise AssertionError("invalid combination")
         dt_days = abs((other.th_date_datetime - self.th_date_datetime).days)
         return SimpleNamespace(
-            pa_dt_days=dt_days, pair=(self.name, other.name),
-            to_pdserie=lambda: pd.Series({"pa_dt_days": dt_days, "left": self.name, "right": other.name}),
+            pa_dt_days=dt_days,
+            pair=(self.name, other.name),
+            to_pdserie=lambda: pd.Series(
+                {"pa_dt_days": dt_days, "left": self.name, "right": other.name}
+            ),
         )
 
 
@@ -99,11 +103,13 @@ class TestThumbQueries:
         assert sess.calls == [("overview", ["spot", "PZ"]), ("thumbs", ["", "PZ"])]
 
     def test_get_valid_thumbs_filters(self, pz, sess, monkeypatch):
-        sess.overview = pd.DataFrame({
-            "th_path": ["a.tif", "b.tif", "c.tif", "d.tif"],
-            "th_valid": ["1", "0", "1", "1"],
-            "th_type": ["opt", "opt", "slope", "opt"],
-        })
+        sess.overview = pd.DataFrame(
+            {
+                "th_path": ["a.tif", "b.tif", "c.tif", "d.tif"],
+                "th_valid": ["1", "0", "1", "1"],
+                "th_type": ["opt", "opt", "slope", "opt"],
+            }
+        )
         monkeypatch.setattr(gmc_pzone.gmc_thumb, "Thumb", lambda p: f"T:{p}")
         assert pz.get_valid_thumbs() == ["T:a.tif", "T:d.tif"]
         assert pz.get_valid_thumbs(image_type="slope") == ["T:c.tif"]
@@ -118,7 +124,11 @@ class TestThumbQueries:
 
 class TestPairBuilding:
     def test_get_pairs_uses_permutations_and_skips_invalid(self, pz, sess):
-        a, b, c = FakeThumb("2020-01-01"), FakeThumb("2020-02-01"), FakeThumb("2020-03-01")
+        a, b, c = (
+            FakeThumb("2020-01-01"),
+            FakeThumb("2020-02-01"),
+            FakeThumb("2020-03-01"),
+        )
         a._forbidden = {"2020-03-01"}  # a+c is invalid
         sess.thumbs = [a, b, c]
         pairs = pz.get_pairs()
@@ -129,7 +139,9 @@ class TestPairBuilding:
         a, b = FakeThumb("2020-01-01"), FakeThumb("2020-02-01")
         monkeypatch.setattr(pz, "get_valid_thumbs", lambda **k: [a, b])
         assert sorted(p.pair for p in pz.get_valid_pairs()) == [
-            ("2020-01-01", "2020-02-01"), ("2020-02-01", "2020-01-01")]
+            ("2020-01-01", "2020-02-01"),
+            ("2020-02-01", "2020-01-01"),
+        ]
 
     def test_overviews_are_frames_of_series(self, pz, monkeypatch):
         fake = [SimpleNamespace(to_pdserie=lambda: pd.Series({"k": 1}))]
@@ -140,14 +152,19 @@ class TestPairBuilding:
 
     def test_complete_pairs(self, pz, monkeypatch):
         mk = lambda s: SimpleNamespace(get_status=lambda: s)
-        monkeypatch.setattr(pz, "get_pairs", lambda: [mk("complete"), mk("clipped"), mk("complete")])
+        monkeypatch.setattr(
+            pz, "get_pairs", lambda: [mk("complete"), mk("clipped"), mk("complete")]
+        )
         assert len(pz.get_complete_pairs()) == 2
 
 
 class TestPairsWithStrategy:
     @pytest.fixture
     def thumbs(self, pz, monkeypatch):
-        ts = [FakeThumb(d) for d in ("2020-01-01", "2020-01-11", "2020-03-01", "2021-01-01")]
+        ts = [
+            FakeThumb(d)
+            for d in ("2020-01-01", "2020-01-11", "2020-03-01", "2021-01-01")
+        ]
         shuffled = [ts[2], ts[0], ts[3], ts[1]]  # sorted by date inside the method
         monkeypatch.setattr(pz, "get_valid_thumbs", lambda **k: shuffled)
         return ts
@@ -155,7 +172,10 @@ class TestPairsWithStrategy:
     def test_consecutive_is_date_ordered(self, pz, thumbs):
         pairs = pz.get_pairs_with_strategy("consecutive")
         assert [p.pair for p in pairs] == [
-            ("2020-01-01", "2020-01-11"), ("2020-01-11", "2020-03-01"), ("2020-03-01", "2021-01-01")]
+            ("2020-01-01", "2020-01-11"),
+            ("2020-01-11", "2020-03-01"),
+            ("2020-03-01", "2021-01-01"),
+        ]
 
     def test_max_dt_filter(self, pz, thumbs):
         pairs = pz.get_pairs_with_strategy("consecutive", max_dt_days=60)
@@ -186,8 +206,15 @@ class TestDem:
     def test_existing_dem_loaded(self, pz):
         pz.pz_dem_path.parent.mkdir(parents=True)
         with rasterio.open(
-            pz.pz_dem_path, "w", driver="GTiff", height=4, width=4, count=1, dtype="float32",
-            crs="EPSG:32632", transform=from_origin(0, 40, 10, 10),
+            pz.pz_dem_path,
+            "w",
+            driver="GTiff",
+            height=4,
+            width=4,
+            count=1,
+            dtype="float32",
+            crs="EPSG:32632",
+            transform=from_origin(0, 40, 10, 10),
         ) as dst:
             dst.write(np.ones((4, 4), dtype="float32"), 1)
         dem = pz.get_dem()
@@ -200,10 +227,14 @@ class TestPzFull:
             def pa_full(*a):
                 if exc:
                     raise exc
+
             return SimpleNamespace(pa_key=key, pa_full=pa_full)
 
-        monkeypatch.setattr(pz, "get_valid_pairs", lambda: [
-            mk("ok"), mk("val", ValueError), mk("assert", AssertionError)])
+        monkeypatch.setattr(
+            pz,
+            "get_valid_pairs",
+            lambda: [mk("ok"), mk("val", ValueError), mk("assert", AssertionError)],
+        )
         assert pz.pz_full(32632) == {"COMPLETE": ["ok"], "ABORT": ["val", "assert"]}
 
 
@@ -240,11 +271,17 @@ class TestMovingAreas:
             pz.add_moving_areas()
 
     def test_add_moving_areas_sums_all_maps(self, pz, monkeypatch):
-        monkeypatch.setattr(pz, "get_moving_areas", lambda n, m: [FakeMA(1), FakeMA(1), FakeMA(1)])
+        monkeypatch.setattr(
+            pz, "get_moving_areas", lambda n, m: [FakeMA(1), FakeMA(1), FakeMA(1)]
+        )
         assert int(pz.add_moving_areas().array[0, 0]) == 3
 
     def test_add_moving_areas_crops_mismatched_shapes(self, pz, monkeypatch):
-        mas = [FakeMA(1, (3, 3))] + [FakeMA(1, (3, 3))] * 2 + [FakeMA(1, (2, 2)), FakeMA(1, (3, 3))]
+        mas = (
+            [FakeMA(1, (3, 3))]
+            + [FakeMA(1, (3, 3))] * 2
+            + [FakeMA(1, (2, 2)), FakeMA(1, (3, 3))]
+        )
         monkeypatch.setattr(pz, "get_moving_areas", lambda n, m: mas)
         out = pz.add_moving_areas()
         assert out.array.dtype.kind == "i"
@@ -266,8 +303,15 @@ class TestVectorizeMultitemporal:
         data = np.zeros((40, 40), dtype="uint8")
         data[5:25, 5:25] = 1
         with rasterio.open(
-            vec / "PZ_moving-areas_round-0.tif", "w", driver="GTiff", height=40, width=40,
-            count=1, dtype="uint8", crs="EPSG:32632", transform=from_origin(500000, 4649000, 10, 10),
+            vec / "PZ_moving-areas_round-0.tif",
+            "w",
+            driver="GTiff",
+            height=40,
+            width=40,
+            count=1,
+            dtype="uint8",
+            crs="EPSG:32632",
+            transform=from_origin(500000, 4649000, 10, 10),
         ) as dst:
             dst.write(data, 1)
         return vec / "PZ_moving-areas_round-0.gpkg"

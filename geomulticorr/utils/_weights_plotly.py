@@ -48,6 +48,7 @@ input returns an empty figure carrying the reason as an annotation.
 ``gmc_functions`` on every ``import geomulticorr``, and re-exporting from here
 would make plotly a hard import-time requirement of the whole library.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -86,8 +87,15 @@ def _empty_figure(message: str = "No pairs to plot"):
         xaxis=dict(visible=False),
         yaxis=dict(visible=False),
         annotations=[
-            dict(text=message, xref="paper", yref="paper", x=0.5, y=0.5,
-                 showarrow=False, font=dict(size=14, color="#888")),
+            dict(
+                text=message,
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=0.5,
+                showarrow=False,
+                font=dict(size=14, color="#888"),
+            ),
         ],
     )
     return fig
@@ -127,15 +135,20 @@ def figure_weights(
     else:
         wanted = tuple(directions)
 
-    sensors = (frame["sensor"].fillna("").astype(str).tolist()
-               if "sensor" in frame.columns else [""] * len(frame))
+    sensors = (
+        frame["sensor"].fillna("").astype(str).tolist()
+        if "sensor" in frame.columns
+        else [""] * len(frame)
+    )
     groups = sorted(set(sensors))
     by_sensor = len(groups) > 1
     palette = sensor_colors(groups) if by_sensor else {}
 
     fig = go.Figure()
-    for direction, w_col, nmad_col in (("EW", "w_ew", "nmad_ew"),
-                                       ("NS", "w_ns", "nmad_ns")):
+    for direction, w_col, nmad_col in (
+        ("EW", "w_ew", "nmad_ew"),
+        ("NS", "w_ns", "nmad_ns"),
+    ):
         symbol, _ = WEIGHT_DIRECTION_MARKERS[direction]
         for group in (groups if by_sensor else [None]):
             sub = frame if group is None else frame[[s == group for s in sensors]]
@@ -143,20 +156,36 @@ def figure_weights(
             # list-of-lists rather than np.column_stack, so the float NMAD/CC
             # keep their dtype alongside the string columns.
             customdata = [
-                [n, c, d, sen] for n, c, d, sen in zip(
-                    sub[nmad_col].tolist(), sub["cc"].tolist(),
-                    sub["corr_direction"].tolist(), sub_sensors)
+                [n, c, d, sen]
+                for n, c, d, sen in zip(
+                    sub[nmad_col].tolist(),
+                    sub["cc"].tolist(),
+                    sub["corr_direction"].tolist(),
+                    sub_sensors,
+                )
             ]
             fig.add_trace(
                 go.Scatter(
-                    x=sub["dt_days"].tolist(), y=sub[w_col].tolist(), mode="markers",
-                    name=direction if group is None else f"{direction} · {group or '?'}",
+                    x=sub["dt_days"].tolist(),
+                    y=sub[w_col].tolist(),
+                    mode="markers",
+                    name=(
+                        direction if group is None else f"{direction} · {group or '?'}"
+                    ),
                     legendgroup=direction,
-                    text=sub["pa_key"].tolist(), customdata=customdata, opacity=0.75,
+                    text=sub["pa_key"].tolist(),
+                    customdata=customdata,
+                    opacity=0.75,
                     visible=direction in wanted,
-                    marker=dict(size=9, symbol=symbol,
-                                color=(WEIGHT_DIRECTION_COLORS[direction]
-                                       if group is None else palette[group])),
+                    marker=dict(
+                        size=9,
+                        symbol=symbol,
+                        color=(
+                            WEIGHT_DIRECTION_COLORS[direction]
+                            if group is None
+                            else palette[group]
+                        ),
+                    ),
                     hovertemplate=_HOVER.replace("$DIRECTION", direction),
                 )
             )

@@ -36,6 +36,7 @@ future CLI or test can render/capture it instead.
 The table layouts (titles, columns, styles, embedded rich markup) are kept
 identical to the original inline blocks in ``session.py`` / ``tio_inversion.py``.
 """
+
 from rich.table import Table
 
 from geomulticorr.core.console.console import _rich_console
@@ -43,7 +44,9 @@ from geomulticorr.core.console.console import _rich_console
 
 def print_register_thumbs_summary(rows, pzone_name, *, print_summary=True) -> Table:
     """Summary for ``Session.register_existing_thumbs``."""
-    table = Table(title=f"register_existing_thumbs — pzone '{pzone_name}'", show_lines=False)
+    table = Table(
+        title=f"register_existing_thumbs — pzone '{pzone_name}'", show_lines=False
+    )
     table.add_column("Source", style="default", no_wrap=True)
     table.add_column("Thumb", style="cyan", no_wrap=True)
     table.add_column("Status", style="default")
@@ -59,10 +62,10 @@ def print_register_thumbs_summary(rows, pzone_name, *, print_summary=True) -> Ta
 def print_sieve_bulk_summary(rows, target_resolution, *, print_summary=True) -> Table:
     """Summary for ``Session.sieve_bulk``."""
     table = Table(title="sieve_bulk — processed thumbs", show_lines=False)
-    table.add_column("Thumb",   style="cyan", no_wrap=True)
-    table.add_column("Sensor",  style="default")
+    table.add_column("Thumb", style="cyan", no_wrap=True)
+    table.add_column("Sensor", style="default")
     table.add_column("Res (m)", style="default", justify="right")
-    table.add_column("Status",  style="default")
+    table.add_column("Status", style="default")
     for row in rows:
         table.add_row(row["name"], row["sensor"], str(target_resolution), row["status"])
     if print_summary:
@@ -79,15 +82,21 @@ def print_prepare_correlation_summary(rows, *, print_summary=True) -> Table:
     identical to a uniform one in the console.
     """
     table = Table(title="prepare_pairs_correlation — summary", show_lines=False)
-    table.add_column("Pair",         style="cyan", no_wrap=True)
-    table.add_column("Directory",    style="dim")
-    table.add_column("Symlink",      style="dim")
-    table.add_column("Group",        style="dim")
+    table.add_column("Pair", style="cyan", no_wrap=True)
+    table.add_column("Directory", style="dim")
+    table.add_column("Symlink", style="dim")
+    table.add_column("Group", style="dim")
     table.add_column("Corr. params", style="dim")
-    table.add_column("Job Script",   style="dim")
+    table.add_column("Job Script", style="dim")
     for rec in rows:
-        table.add_row(rec["pair"], rec["directory"], rec["symlink"],
-                      rec.get("group", "—"), rec["params"], rec["script"])
+        table.add_row(
+            rec["pair"],
+            rec["directory"],
+            rec["symlink"],
+            rec.get("group", "—"),
+            rec["params"],
+            rec["script"],
+        )
     if print_summary:
         _rich_console.print(table)
     return table
@@ -127,13 +136,17 @@ def print_reset_outputs_summary(rows, *, print_summary=True) -> Table:
     table.add_column("Files deleted", justify="right")
     table.add_column("Status after")
     for rec in rows:
-        table.add_row(rec["pair"], rec["status_before"], rec["deleted"], rec["status_after"])
+        table.add_row(
+            rec["pair"], rec["status_before"], rec["deleted"], rec["status_after"]
+        )
     if print_summary:
         _rich_console.print(table)
     return table
 
 
-def print_extract_displacements_summary(rows, target_resolution, resampling, *, print_summary=True) -> Table:
+def print_extract_displacements_summary(
+    rows, target_resolution, resampling, *, print_summary=True
+) -> Table:
     """Summary for ``Session.extract_pairs_raw_displacements``.
 
     The ``Resampling`` column is only present when ``target_resolution`` is set.
@@ -148,7 +161,14 @@ def print_extract_displacements_summary(rows, target_resolution, resampling, *, 
     if target_resolution is not None:
         table.add_column("Resampling", justify="center", style="dim")
     for rec in rows:
-        row_data = [rec["pair"], rec["ew"], rec["ns"], rec["cc"], rec["plot"], rec["stats"]]
+        row_data = [
+            rec["pair"],
+            rec["ew"],
+            rec["ns"],
+            rec["cc"],
+            rec["plot"],
+            rec["stats"],
+        ]
         if target_resolution is not None:
             row_data.append(f"{resampling} @ {target_resolution} m")
         table.add_row(*row_data)
@@ -160,16 +180,20 @@ def print_extract_displacements_summary(rows, target_resolution, resampling, *, 
 def print_apply_corrections_summary(rows, *, print_summary=True) -> Table:
     """Summary for ``Session.apply_pairs_corrections``."""
     table = Table(title="apply_pairs_corrections — summary", show_lines=False)
-    table.add_column("Pair",        style="cyan", no_wrap=True)
+    table.add_column("Pair", style="cyan", no_wrap=True)
     table.add_column("Median corr", justify="center")
-    table.add_column("Ramp/Topo",   justify="center")
-    table.add_column("Stats",       justify="center")
-    table.add_column("EW corr",     justify="center")
-    table.add_column("NS corr",     justify="center")
+    table.add_column("Ramp/Topo", justify="center")
+    table.add_column("Stats", justify="center")
+    table.add_column("EW corr", justify="center")
+    table.add_column("NS corr", justify="center")
     for rec in rows:
         table.add_row(
-            rec["pair"], rec["median"], rec["ramp_topo"],
-            rec["stats"], rec["ew_corr"], rec["ns_corr"],
+            rec["pair"],
+            rec["median"],
+            rec["ramp_topo"],
+            rec["stats"],
+            rec["ew_corr"],
+            rec["ns_corr"],
         )
     if print_summary:
         _rich_console.print(table)

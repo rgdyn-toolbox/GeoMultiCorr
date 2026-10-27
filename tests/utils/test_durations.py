@@ -7,6 +7,7 @@ single source of truth for how ``"1Y"`` becomes a number of days, and it now
 feeds both explorers and the conditional-search threshold, so its edges are
 worth pinning.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -21,8 +22,15 @@ from geomulticorr.utils._durations import (
 class TestUnits:
     @pytest.mark.parametrize(
         "text, days",
-        [("30D", 30), ("1W", 7), ("2W", 14), ("1M", 30), ("6M", 180),
-         ("1Y", 365), ("10Y", 3650)],
+        [
+            ("30D", 30),
+            ("1W", 7),
+            ("2W", 14),
+            ("1M", 30),
+            ("6M", 180),
+            ("1Y", 365),
+            ("10Y", 3650),
+        ],
     )
     def test_every_unit(self, text, days):
         assert parse_dt_days(text) == days
@@ -57,15 +65,16 @@ class TestRejections:
 
     @pytest.mark.parametrize(
         "bad",
-        ["30",        # unit is mandatory
-         "1Y6M",      # no compound forms
-         "-5D",       # no sign
-         "1 Y",       # no internal whitespace
-         "Y",         # no bare unit
-         "",          # empty string
-         "abc",
-         "1.5Y",      # no fractions
-         "1H",        # unsupported unit
+        [
+            "30",  # unit is mandatory
+            "1Y6M",  # no compound forms
+            "-5D",  # no sign
+            "1 Y",  # no internal whitespace
+            "Y",  # no bare unit
+            "",  # empty string
+            "abc",
+            "1.5Y",  # no fractions
+            "1H",  # unsupported unit
         ],
     )
     def test_rejected(self, bad):
@@ -84,8 +93,16 @@ class TestRejections:
 class TestFormat:
     @pytest.mark.parametrize(
         "days, text",
-        [(365, "1Y"), (3650, "10Y"), (180, "6M"), (30, "1M"), (14, "2W"),
-         (7, "1W"), (45, "45D"), (1, "1D")],
+        [
+            (365, "1Y"),
+            (3650, "10Y"),
+            (180, "6M"),
+            (30, "1M"),
+            (14, "2W"),
+            (7, "1W"),
+            (45, "45D"),
+            (1, "1D"),
+        ],
     )
     def test_picks_the_most_readable_unit(self, days, text):
         assert format_dt_days(days) == text

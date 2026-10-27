@@ -2,27 +2,27 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # conftest.py
 # creation date: 2026-06-02.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -47,6 +47,7 @@ class MockRaster:
     - .res: tuple (res_x, res_y)
     - .copy(new_array): returns new MockRaster
     """
+
     data: np.ma.MaskedArray
     transform: Affine = field(
         default_factory=lambda: Affine(10.0, 0.0, 0.0, 0.0, -10.0, 0.0)
@@ -56,7 +57,8 @@ class MockRaster:
     def copy(self, new_array: np.ma.MaskedArray) -> "MockRaster":
         """Return a new MockRaster with updated data, same georeference."""
         return MockRaster(data=new_array, transform=self.transform, res=self.res)
-    #END def
+
+    # END def
 
     def reproject(self, ref: "MockRaster", **_) -> "MockRaster":
         """Regrid onto *ref*'s grid, mimicking geoutils.Raster.reproject.
@@ -74,7 +76,8 @@ class MockRaster:
             transform=ref.transform,
             res=ref.res,
         )
-    #END def
+
+    # END def
 
     def coords(self, grid: bool = True, force_offset: str = "ll", **_):
         """Map-coordinate meshgrids (x, y), mimicking geoutils.Raster.coords.
@@ -90,25 +93,34 @@ class MockRaster:
         if not grid:
             return x, y
         return np.meshgrid(x, y)
-    #END def
+
+    # END def
+
 
 # ---------------------------------------------------------------------------- #
 # Fixtures
 # ---------------------------------------------------------------------------- #
+
 
 @pytest.fixture
 def flat_raster() -> MockRaster:
     """10×10 raster of all zeros, no mask."""
     data = ma.array(np.zeros((10, 10)), mask=False)
     return MockRaster(data=data)
-#END def
+
+
+# END def
+
 
 @pytest.fixture
 def offset_raster() -> MockRaster:
     """10×10 raster of all 5.0, no mask. Used for MedianCentering tests."""
     data = ma.array(np.full((10, 10), 5.0), mask=False)
     return MockRaster(data=data)
-#END def
+
+
+# END def
+
 
 @pytest.fixture
 def ramp_raster() -> MockRaster:
@@ -122,7 +134,10 @@ def ramp_raster() -> MockRaster:
     i, j = np.mgrid[:10, :10]
     data = 0.1 * i + 0.2 * j + 1.0
     return MockRaster(data=ma.array(data, mask=False))
-#END def
+
+
+# END def
+
 
 @pytest.fixture
 def partial_mask_raster() -> MockRaster:
@@ -136,7 +151,10 @@ def partial_mask_raster() -> MockRaster:
     mask[0, 0] = True
     mask[9, 9] = True
     return MockRaster(data=ma.array(data, mask=mask))
-#END def
+
+
+# END def
+
 
 @pytest.fixture
 def dem_raster() -> MockRaster:
@@ -147,7 +165,10 @@ def dem_raster() -> MockRaster:
     """
     dem_data = np.random.default_rng(0).uniform(100, 500, (10, 10))
     return MockRaster(data=ma.array(dem_data, mask=False))
-#END def
+
+
+# END def
+
 
 @pytest.fixture
 def mixed_raster(dem_raster) -> MockRaster:

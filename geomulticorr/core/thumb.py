@@ -47,11 +47,11 @@ RES_TAG_PATTERN = re.compile(r"^[0-9]+(p[0-9]+)?m$")
 class Thumb:
     """
     Represents a single optical satellite image (thumbnail) in a processing zone.
-    
+
     A Thumb is a georeferenced raster file containing a satellite image from a specific
     sensor and date. Thumbs are the fundamental building blocks for creating image pairs
     and performing correlation analysis.
-    
+
     The filename must match the pattern ``<pzone>_YYYY-MM-DD_<sensor>.tif``,
     optionally followed by the ground resolution in metres:
     ``<pzone>_YYYY-MM-DD_<sensor>_<res>m.tif`` (``3m``, ``10m``, ``1p5m``).
@@ -60,16 +60,16 @@ class Thumb:
     def __init__(self, target_path):
         """
         Initialize a Thumb object from a raster file path.
-        
+
         Validates the filename against the expected pattern and extracts metadata
         (processing zone name, acquisition date, and sensor name) from the filename.
         Computes the footprint geometry and decimal year for temporal analysis.
-        
+
         :param target_path: Path to the optical image file (must be GeoTIFF format).
         :type target_path: str or Path
-        
+
         :raises AssertionError: If the file does not match the expected filename pattern.
-        
+
         :ivar th_path: Full path to the raster file.
         :ivar th_key: Filename without extension (e.g., ``pzone_YYYY-MM-DD_sensor``).
         :ivar th_pz_name: Processing zone name extracted from filename.
@@ -110,7 +110,10 @@ class Thumb:
                 f"'_'); expected <pzone>_YYYY-MM-DD_<sensor>[_<res>m].tif"
             )
         if len(fields) == 3:
-            (self.th_pz_name, self.th_date, self.th_sensor), self.th_res_tag = fields, ""
+            (self.th_pz_name, self.th_date, self.th_sensor), self.th_res_tag = (
+                fields,
+                "",
+            )
         elif len(fields) == 4 and RES_TAG_PATTERN.match(fields[3]):
             self.th_pz_name, self.th_date, self.th_sensor, self.th_res_tag = fields
         else:
@@ -142,12 +145,16 @@ class Thumb:
         self.th_res = self._read_resolution(ras)
         if self.th_res_tag:
             tag_res = float(self.th_res_tag[:-1].replace("p", "."))
-            if self.th_res == self.th_res and abs(tag_res - self.th_res) > 0.01 * tag_res:
+            if (
+                self.th_res == self.th_res
+                and abs(tag_res - self.th_res) > 0.01 * tag_res
+            ):
                 logger.warning(
                     f"{target_path.name}: filename says {self.th_res_tag} but the "
                     f"header pixel size is {self.th_res:g}; the header is used"
                 )
-    #END def
+
+    # END def
 
     @staticmethod
     def _read_resolution(ras) -> float:
@@ -169,10 +176,10 @@ class Thumb:
     def to_pdserie(self):
         """
         Convert Thumb metadata to a pandas Series.
-        
+
         Serializes all thumbnail attributes into a pandas Series for easy integration
         with GeoDataFrames or tabular analyses.
-        
+
         :return: Series containing thumb metadata (date, sensor, coordinates, etc.).
         :rtype: pd.Series
         """
@@ -191,30 +198,32 @@ class Thumb:
                 "geometry": self.geometry,
             }
         )
-    #END def
+
+    # END def
 
     def __add__(self, right):
         """
         Create an image pair by adding two Thumbs together.
-        
+
         Overloads the ``+`` operator to create a Pair object from two Thumb instances.
         Syntax: ``pair = thumb_a + thumb_b``
-        
+
         :param right: The second Thumb to pair with this one.
         :type right: Thumb
-        
+
         :return: A Pair object containing both thumbs.
         :rtype: gmc_pair.Pair
         """
         return gmc_pair.Pair(left=self, right=right)
-    #END def
+
+    # END def
 
     def __repr__(self):
         """
         Return a formatted string representation of the Thumb.
-        
+
         Displays key metadata (processing zone, date, sensor) in a readable format.
-        
+
         :return: Formatted string representation.
         :rtype: str
         """
@@ -229,47 +238,51 @@ sensor : {self.th_sensor}
     def get_ds(self):
         """
         Open and return the GDAL dataset for this Thumb.
-        
+
         Provides access to the underlying GDAL raster for advanced geospatial operations.
-        
+
         :return: GDAL dataset object.
         :rtype: osgeo.gdal.Dataset
         """
         return gdal.Open(str(self.th_path))
-    #END def
+
+    # END def
 
     def get_raster(self):
         """
         Load and return the Thumb as a geoutils Raster object.
-        
+
         Provides convenient access to the raster array and metadata through the
         geoutils library for analysis and manipulation.
-        
+
         :return: Raster object wrapping the thumbnail image.
         :rtype: geoutils.Raster
         """
         return gu.Raster(str(self.th_path))
-    #END def
+
+    # END def
 
     def show_info(self):
         """
         Display detailed information about the Thumb raster.
-        
+
         Prints metadata such as dimensions, coordinate system, bands, and data type.
-        
+
         :return: None
         """
         self.get_raster().info()
-    #END def
+
+    # END def
 
     def plot(self):
         """
         Display a visualization of the Thumb raster.
-        
+
         Renders the image as an interactive or static plot depending on the
         environment (Jupyter notebooks produce interactive plots).
-        
+
         :return: None
         """
         self.get_raster().plot()
-    #END def
+
+    # END def

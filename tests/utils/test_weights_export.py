@@ -35,6 +35,7 @@ Two properties carry the weight here:
 * the matplotlib figure is **always closed**, since the explorer's save button
   would otherwise leak one figure per click.
 """
+
 from __future__ import annotations
 
 import sys
@@ -55,33 +56,51 @@ from geomulticorr.utils._weights_frame import weights_frame  # noqa: E402
 @pytest.fixture
 def frame():
     return weights_frame(
-        ["pz_a", "pz_b", "pz_c"], [30.0, 90.0, 200.0],
-        [0.9, 0.6, 0.3], [0.8, 0.5, 0.2],
-        nmad_ew=[0.2, 0.3, 0.4], nmad_ns=[0.25, 0.35, 0.45],
-        cc=[0.8, 0.7, 0.6], corr_direction=["Forward", "Forward", "Backward"],
+        ["pz_a", "pz_b", "pz_c"],
+        [30.0, 90.0, 200.0],
+        [0.9, 0.6, 0.3],
+        [0.8, 0.5, 0.2],
+        nmad_ew=[0.2, 0.3, 0.4],
+        nmad_ns=[0.25, 0.35, 0.45],
+        cc=[0.8, 0.7, 0.6],
+        corr_direction=["Forward", "Forward", "Backward"],
     )
 
 
 @pytest.fixture
 def quality_params():
-    return dict(weight_mode="quality", combine="geomean", cc_gamma=1.5,
-                invert=False, sharpness=5.0, slope=2.0, min_weight=0.1,
-                w_min=0.0, alpha=1 / 3, beta=1 / 3, gamma=1 / 3, dt_range=None)
+    return dict(
+        weight_mode="quality",
+        combine="geomean",
+        cc_gamma=1.5,
+        invert=False,
+        sharpness=5.0,
+        slope=2.0,
+        min_weight=0.1,
+        w_min=0.0,
+        alpha=1 / 3,
+        beta=1 / 3,
+        gamma=1 / 3,
+        dt_range=None,
+    )
 
 
 class TestFigureStem:
     """A pure function of the parameters: no timestamp, no counts."""
 
     def test_same_parameters_give_the_same_stem(self, quality_params):
-        first = weights_figure_stem(inversion_name="PDL", pz_name="PasDeLours",
-                                    **quality_params)
-        second = weights_figure_stem(inversion_name="PDL", pz_name="PasDeLours",
-                                     **quality_params)
+        first = weights_figure_stem(
+            inversion_name="PDL", pz_name="PasDeLours", **quality_params
+        )
+        second = weights_figure_stem(
+            inversion_name="PDL", pz_name="PasDeLours", **quality_params
+        )
         assert first == second
 
     def test_stem_names_the_pzone_inversion_and_mode(self, quality_params):
-        stem = weights_figure_stem(inversion_name="PDL_spot",
-                                   pz_name="PasDeLours", **quality_params)
+        stem = weights_figure_stem(
+            inversion_name="PDL_spot", pz_name="PasDeLours", **quality_params
+        )
         assert stem.startswith("PasDeLours_PDL_spot_weights_quality")
 
     def test_missing_pzone_becomes_all(self, quality_params):
@@ -118,20 +137,26 @@ class TestFigureStem:
         assert "invert" in on and "invert" not in off
 
     def test_floats_do_not_leak_repr_noise(self):
-        stem = weights_figure_stem(weight_mode="quality", combine="wmean",
-                                   alpha=1 / 3, beta=1 / 3, gamma=1 / 3)
+        stem = weights_figure_stem(
+            weight_mode="quality", combine="wmean", alpha=1 / 3, beta=1 / 3, gamma=1 / 3
+        )
         assert "0.3333333333333333" not in stem
 
     def test_stem_is_filesystem_safe(self):
-        stem = weights_figure_stem(inversion_name="a/b c", pz_name="x:y",
-                                   weight_mode="quality", combine="geo mean")
+        stem = weights_figure_stem(
+            inversion_name="a/b c",
+            pz_name="x:y",
+            weight_mode="quality",
+            combine="geo mean",
+        )
         assert not set(stem) & set("/\\: ")
 
 
 class TestSaveWeightsFigure:
     def test_writes_the_requested_formats(self, frame, tmp_path):
-        paths = save_weights_figure(frame, tmp_path, formats=("html", "png"),
-                                    stem="fig")
+        paths = save_weights_figure(
+            frame, tmp_path, formats=("html", "png"), stem="fig"
+        )
         assert set(paths) == {"html", "png"}
         for path in paths.values():
             assert path.exists() and path.stat().st_size > 0
@@ -142,13 +167,15 @@ class TestSaveWeightsFigure:
         assert (out / "fig.png").exists()
 
     def test_format_strings_are_normalised(self, frame, tmp_path):
-        paths = save_weights_figure(frame, tmp_path, formats=(".PNG", "png"),
-                                    stem="fig")
+        paths = save_weights_figure(
+            frame, tmp_path, formats=(".PNG", "png"), stem="fig"
+        )
         assert set(paths) == {"png"}
 
     def test_a_single_format_string_is_accepted(self, frame, tmp_path):
-        assert set(save_weights_figure(frame, tmp_path, formats="pdf",
-                                       stem="fig")) == {"pdf"}
+        assert set(save_weights_figure(frame, tmp_path, formats="pdf", stem="fig")) == {
+            "pdf"
+        }
 
     def test_overwrite_replaces_in_place(self, frame, tmp_path):
         save_weights_figure(frame, tmp_path, formats="png", stem="fig")
@@ -157,10 +184,11 @@ class TestSaveWeightsFigure:
 
     def test_overwrite_false_appends_a_counter(self, frame, tmp_path):
         save_weights_figure(frame, tmp_path, formats="png", stem="fig")
-        save_weights_figure(frame, tmp_path, formats="png", stem="fig",
-                            overwrite=False)
+        save_weights_figure(frame, tmp_path, formats="png", stem="fig", overwrite=False)
         assert sorted(p.name for p in tmp_path.glob("*.png")) == [
-            "fig.png", "fig_01.png"]
+            "fig.png",
+            "fig_01.png",
+        ]
 
     def test_unknown_format_raises(self, frame, tmp_path):
         with pytest.raises(ValueError, match="Unknown format"):
@@ -171,14 +199,24 @@ class TestSaveWeightsFigure:
             save_weights_figure(weights_frame([], [], [], []), tmp_path)
 
     def test_one_direction_only(self, frame, tmp_path):
-        paths = save_weights_figure(frame, tmp_path, formats=("html", "png"),
-                                    stem="fig", view_kwargs={"directions": "EW"})
+        paths = save_weights_figure(
+            frame,
+            tmp_path,
+            formats=("html", "png"),
+            stem="fig",
+            view_kwargs={"directions": "EW"},
+        )
         assert len(paths) == 2
 
     def test_a_backend_specific_kwarg_is_dropped_not_raised(self, frame, tmp_path):
         """`height` is plotly-only; matplotlib must not choke on it."""
-        paths = save_weights_figure(frame, tmp_path, formats=("html", "png"),
-                                    stem="fig", view_kwargs={"height": 700})
+        paths = save_weights_figure(
+            frame,
+            tmp_path,
+            formats=("html", "png"),
+            stem="fig",
+            view_kwargs={"height": 700},
+        )
         assert set(paths) == {"html", "png"}
 
 
@@ -212,8 +250,9 @@ class TestKaleidoIsNeverNeeded:
 
     def test_kaleido_is_not_imported(self, frame, tmp_path):
         assert "kaleido" not in sys.modules
-        save_weights_figure(frame, tmp_path, formats=("html", "png", "pdf", "svg"),
-                            stem="fig")
+        save_weights_figure(
+            frame, tmp_path, formats=("html", "png", "pdf", "svg"), stem="fig"
+        )
         assert "kaleido" not in sys.modules
 
 
@@ -224,21 +263,36 @@ class TestSensorWeightsInTheStem:
     def test_changes_the_stem_for_every_mode(self, quality_params, mode):
         params = {**quality_params, "weight_mode": mode}
         plain = weights_figure_stem(inversion_name="i", pz_name="pz", **params)
-        with_sw = weights_figure_stem(inversion_name="i", pz_name="pz",
-                                      **{**params, "sensor_weights": {"spot": 0.5}})
+        with_sw = weights_figure_stem(
+            inversion_name="i",
+            pz_name="pz",
+            **{**params, "sensor_weights": {"spot": 0.5}},
+        )
         assert with_sw != plain
         assert with_sw.endswith("_swspot0.5")
 
     def test_order_independent(self, quality_params):
-        a = weights_figure_stem(inversion_name="i", pz_name="pz", **{
-            **quality_params, "sensor_weights": {"spot": 1.0, "planetscope": 0.5}})
-        b = weights_figure_stem(inversion_name="i", pz_name="pz", **{
-            **quality_params, "sensor_weights": {"planetscope": 0.5, "spot": 1.0}})
+        a = weights_figure_stem(
+            inversion_name="i",
+            pz_name="pz",
+            **{**quality_params, "sensor_weights": {"spot": 1.0, "planetscope": 0.5}},
+        )
+        b = weights_figure_stem(
+            inversion_name="i",
+            pz_name="pz",
+            **{**quality_params, "sensor_weights": {"planetscope": 0.5, "spot": 1.0}},
+        )
         assert a == b
         assert a.endswith("_swplanetscope0.5-spot1")
 
     def test_none_and_empty_add_nothing(self, quality_params):
         plain = weights_figure_stem(inversion_name="i", pz_name="pz", **quality_params)
         for value in (None, {}):
-            assert weights_figure_stem(inversion_name="i", pz_name="pz",
-                                       **{**quality_params, "sensor_weights": value}) == plain
+            assert (
+                weights_figure_stem(
+                    inversion_name="i",
+                    pz_name="pz",
+                    **{**quality_params, "sensor_weights": value},
+                )
+                == plain
+            )

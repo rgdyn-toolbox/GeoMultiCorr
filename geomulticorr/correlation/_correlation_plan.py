@@ -56,6 +56,7 @@ Public API:
 - :func:`plan_path` — the canonical location for a named plan.
 - :func:`resolve_pair_params` — the ``scalar -> group -> override`` precedence.
 """
+
 from __future__ import annotations
 
 import json
@@ -69,11 +70,24 @@ from geomulticorr._logging import logger
 #: Assumptions a plan records.  Exactly the derivation inputs, so a reader can
 #: reproduce the numbers without guessing what the explorer's sliders were on.
 PLAN_ASSUMPTION_KEYS: tuple[str, ...] = (
-    "velocity_m_yr", "footprint_m", "c_px", "k", "coreg_px", "margin_px",
-    "flow_azimuth_deg", "strain_rate_per_yr", "corr_algorithm",
-    "subpixel_mode", "tau_days", "dt_bin_ratio",
-    "explicit_search", "explicit_search_above_days",
-    "uniform_kernel", "uniform_kernel_px", "uniform_search", "uniform_search_box",
+    "velocity_m_yr",
+    "footprint_m",
+    "c_px",
+    "k",
+    "coreg_px",
+    "margin_px",
+    "flow_azimuth_deg",
+    "strain_rate_per_yr",
+    "corr_algorithm",
+    "subpixel_mode",
+    "tau_days",
+    "dt_bin_ratio",
+    "explicit_search",
+    "explicit_search_above_days",
+    "uniform_kernel",
+    "uniform_kernel_px",
+    "uniform_search",
+    "uniform_search_box",
 )
 
 #: ASP parameters a group or an override may carry.  A strict subset of
@@ -81,8 +95,14 @@ PLAN_ASSUMPTION_KEYS: tuple[str, ...] = (
 #: signature, so the resolved dict can be splatted straight into
 #: ``build_correlation_params`` without filtering.
 PLAN_PARAM_KEYS: tuple[str, ...] = (
-    "corr_algorithm", "corr_kernel", "corr_search", "corr_xthreshold",
-    "corr_seed_mode", "subpixel_mode", "subpixel_kernel", "prefilter_mode",
+    "corr_algorithm",
+    "corr_kernel",
+    "corr_search",
+    "corr_xthreshold",
+    "corr_seed_mode",
+    "subpixel_mode",
+    "subpixel_kernel",
+    "prefilter_mode",
     "cost_mode",
 )
 
@@ -123,7 +143,10 @@ def plan_path(directory: pathlib.Path | str, name: str = "default") -> pathlib.P
     :param name: Plan name; ``"default"`` when unnamed.
     :returns: ``<directory>/correlation_plan_<name>.json``.
     """
-    safe = "".join(c if (c.isalnum() or c in "-_") else "-" for c in str(name)) or "default"
+    safe = (
+        "".join(c if (c.isalnum() or c in "-_") else "-" for c in str(name))
+        or "default"
+    )
     return pathlib.Path(directory) / f"correlation_plan_{safe}.json"
 
 
@@ -165,10 +188,12 @@ def build_correlation_plan(
         "relevant_params": sorted(str(p) for p in (relevant_params or [])),
         "dt_bin_edges": _jsonable(list(dt_bin_edges or [])),
         "groups": {
-            str(key): _jsonable(dict(block)) for key, block in dict(groups or {}).items()
+            str(key): _jsonable(dict(block))
+            for key, block in dict(groups or {}).items()
         },
         "overrides": {
-            str(key): _jsonable(dict(block)) for key, block in dict(overrides or {}).items()
+            str(key): _jsonable(dict(block))
+            for key, block in dict(overrides or {}).items()
         },
         "pairs": [_jsonable(dict(row)) for row in (pairs or [])],
         "not_recorded_here": [
@@ -346,8 +371,9 @@ _INPUT_FLAG_TO_ASP_KEY = {
 }
 
 
-def input_params_differ_from_file(path: pathlib.Path | str,
-                                  input_params: Mapping[str, Any]) -> bool:
+def input_params_differ_from_file(
+    path: pathlib.Path | str, input_params: Mapping[str, Any]
+) -> bool:
     """Whether the input-encoding settings differ from the file on disk.
 
     Companion of :func:`params_differ_from_file` for :data:`INPUT_PARAM_KEYS`,

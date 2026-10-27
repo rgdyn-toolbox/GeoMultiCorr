@@ -74,8 +74,8 @@ def variance_weights(stack, frac_discard=0.6, inset=33, step=2):
             f"region), so it needs a grid larger than {2 * inset + 1} px on both "
             f"axes — got {ny}x{nx}. Use weight_mode='file' or 'none'."
         )
-    row0 = inset                                   # irec1 (0-based)
-    row1 = ny - 1 - inset                          # irec2
+    row0 = inset  # irec1 (0-based)
+    row1 = ny - 1 - inset  # irec2
     rows = np.arange(row0, row1 + 1, step)
 
     first = mask.argmax(axis=1)
@@ -92,11 +92,11 @@ def variance_weights(stack, frac_discard=0.6, inset=33, step=2):
             lo, hi = first[r] + inset, last[r] - inset
             if hi < lo:
                 continue
-            row = data[k, r, lo:hi + 1:step]
-            m = mask[r, lo:hi + 1:step] & _valid(row)
+            row = data[k, r, lo : hi + 1 : step]
+            m = mask[r, lo : hi + 1 : step] & _valid(row)
             vals.append(row[m])
         v = np.concatenate(vals).astype(np.float64)
-        sig[k] = np.sqrt(np.mean(v**2) - np.mean(v)**2)
+        sig[k] = np.sqrt(np.mean(v**2) - np.mean(v) ** 2)
     w = 1.0 / sig
     return w / w.mean()
 
@@ -118,8 +118,9 @@ def image_equalization_weights(pair_img, n_dates, rcond=1e-6):
     return w
 
 
-def invert_stack(stack, dates, t, cfg: TIOConfig = None,
-                 pair_weights=None) -> xr.Dataset:
+def invert_stack(
+    stack, dates, t, cfg: TIOConfig = None, pair_weights=None
+) -> xr.Dataset:
     """Run the TIO inversion of a (pair, y, x) stack.
 
     Parameters
@@ -135,8 +136,7 @@ def invert_stack(stack, dates, t, cfg: TIOConfig = None,
     t = np.asarray(t, np.float64)
     S, N = len(dates), stack.sizes["pair"]
 
-    pair_img = pair_image_indices(stack["date1"].values,
-                                  stack["date2"].values, dates)
+    pair_img = pair_image_indices(stack["date1"].values, stack["date2"].values, dates)
     J = incidence_matrix(pair_img, S)
 
     w_fixed = np.ones(N)
@@ -144,8 +144,11 @@ def invert_stack(stack, dates, t, cfg: TIOConfig = None,
     if cfg.weight_mode == "variance":
         # pair_weights may hold precomputed full-domain variance weights
         # (useful when inverting a spatial subset)
-        w_fixed = (np.asarray(pair_weights, np.float64) if pair_weights
-                   is not None else variance_weights(stack, cfg.frac_discard))
+        w_fixed = (
+            np.asarray(pair_weights, np.float64)
+            if pair_weights is not None
+            else variance_weights(stack, cfg.frac_discard)
+        )
     elif cfg.weight_mode == "file":
         if pair_weights is None:
             raise ValueError("weight_mode='file' requires pair_weights")
@@ -154,34 +157,64 @@ def invert_stack(stack, dates, t, cfg: TIOConfig = None,
         w_norm = w_norm * image_equalization_weights(pair_img, S)
 
     ops = Operators(
-        J=J, pair_img=pair_img, t=t, w_fixed=w_fixed, w_norm=w_norm,
-        quality=(np.ones(S) if cfg.image_quality is None
-                 else np.asarray(cfg.image_quality, np.float64)),
-        shift=(np.zeros(N) if cfg.shift is None
-               else np.asarray(cfg.shift, np.float64)),
-        cfg=cfg)
+        J=J,
+        pair_img=pair_img,
+        t=t,
+        w_fixed=w_fixed,
+        w_norm=w_norm,
+        quality=(
+            np.ones(S)
+            if cfg.image_quality is None
+            else np.asarray(cfg.image_quality, np.float64)
+        ),
+        shift=(np.zeros(N) if cfg.shift is None else np.asarray(cfg.shift, np.float64)),
+        cfg=cfg,
+    )
 
     stack_t = stack.transpose("y", "x", "pair")
     if stack_t.chunks is not None:
         stack_t = stack_t.chunk({"pair": -1})
     out = xr.apply_ufunc(
-        invert_block, stack_t,
+        invert_block,
+        stack_t,
         kwargs={"ops": ops},
         input_core_dims=[["pair"]],
-        output_core_dims=[["date"], ["date"], ["pair_out"], [], ["date"],
-                          ["date"], [], [], [], []],
+        output_core_dims=[
+            ["date"],
+            ["date"],
+            ["pair_out"],
+            [],
+            ["date"],
+            ["date"],
+            [],
+            [],
+            [],
+            [],
+        ],
         dask="parallelized",
         output_dtypes=[np.float32] * 10,
         dask_gufunc_kwargs={"output_sizes": {"date": S, "pair_out": N}},
     )
-    names = ["cum_disp", "cum_disp_smooth", "residual", "rms",
-             "rms_per_date", "n_pairs_per_date", "n_images", "n_pairs",
-             "rank_defect", "var_ini"]
+    names = [
+        "cum_disp",
+        "cum_disp_smooth",
+        "residual",
+        "rms",
+        "rms_per_date",
+        "n_pairs_per_date",
+        "n_images",
+        "n_pairs",
+        "rank_defect",
+        "var_ini",
+    ]
     ds = xr.Dataset(dict(zip(names, out)))
     ds = ds.assign_coords(
-        date=dates, time=("date", t),
-        pair_out=[f"{a}-{b}" for a, b in zip(stack["date1"].values,
-                                             stack["date2"].values)])
+        date=dates,
+        time=("date", t),
+        pair_out=[
+            f"{a}-{b}" for a, b in zip(stack["date1"].values, stack["date2"].values)
+        ],
+    )
     ds["pair_weight"] = ("pair_out", w_fixed * w_norm)
     ds["cum_disp"] = ds.cum_disp.where(ds.cum_disp < 9990.0)
     ds["cum_disp_smooth"] = ds.cum_disp_smooth.where(ds.cum_disp_smooth < 9990.0)

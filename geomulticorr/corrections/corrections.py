@@ -63,6 +63,7 @@ Example::
     >>> xc, yc = make_corrections(xDisp, yDisp, pipeline,
     ...                            x_stable=x_stable, y_stable=y_stable, dem=dem)
 """
+
 from __future__ import annotations
 
 import copy
@@ -130,6 +131,7 @@ class BaseCorrection(ABC):
         :rtype: geoutils.Raster
         """
         return reference.copy(new_array=new_ma)
+
     # END def
 
     @staticmethod
@@ -174,6 +176,7 @@ class BaseCorrection(ABC):
                 logger.info(f"{step}: DEM regridded onto {describe_grid(raster)}")
 
         return ma.filled(dem.data, np.nan).astype(float)
+
     # END def
 
     @staticmethod
@@ -194,6 +197,7 @@ class BaseCorrection(ABC):
         if isinstance(stable_mask, gu.Vector):
             return stable_mask.ds
         return gpd.read_file(stable_mask)
+
     # END def
 
     @staticmethod
@@ -250,6 +254,7 @@ class BaseCorrection(ABC):
             all_touched=False,
             invert=True,  # True = inside polygon = moving area
         )
+
     # END def
 
     @staticmethod
@@ -305,6 +310,7 @@ class BaseCorrection(ABC):
         if dem_arr is not None:
             fit = fit & np.isfinite(dem_arr)
         return fit
+
     # END def
 
     # --------------------------------------------------------------------------- #
@@ -340,6 +346,7 @@ class BaseCorrection(ABC):
             f"{type(self).__name__} does not implement fit(). "
             "If this is a mask, call generate_mask() or apply() instead."
         )
+
     # END def
 
     def apply(self, raster: gu.Raster) -> gu.Raster:
@@ -357,19 +364,16 @@ class BaseCorrection(ABC):
         :raises RuntimeError: If :meth:`fit` has not been called yet.
         """
         if not self._fit_called:
-            raise RuntimeError(
-                f"Call fit() before apply() on {type(self).__name__}."
-            )
-        valid     = ~np.ma.getmaskarray(raster.data)
-        filled    = ma.filled(raster.data, 0.0).astype(float)
+            raise RuntimeError(f"Call fit() before apply() on {type(self).__name__}.")
+        valid = ~np.ma.getmaskarray(raster.data)
+        filled = ma.filled(raster.data, 0.0).astype(float)
         corrected = np.where(valid, filled - self._surface, filled)
-        new_mask  = np.ma.getmaskarray(raster.data) | ~np.isfinite(corrected)
+        new_mask = np.ma.getmaskarray(raster.data) | ~np.isfinite(corrected)
         return self._copy_raster(raster, ma.array(corrected, mask=new_mask))
+
     # END def
 
-    def fit_and_apply(
-        self, raster: gu.Raster, stable_mask=None, **kwargs
-    ) -> gu.Raster:
+    def fit_and_apply(self, raster: gu.Raster, stable_mask=None, **kwargs) -> gu.Raster:
         """Estimate parameters and apply the correction in a single call.
 
         Equivalent to::
@@ -384,6 +388,7 @@ class BaseCorrection(ABC):
         :rtype: geoutils.Raster
         """
         return self.fit(raster, stable_mask=stable_mask, **kwargs).apply(raster)
+
     # END def
 
     def __add__(self, other: BaseCorrection) -> CorrectionPipeline:
@@ -406,10 +411,12 @@ class BaseCorrection(ABC):
         if isinstance(other, CorrectionPipeline):
             return CorrectionPipeline([self] + other.steps)
         return CorrectionPipeline([self, other])
+
     # END def
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}()"
+
     # END def
 
 
@@ -434,6 +441,7 @@ class CorrectionPipeline(BaseCorrection):
 
     def __init__(self, steps: list[BaseCorrection]) -> None:
         self.steps = list(steps)
+
     # END def
 
     def __add__(self, other: BaseCorrection) -> CorrectionPipeline:
@@ -446,11 +454,10 @@ class CorrectionPipeline(BaseCorrection):
         if isinstance(other, CorrectionPipeline):
             return CorrectionPipeline(self.steps + other.steps)
         return CorrectionPipeline(self.steps + [other])
+
     # END def
 
-    def fit(
-        self, raster: gu.Raster, stable_mask=None, **kwargs
-    ) -> CorrectionPipeline:
+    def fit(self, raster: gu.Raster, stable_mask=None, **kwargs) -> CorrectionPipeline:
         """Fit each step sequentially on the residual from the previous step.
 
         After fitting, the pipeline is ready to :meth:`apply` to any raster
@@ -471,6 +478,7 @@ class CorrectionPipeline(BaseCorrection):
             residual = step.apply(residual)
         self._fit_called = True
         return self
+
     # END def
 
     def apply(self, raster: gu.Raster) -> gu.Raster:
@@ -487,11 +495,10 @@ class CorrectionPipeline(BaseCorrection):
         for step in self.steps:
             raster = step.apply(raster)
         return raster
+
     # END def
 
-    def fit_and_apply(
-        self, raster: gu.Raster, stable_mask=None, **kwargs
-    ) -> gu.Raster:
+    def fit_and_apply(self, raster: gu.Raster, stable_mask=None, **kwargs) -> gu.Raster:
         """Fit and apply the pipeline in a single call.
 
         :param raster: Displacement raster to fit against and correct.
@@ -502,6 +509,7 @@ class CorrectionPipeline(BaseCorrection):
         :rtype: geoutils.Raster
         """
         return self.fit(raster, stable_mask=stable_mask, **kwargs).apply(raster)
+
     # END def
 
     @property
@@ -516,11 +524,13 @@ class CorrectionPipeline(BaseCorrection):
             i: {"step": type(s).__name__, "params": getattr(s, "meta", {})}
             for i, s in enumerate(self.steps)
         }
+
     # END def
 
     def __repr__(self) -> str:
         names = " -> ".join(type(s).__name__ for s in self.steps)
         return f"CorrectionPipeline([{names}])"
+
     # END def
 
 
@@ -553,11 +563,10 @@ class MedianCentering(BaseCorrection):
             raise ValueError("stat must be 'median' or 'mean'")
         self.stat = stat
         self.meta: dict = {}
+
     # END def
 
-    def fit(
-        self, raster: gu.Raster, stable_mask=None, **kwargs
-    ) -> MedianCentering:
+    def fit(self, raster: gu.Raster, stable_mask=None, **kwargs) -> MedianCentering:
         """Compute the scalar shift from stable pixels.
 
         Sets ``self._surface`` to the estimated scalar (broadcastable over
@@ -571,13 +580,17 @@ class MedianCentering(BaseCorrection):
         :rtype: MedianCentering
         """
         fit_mask = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform,
+            stable_mask,
+            raster.data,
+            raster.data.shape,
+            raster.transform,
             crs=getattr(raster, "crs", None),
         )
         self._surface = compute_shift(raster.data, fit_mask, self.stat)
         self.meta = {"shift": self._surface}
         self._fit_called = True
         return self
+
     # END def
     # apply() inherited from BaseCorrection — scalar broadcasts over the array
 
@@ -608,11 +621,10 @@ class RampCorrection(BaseCorrection):
     def __init__(self, lambda_reg: float = 1e-6) -> None:
         self.lambda_reg = lambda_reg
         self.meta: dict = {}
+
     # END def
 
-    def fit(
-        self, raster: gu.Raster, stable_mask=None, **kwargs
-    ) -> RampCorrection:
+    def fit(self, raster: gu.Raster, stable_mask=None, **kwargs) -> RampCorrection:
         """Fit the linear ramp on stable pixels.
 
         :param raster: Displacement raster from which to estimate the ramp.
@@ -624,7 +636,10 @@ class RampCorrection(BaseCorrection):
         :raises ValueError: If fewer than 4 valid stable pixels are available.
         """
         fit_mask = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform,
+            stable_mask,
+            raster.data,
+            raster.data.shape,
+            raster.transform,
             crs=getattr(raster, "crs", None),
         )
         if fit_mask.sum() < 4:
@@ -637,6 +652,7 @@ class RampCorrection(BaseCorrection):
         self.meta = {"a": a, "b": b, "d": d, "r2": r2}
         self._fit_called = True
         return self
+
     # END def
 
 
@@ -677,11 +693,10 @@ class TopoCorrection(BaseCorrection):
         self.order = order
         self.lambda_reg = lambda_reg
         self.meta: dict = {}
+
     # END def
 
-    def fit(
-        self, raster: gu.Raster, stable_mask=None, **kwargs
-    ) -> TopoCorrection:
+    def fit(self, raster: gu.Raster, stable_mask=None, **kwargs) -> TopoCorrection:
         """Fit the ramp + DEM elevation trend on stable pixels.
 
         :param raster: Displacement raster to correct.
@@ -700,7 +715,11 @@ class TopoCorrection(BaseCorrection):
             raise ValueError("TopoCorrection.fit() requires dem= kwarg.")
         dem_arr = self._dem_array_on_grid(dem, raster, "TopoCorrection")
         fit_mask = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform, dem_arr,
+            stable_mask,
+            raster.data,
+            raster.data.shape,
+            raster.transform,
+            dem_arr,
             crs=getattr(raster, "crs", None),
         )
         min_px = 5 if self.order == "linear" else 8
@@ -714,21 +733,31 @@ class TopoCorrection(BaseCorrection):
                 raster.data, dem_arr, fit_mask, self.lambda_reg
             )
             self.meta = {
-                "row_slope": a_row, "col_slope": b_col,
-                "dem_slope": c_pred, "intercept": d, "r2": r2,
+                "row_slope": a_row,
+                "col_slope": b_col,
+                "dem_slope": c_pred,
+                "intercept": d,
+                "r2": r2,
             }
         else:
-            g, a2, b2, cxy, ax, by, fp, self._surface, r2 = fit_quadratic_with_predictor(
-                raster.data, dem_arr, fit_mask, self.lambda_reg
+            g, a2, b2, cxy, ax, by, fp, self._surface, r2 = (
+                fit_quadratic_with_predictor(
+                    raster.data, dem_arr, fit_mask, self.lambda_reg
+                )
             )
             self.meta = {
-                "c_bias":   g,   "c_row2":   a2,
-                "c_col2":   b2,  "c_rowcol": cxy,
-                "c_row":    ax,  "c_col":    by,
-                "c_dem":    fp,  "r2":       r2,
+                "c_bias": g,
+                "c_row2": a2,
+                "c_col2": b2,
+                "c_rowcol": cxy,
+                "c_row": ax,
+                "c_col": by,
+                "c_dem": fp,
+                "r2": r2,
             }
         self._fit_called = True
         return self
+
     # END def
 
 
@@ -779,11 +808,10 @@ class TopoRampCorrection(BaseCorrection):
         self.order = order
         self.lambda_reg = lambda_reg
         self.meta: dict = {}
+
     # END def
 
-    def fit(
-        self, raster: gu.Raster, stable_mask=None, **kwargs
-    ) -> TopoRampCorrection:
+    def fit(self, raster: gu.Raster, stable_mask=None, **kwargs) -> TopoRampCorrection:
         """Fit the ramp + DEM elevation trend on stable pixels.
 
         :param raster: Displacement raster to correct.
@@ -802,7 +830,11 @@ class TopoRampCorrection(BaseCorrection):
             raise ValueError("TopoRampCorrection.fit() requires dem= kwarg.")
         dem_arr = self._dem_array_on_grid(dem, raster, "TopoRampCorrection")
         fit_mask = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform, dem_arr,
+            stable_mask,
+            raster.data,
+            raster.data.shape,
+            raster.transform,
+            dem_arr,
             crs=getattr(raster, "crs", None),
         )
         min_px = 4 if self.order == "linear" else 8
@@ -817,16 +849,26 @@ class TopoRampCorrection(BaseCorrection):
             )
             self.meta = {"a": a_row, "b": b_col, "c": c_pred, "d": d, "r2": r2}
         else:
-            g, a2, b2, cxy, ax, by, fp, self._surface, r2 = fit_quadratic_with_predictor(
-                raster.data, dem_arr, fit_mask, self.lambda_reg
+            g, a2, b2, cxy, ax, by, fp, self._surface, r2 = (
+                fit_quadratic_with_predictor(
+                    raster.data, dem_arr, fit_mask, self.lambda_reg
+                )
             )
             self.meta = {
-                "g": g, "a2": a2, "b2": b2, "cxy": cxy,
-                "ax": ax, "by": by, "fz": fp, "r2": r2,
+                "g": g,
+                "a2": a2,
+                "b2": b2,
+                "cxy": cxy,
+                "ax": ax,
+                "by": by,
+                "fz": fp,
+                "r2": r2,
             }
         self._fit_called = True
         return self
+
     # END def
+
 
 # --------------------------------------------------------------------------- #
 # DirectionalBiasCorrection
@@ -912,6 +954,7 @@ class DirectionalBiasCorrection(BaseCorrection):
         self.min_bin_count = min_bin_count
         self.angle_grid = angle_grid
         self.meta: dict = {}
+
     # END def
 
     def fit(
@@ -933,7 +976,10 @@ class DirectionalBiasCorrection(BaseCorrection):
             available.
         """
         fit_mask = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform,
+            stable_mask,
+            raster.data,
+            raster.data.shape,
+            raster.transform,
             crs=getattr(raster, "crs", None),
         )
         if fit_mask.sum() < max(self.n_bins, 50):
@@ -949,16 +995,24 @@ class DirectionalBiasCorrection(BaseCorrection):
             angle = self.angle
         else:
             angle = estimate_directional_angle(
-                xx, yy, values, fit_mask,
-                n_bins=self.n_bins, angle_grid=self.angle_grid,
+                xx,
+                yy,
+                values,
+                fit_mask,
+                n_bins=self.n_bins,
+                angle_grid=self.angle_grid,
                 min_bin_count=self.min_bin_count,
             )
 
         s = rotate_coords(xx, yy, angle)
         surface, centers, median, fitted = fit_directional_profile(
-            s, values, fit_mask,
-            n_bins=self.n_bins, profile=self.profile,
-            smoothing=self.smoothing, poly_order=self.poly_order,
+            s,
+            values,
+            fit_mask,
+            n_bins=self.n_bins,
+            profile=self.profile,
+            smoothing=self.smoothing,
+            poly_order=self.poly_order,
             min_bin_count=self.min_bin_count,
         )
 
@@ -978,8 +1032,10 @@ class DirectionalBiasCorrection(BaseCorrection):
         }
         self._fit_called = True
         return self
+
     # END def
     # apply() / fit_and_apply() inherited — self._surface is a full 2-D array
+
 
 # --------------------------------------------------------------------------- #
 # SlopeRampCorrection
@@ -1020,11 +1076,10 @@ class SlopeRampCorrection(BaseCorrection):
         self.order = order
         self.lambda_reg = lambda_reg
         self.meta: dict = {}
+
     # END def
 
-    def fit(
-        self, raster: gu.Raster, stable_mask=None, **kwargs
-    ) -> SlopeRampCorrection:
+    def fit(self, raster: gu.Raster, stable_mask=None, **kwargs) -> SlopeRampCorrection:
         """Fit the ramp + terrain slope trend on stable pixels.
 
         The terrain slope is derived internally from the DEM via
@@ -1044,10 +1099,14 @@ class SlopeRampCorrection(BaseCorrection):
         dem: gu.Raster = kwargs.get("dem")
         if dem is None:
             raise ValueError("SlopeRampCorrection.fit() requires dem= kwarg.")
-        dem_arr   = self._dem_array_on_grid(dem, raster, "SlopeRampCorrection")
+        dem_arr = self._dem_array_on_grid(dem, raster, "SlopeRampCorrection")
         slope_arr = compute_slope(dem_arr, raster.transform)
-        fit_mask  = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform, dem_arr,
+        fit_mask = self._resolve_stable_mask(
+            stable_mask,
+            raster.data,
+            raster.data.shape,
+            raster.transform,
+            dem_arr,
             crs=getattr(raster, "crs", None),
         )
         min_px = 5 if self.order == "linear" else 8
@@ -1061,22 +1120,31 @@ class SlopeRampCorrection(BaseCorrection):
                 raster.data, slope_arr, fit_mask, self.lambda_reg
             )
             self.meta = {
-                "row_slope":   a_row, "col_slope": b_col,
-                "slope_coeff": c_pred, "intercept": d,
+                "row_slope": a_row,
+                "col_slope": b_col,
+                "slope_coeff": c_pred,
+                "intercept": d,
                 "r2": r2,
             }
         else:
-            g, a2, b2, cxy, ax, by, fp, self._surface, r2 = fit_quadratic_with_predictor(
-                raster.data, slope_arr, fit_mask, self.lambda_reg
+            g, a2, b2, cxy, ax, by, fp, self._surface, r2 = (
+                fit_quadratic_with_predictor(
+                    raster.data, slope_arr, fit_mask, self.lambda_reg
+                )
             )
             self.meta = {
-                "c_bias":   g,   "c_row2":   a2,
-                "c_col2":   b2,  "c_rowcol": cxy,
-                "c_row":    ax,  "c_col":    by,
-                "c_slope":  fp,  "r2":       r2,
+                "c_bias": g,
+                "c_row2": a2,
+                "c_col2": b2,
+                "c_rowcol": cxy,
+                "c_row": ax,
+                "c_col": by,
+                "c_slope": fp,
+                "r2": r2,
             }
         self._fit_called = True
         return self
+
     # END def
 
 
@@ -1132,6 +1200,7 @@ class _FourierDestriping(BaseCorrection):
         self.detrend = detrend
         self.taper = taper
         self.meta: dict = {}
+
     # END def
 
     def fit(self, raster: gu.Raster, stable_mask=None, **kwargs) -> _FourierDestriping:
@@ -1148,7 +1217,10 @@ class _FourierDestriping(BaseCorrection):
         :rtype: _FourierDestriping
         """
         fit_mask = self._resolve_stable_mask(
-            stable_mask, raster.data, raster.data.shape, raster.transform,
+            stable_mask,
+            raster.data,
+            raster.data.shape,
+            raster.transform,
             crs=getattr(raster, "crs", None),
         )
         values = ma.filled(raster.data, np.nan).astype(float)
@@ -1159,7 +1231,8 @@ class _FourierDestriping(BaseCorrection):
         spacing = raster.res[1] if self._profile_axis == 0 else raster.res[0]
 
         model_1d, fmeta = fit_fourier_stripe_profile(
-            profile, spacing,
+            profile,
+            spacing,
             wavelength_min=self.wavelength_min,
             wavelength_max=self.wavelength_max,
             detrend=self.detrend,
@@ -1193,6 +1266,7 @@ class _FourierDestriping(BaseCorrection):
         }
         self._fit_called = True
         return self
+
     # END def
     # apply() / fit_and_apply() inherited — self._surface is a full 2-D array
 

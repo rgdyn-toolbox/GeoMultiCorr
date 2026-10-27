@@ -42,6 +42,7 @@ Public API:
 - :func:`format_dt_days` — its inverse, for echoing a value back to a user.
 - :data:`DT_UNIT_TO_DAYS` — the unit table.
 """
+
 from __future__ import annotations
 
 import re

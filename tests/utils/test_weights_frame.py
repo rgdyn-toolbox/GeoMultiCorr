@@ -32,6 +32,7 @@ The weights frame is the single contract both plotting backends consume, so its
 column set, its dtypes and its refusal to broadcast a short vector are what keep
 the plotly figure and its matplotlib twin describing the same pairs.
 """
+
 from __future__ import annotations
 
 import math
@@ -62,7 +63,9 @@ def _frame(n: int = 3):
         [30.0 * (i + 1) for i in range(n)],
         [0.9 - 0.1 * i for i in range(n)],
         [0.8 - 0.1 * i for i in range(n)],
-        nmad_ew=[0.2] * n, nmad_ns=[0.3] * n, cc=[0.7] * n,
+        nmad_ew=[0.2] * n,
+        nmad_ns=[0.3] * n,
+        cc=[0.7] * n,
         corr_direction=["Forward"] * n,
     )
 
@@ -94,8 +97,9 @@ class TestFrameContract:
         assert frame["sensor"].iloc[0] == ""
 
     def test_sensor_column_round_trips(self):
-        frame = weights_frame(["a", "b"], [10, 20], [1.0, 1.0], [1.0, 1.0],
-                              sensor=["spot6", None])
+        frame = weights_frame(
+            ["a", "b"], [10, 20], [1.0, 1.0], [1.0, 1.0], sensor=["spot6", None]
+        )
         assert frame["sensor"].tolist() == ["spot6", ""]
         assert frame["sensor"].dtype == object
 
@@ -144,7 +148,8 @@ class TestRelevantWeightKeys:
 
     def test_abg_only_under_wmean(self):
         assert relevant_weight_keys("quality", "geomean").isdisjoint(
-            {"alpha", "beta", "gamma"})
+            {"alpha", "beta", "gamma"}
+        )
         assert {"alpha", "beta", "gamma"} <= relevant_weight_keys("quality", "wmean")
 
     def test_quality_spatial_wmean_has_no_gamma(self):
@@ -159,21 +164,24 @@ class TestRelevantWeightKeys:
         assert "dt_range" in relevant_weight_keys(mode)
 
     def test_dt_range_is_irrelevant_elsewhere(self):
-        for mode in ("uniform", "temporal", "parametric", "quality",
-                     "quality_spatial"):
+        for mode in ("uniform", "temporal", "parametric", "quality", "quality_spatial"):
             assert "dt_range" not in relevant_weight_keys(mode), mode
 
     def test_sensor_weights_is_relevant_for_every_mode_when_set(self):
         """Mode-independent: it multiplies every mode's result, uniform included."""
         for mode in ("uniform", "temporal", "parametric", "quality", "sigmoid"):
             assert "sensor_weights" in relevant_weight_keys(
-                mode, sensor_weights={"spot": 0.5}), mode
+                mode, sensor_weights={"spot": 0.5}
+            ), mode
 
     def test_sensor_weights_is_absent_when_unset(self):
         for value in (None, {}):
-            assert "sensor_weights" not in relevant_weight_keys("uniform", sensor_weights=value)
+            assert "sensor_weights" not in relevant_weight_keys(
+                "uniform", sensor_weights=value
+            )
         # and it stays out of the per-mode table itself
         from geomulticorr.utils._weights_frame import WEIGHT_MODE_KEYS
+
         assert all("sensor_weights" not in keys for keys in WEIGHT_MODE_KEYS.values())
 
 
@@ -181,10 +189,16 @@ class TestSensorWeightsText:
     """The Text control's grammar and its inverse."""
 
     def test_parse_basic(self):
-        assert parse_sensor_weights("spot=0.5, planetscope=1") == {"planetscope": 1.0, "spot": 0.5}
+        assert parse_sensor_weights("spot=0.5, planetscope=1") == {
+            "planetscope": 1.0,
+            "spot": 0.5,
+        }
 
     def test_parse_accepts_colon_whitespace_and_case(self):
-        assert parse_sensor_weights("SPOT:0.5 Planetscope=2") == {"planetscope": 2.0, "spot": 0.5}
+        assert parse_sensor_weights("SPOT:0.5 Planetscope=2") == {
+            "planetscope": 2.0,
+            "spot": 0.5,
+        }
 
     def test_parse_empty_is_none(self):
         assert parse_sensor_weights("") is None
@@ -230,8 +244,15 @@ class TestModeTableIsShared:
     def test_every_mode_is_covered(self):
         from geomulticorr.inversion.tio_inversion import TIOInversion
 
-        inv_modes = {"uniform", "temporal", "relative_temporal", "sigmoid",
-                     "parametric", "quality", "quality_spatial"}
+        inv_modes = {
+            "uniform",
+            "temporal",
+            "relative_temporal",
+            "sigmoid",
+            "parametric",
+            "quality",
+            "quality_spatial",
+        }
         assert set(WEIGHT_MODE_KEYS) == inv_modes
         assert TIOInversion is not None  # import guard, keeps the alias honest
 
@@ -288,11 +309,13 @@ class TestSummaries:
 
     def test_summary_line_names_the_combine_only_for_quality(self):
         quality = format_weights_summary(
-            weights_stats(_frame(), weight_mode="quality", combine="wmean"))
+            weights_stats(_frame(), weight_mode="quality", combine="wmean")
+        )
         assert "quality:wmean" in quality
 
         sigmoid = format_weights_summary(
-            weights_stats(_frame(), weight_mode="sigmoid", combine="wmean"))
+            weights_stats(_frame(), weight_mode="sigmoid", combine="wmean")
+        )
         assert "sigmoid" in sigmoid and "wmean" not in sigmoid
 
     def test_summary_line_survives_missing_stats(self):

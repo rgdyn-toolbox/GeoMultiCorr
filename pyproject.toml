@@ -24,3 +24,7 @@ path = "geomulticorr/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["geomulticorr"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]

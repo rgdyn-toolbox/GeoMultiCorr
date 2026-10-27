@@ -2,27 +2,27 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # conftest.py
 # creation date: 2026-05-19.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -31,6 +31,7 @@ tests/conftest.py
 
 Shared test fixtures - automatically available to all tests.
 """
+
 import pytest
 import logging
 import tempfile
@@ -40,12 +41,25 @@ from pathlib import Path
 # GeoMultiCorr imports (wrapped to handle missing dependencies)
 try:
     from geomulticorr._logging import (
-        GMCFormatter, logger, SUCCESS, FOLDER, SETTINGS,
-        SEARCH, FILE, STATISTICS, TIMER, SAVE, LIST, LAUNCH
-        )
+        GMCFormatter,
+        logger,
+        SUCCESS,
+        FOLDER,
+        SETTINGS,
+        SEARCH,
+        FILE,
+        STATISTICS,
+        TIMER,
+        SAVE,
+        LIST,
+        LAUNCH,
+    )
+
     _GEOMULTICORR_AVAILABLE = True
 except (ImportError, ModuleNotFoundError):
     _GEOMULTICORR_AVAILABLE = False
+
+
 # -------------------------------------------------------------- #
 # ------------------------------------------------------------------
 # FIXTURE 1: Formatter without visual elements (easiest to test)
@@ -62,10 +76,9 @@ def formatter_plain():
     """
     if not _GEOMULTICORR_AVAILABLE:
         pytest.skip("geomulticorr._logging not available")
-    return GMCFormatter(
-        use_color=False,
-        use_icons=False
-    )
+    return GMCFormatter(use_color=False, use_icons=False)
+
+
 # END def
 
 
@@ -88,6 +101,8 @@ def temp_dir():
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
+
+
 # END def
 
 
@@ -106,10 +121,9 @@ def formatter_with_icons():
     """
     if not _GEOMULTICORR_AVAILABLE:
         pytest.skip("geomulticorr._logging not available")
-    return GMCFormatter(
-        use_color=False,
-        use_icons=True
-    )
+    return GMCFormatter(use_color=False, use_icons=True)
+
+
 # END def
 
 
@@ -128,10 +142,9 @@ def formatter_with_colors():
     """
     if not _GEOMULTICORR_AVAILABLE:
         pytest.skip("geomulticorr._logging not available")
-    return GMCFormatter(
-        use_color=True,
-        use_icons=False
-    )
+    return GMCFormatter(use_color=True, use_icons=False)
+
+
 # END def
 
 
@@ -155,6 +168,7 @@ def make_log_record():
             result = formatter_plain.format(record)
             assert "Warning!" in result
     """
+
     def _create(msg="Test message", level=logging.INFO):
         """Create a LogRecord with given message and level.
 
@@ -172,24 +186,28 @@ def make_log_record():
             lineno=42,
             msg=msg,
             args=(),
-            exc_info=None
+            exc_info=None,
         )
+
     return _create
+
+
 # END def
+
 
 @pytest.fixture
 def caplog_gmc(caplog):
     """Caplog fixture that works with GMC logger's propagate=False.
-    
+
     The GMC logger disables propagation to prevent duplicate messages.
     This fixture temporarily enables propagation so pytest's caplog
     can capture logs during testing.
-    
+
     Usage:
         def test_something(caplog_gmc):
             some_function()
             assert "expected message" in caplog_gmc.text
-    
+
     :param caplog: Pytest's built-in caplog fixture.
     :type caplog: pytest.LogCaptureFixture
     :return: The caplog fixture with GMC logger propagation enabled.
@@ -202,5 +220,3 @@ def caplog_gmc(caplog):
         yield caplog
     finally:
         gmc_logger.propagate = original_propagate
-
-

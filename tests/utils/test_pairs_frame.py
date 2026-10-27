@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Unit tests for the canonical pairs-frame contract (_pairs_frame)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -22,7 +23,9 @@ from geomulticorr.utils._pairs_frame import (
 )
 
 
-def _overview_from_indices(dates, index_pairs, sensors=None, pz="PZ1", with_sensors=True):
+def _overview_from_indices(
+    dates, index_pairs, sensors=None, pz="PZ1", with_sensors=True
+):
     """Build the geodatabase-shaped GeoDataFrame equivalent of the same pairs."""
     rows = []
     for i, j in index_pairs:
@@ -128,16 +131,24 @@ class TestFromOverview:
         with pytest.raises(ValueError, match="missing required column"):
             pairs_frame_from_overview(pd.DataFrame({"pa_left_date": ["2020-01-01"]}))
 
-    def test_legacy_layer_without_sensor_columns(self, dates_iso, index_pairs_consecutive):
-        gdf = _overview_from_indices(dates_iso, index_pairs_consecutive, with_sensors=False)
+    def test_legacy_layer_without_sensor_columns(
+        self, dates_iso, index_pairs_consecutive
+    ):
+        gdf = _overview_from_indices(
+            dates_iso, index_pairs_consecutive, with_sensors=False
+        )
         frame = pairs_frame_from_overview(gdf)
         assert set(frame["sensor_i"]) == {""}
 
     def test_legacy_layer_uses_date_sensor_fallback(
         self, dates_iso, sensors, index_pairs_consecutive
     ):
-        gdf = _overview_from_indices(dates_iso, index_pairs_consecutive, with_sensors=False)
-        frame = pairs_frame_from_overview(gdf, date_sensor=dict(zip(dates_iso, sensors)))
+        gdf = _overview_from_indices(
+            dates_iso, index_pairs_consecutive, with_sensors=False
+        )
+        frame = pairs_frame_from_overview(
+            gdf, date_sensor=dict(zip(dates_iso, sensors))
+        )
         assert frame.loc[0, "sensor_i"] == sensors[0]
         assert frame.loc[0, "sensor_j"] == sensors[1]
 
@@ -191,8 +202,12 @@ class TestUniqueCouples:
 
 
 class TestPairsStats:
-    def test_redundancy_is_bidirectional(self, dates_iso, sensors, index_pairs_redundancy):
-        frame = pairs_frame_from_indices(dates_iso, index_pairs_redundancy, sensors=sensors)
+    def test_redundancy_is_bidirectional(
+        self, dates_iso, sensors, index_pairs_redundancy
+    ):
+        frame = pairs_frame_from_indices(
+            dates_iso, index_pairs_redundancy, sensors=sensors
+        )
         s = pairs_stats(frame, strategy="redundancy")
         assert s["n_pairs"] == 2 * s["n_couples"]
         assert s["n_reversed"] == s["n_couples"]
@@ -200,8 +215,10 @@ class TestPairsStats:
         assert s["bidirectional"] is True
 
     def test_consecutive_is_forward_only(self, dates_iso, index_pairs_consecutive):
-        s = pairs_stats(pairs_frame_from_indices(dates_iso, index_pairs_consecutive),
-                        strategy="consecutive")
+        s = pairs_stats(
+            pairs_frame_from_indices(dates_iso, index_pairs_consecutive),
+            strategy="consecutive",
+        )
         assert s["n_reversed"] == 0
         assert s["n_backward"] == 0
         assert s["bidirectional"] is False
@@ -214,7 +231,9 @@ class TestPairsStats:
         Counting pair endpoints gives 2 * n_pairs; counting acquisitions gives
         n_dates, which is the only number that can be read unambiguously.
         """
-        frame = pairs_frame_from_indices(dates_iso, index_pairs_redundancy, sensors=sensors)
+        frame = pairs_frame_from_indices(
+            dates_iso, index_pairs_redundancy, sensors=sensors
+        )
         s = pairs_stats(frame)
         assert sum(s["sensor_dates"].values()) == s["n_dates"] == len(dates_iso)
         assert sum(s["sensor_dates"].values()) != 2 * s["n_pairs"]
@@ -240,7 +259,9 @@ class TestPairsStats:
 
 class TestSummaryString:
     def test_bidirectional_wording(self, dates_iso, sensors, index_pairs_redundancy):
-        frame = pairs_frame_from_indices(dates_iso, index_pairs_redundancy, sensors=sensors)
+        frame = pairs_frame_from_indices(
+            dates_iso, index_pairs_redundancy, sensors=sensors
+        )
         s = pairs_stats(frame, strategy="redundancy")
         out = format_pairs_summary(s)
         assert f"{s['n_pairs']} pairs" in out
@@ -248,8 +269,10 @@ class TestSummaryString:
 
     def test_forward_only_wording(self, dates_iso, index_pairs_consecutive):
         out = format_pairs_summary(
-            pairs_stats(pairs_frame_from_indices(dates_iso, index_pairs_consecutive),
-                        strategy="consecutive")
+            pairs_stats(
+                pairs_frame_from_indices(dates_iso, index_pairs_consecutive),
+                strategy="consecutive",
+            )
         )
         assert "forward only" in out
         assert "× 2 directions" not in out
@@ -257,32 +280,46 @@ class TestSummaryString:
     def test_drawn_line_only_when_it_differs(self, dates_iso, index_pairs_redundancy):
         s = pairs_stats(pairs_frame_from_indices(dates_iso, index_pairs_redundancy))
         assert "chords drawn" not in format_pairs_summary(s, drawn=s["n_pairs"])
-        shown = format_pairs_summary(s, drawn=s["n_couples"], drawn_label="chords drawn")
+        shown = format_pairs_summary(
+            s, drawn=s["n_couples"], drawn_label="chords drawn"
+        )
         assert f"{s['n_couples']} chords drawn" in shown
 
-    def test_acquisitions_per_sensor_line(self, dates_iso, sensors, index_pairs_consecutive):
-        frame = pairs_frame_from_indices(dates_iso, index_pairs_consecutive, sensors=sensors)
+    def test_acquisitions_per_sensor_line(
+        self, dates_iso, sensors, index_pairs_consecutive
+    ):
+        frame = pairs_frame_from_indices(
+            dates_iso, index_pairs_consecutive, sensors=sensors
+        )
         out = format_pairs_summary(pairs_stats(frame))
         assert f"{len(dates_iso)} acquisition dates" in out
         assert "acquisitions per sensor" in out
 
     def test_strategy_semantics_appended(self, dates_iso, index_pairs_redundancy):
         out = format_pairs_summary(
-            pairs_stats(pairs_frame_from_indices(dates_iso, index_pairs_redundancy),
-                        strategy="redundancy")
+            pairs_stats(
+                pairs_frame_from_indices(dates_iso, index_pairs_redundancy),
+                strategy="redundancy",
+            )
         )
         assert STRATEGY_SEMANTICS["redundancy"] in out
 
     def test_unknown_strategy_omits_semantics(self, dates_iso, index_pairs_consecutive):
         out = format_pairs_summary(
-            pairs_stats(pairs_frame_from_indices(dates_iso, index_pairs_consecutive),
-                        strategy="mystery")
+            pairs_stats(
+                pairs_frame_from_indices(dates_iso, index_pairs_consecutive),
+                strategy="mystery",
+            )
         )
         assert "mystery —" not in out
 
     def test_plain_text_has_no_markup(self, dates_iso, sensors, index_pairs_redundancy):
-        frame = pairs_frame_from_indices(dates_iso, index_pairs_redundancy, sensors=sensors)
-        out = format_pairs_summary(pairs_stats(frame, strategy="redundancy"), html=False)
+        frame = pairs_frame_from_indices(
+            dates_iso, index_pairs_redundancy, sensors=sensors
+        )
+        out = format_pairs_summary(
+            pairs_stats(frame, strategy="redundancy"), html=False
+        )
         assert "<" not in out
         assert "\n" in out
 
@@ -299,7 +336,9 @@ class TestDateSummary:
         assert summary["n_pairs"].sum() == 2 * len(frame)
 
     def test_one_row_per_date_sorted(self, dates_iso, index_pairs_consecutive, sensors):
-        frame = pairs_frame_from_indices(dates_iso, index_pairs_consecutive, sensors=sensors)
+        frame = pairs_frame_from_indices(
+            dates_iso, index_pairs_consecutive, sensors=sensors
+        )
         summary = date_summary(frame)
         assert list(summary["date"]) == sorted(dates_iso)
         assert list(summary["sensor"]) == sensors

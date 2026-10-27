@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Tests for the PLOT_LEVELS presets used by Session.apply_pairs_corrections."""
+
 from __future__ import annotations
 
 import pytest

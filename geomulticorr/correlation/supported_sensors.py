@@ -2,33 +2,34 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # supported_sensors.py
 # creation date: 2026-05-07.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
 """
 Utilities for normalizing and extracting information from satellite sensor names.
 """
+
 import os
 import re
 
@@ -41,27 +42,74 @@ from typing import Iterable, Optional, Sequence
 # 1. Catalog of known sensors and their patterns
 SENSOR_CATALOG = [
     # Landsat
-    {"patterns": [r"landsat\s*([4-9])", r"\bl([4-9])\b"], "sensor": "LANDSAT{num}", "family": "landsat"},
+    {
+        "patterns": [r"landsat\s*([4-9])", r"\bl([4-9])\b"],
+        "sensor": "LANDSAT{num}",
+        "family": "landsat",
+    },
     # Sentinel-2
-    {"patterns": [r"sentinel[-\s]?2[ab]?", r"\bs2[ab]?\b"], "sensor": "SENTINEL2", "family": "sentinel"},
+    {
+        "patterns": [r"sentinel[-\s]?2[ab]?", r"\bs2[ab]?\b"],
+        "sensor": "SENTINEL2",
+        "family": "sentinel",
+    },
     # SPOT
-    {"patterns": [r"spot\s*([4-7])", r"\bsp([4-7])\b"], "sensor": "SPOT{num}", "family": "spot"},
+    {
+        "patterns": [r"spot\s*([4-7])", r"\bsp([4-7])\b"],
+        "sensor": "SPOT{num}",
+        "family": "spot",
+    },
     # Pléiades
-    {"patterns": [r"pl[eé]iades\s*(1a|1b)?", r"pleiades-neo", r"pneo"], "sensor": "PLEIADES", "family": "pleiades"},
+    {
+        "patterns": [r"pl[eé]iades\s*(1a|1b)?", r"pleiades-neo", r"pneo"],
+        "sensor": "PLEIADES",
+        "family": "pleiades",
+    },
     # PlanetScope
-    {"patterns": [r"planetscope", r"psscene", r"superdove", r"ps2(sd)?", r"pscope", r"analyticms"], "sensor": "PLANETSCOPE", "family": "planetscope"},
+    {
+        "patterns": [
+            r"planetscope",
+            r"psscene",
+            r"superdove",
+            r"ps2(sd)?",
+            r"pscope",
+            r"analyticms",
+        ],
+        "sensor": "PLANETSCOPE",
+        "family": "planetscope",
+    },
     # WorldView
-    {"patterns": [r"worldview[-\s]?([1-4])", r"\bwv([1-4])\b"], "sensor": "WORLDVIEW{num}", "family": "worldview"},
+    {
+        "patterns": [r"worldview[-\s]?([1-4])", r"\bwv([1-4])\b"],
+        "sensor": "WORLDVIEW{num}",
+        "family": "worldview",
+    },
     # GeoEye
-    {"patterns": [r"geoeye[-\s]?1", r"\bge1\b"], "sensor": "GEOEYE1", "family": "geoeye"},
+    {
+        "patterns": [r"geoeye[-\s]?1", r"\bge1\b"],
+        "sensor": "GEOEYE1",
+        "family": "geoeye",
+    },
     # QuickBird
-    {"patterns": [r"quickbird", r"\bqb[12]?\b"], "sensor": "QUICKBIRD", "family": "quickbird"},
+    {
+        "patterns": [r"quickbird", r"\bqb[12]?\b"],
+        "sensor": "QUICKBIRD",
+        "family": "quickbird",
+    },
     # IKONOS
     {"patterns": [r"ikonos"], "sensor": "IKONOS", "family": "ikonos"},
     # RapidEye
-    {"patterns": [r"rapideye", r"\bre([1-5])\b"], "sensor": "RAPIDEYE{num}", "family": "rapideye"},
+    {
+        "patterns": [r"rapideye", r"\bre([1-5])\b"],
+        "sensor": "RAPIDEYE{num}",
+        "family": "rapideye",
+    },
     # Aerial/UAV
-    {"patterns": [r"swissimage", r"aerial", r"uav", r"drone", r"orthophoto"], "sensor": "AERIAL", "family": "aerial"},
+    {
+        "patterns": [r"swissimage", r"aerial", r"uav", r"drone", r"orthophoto"],
+        "sensor": "AERIAL",
+        "family": "aerial",
+    },
     # DEM
     {"patterns": [r"dem", r"hillshade"], "sensor": "DEM", "family": "dem"},
 ]
@@ -110,11 +158,11 @@ def infer_dem_sensor(path) -> str:
 
 AUXILIARY_FILE_PATTERNS: dict[str, list[str]] = {
     "planetscope": ["_udm2_", "_udm_", "_confidence_"],
-    "sentinel":    ["_TCI_", "_SCL_", "_WVP_", "_AOT_"],
-    "landsat":     ["_QA_PIXEL_", "_QA_RADSAT_", "_ST_QA_"],
-    "worldview":   [],
-    "spot":        [],
-    "pleiades":    [],
+    "sentinel": ["_TCI_", "_SCL_", "_WVP_", "_AOT_"],
+    "landsat": ["_QA_PIXEL_", "_QA_RADSAT_", "_ST_QA_"],
+    "worldview": [],
+    "spot": [],
+    "pleiades": [],
 }
 
 AUXILIARY_FILE_EXCLUDE_PATTERNS: list[str] = [
@@ -122,23 +170,85 @@ AUXILIARY_FILE_EXCLUDE_PATTERNS: list[str] = [
 ]
 
 supported_sensors = [
-        # Landsat
-        "landsat4", "landsat5", "landsat7", "landsat8", "landsat9",
-        "l4", "l5", "l7", "l8", "l9", "lt04", "lt05", "lc08", "lc09", "le07",
-        # Sentinel-2 (MSI) # May be some problems with "T32TLR", "T31TGL", targets.
-        "sentinel2", "sentinel-2", "s2", "s2a", "s2b", "msi", "T32TLR", "T31TGL",
-        # SPOT / Airbus VHR
-        "spot4", "spot5", "spot6", "spot7", "sp4", "sp5", "sp6", "sp7", "s4p", "s5p", "s6p", "s7p",
-        "pleiades-neo", "pneo", "pleiades", "pléiades", "phr1a", "phr1b", "ple",
-        # Planet
-        "planetscope", "planet", "psscene", "superdove", "ps2", "ps2sd", "pscope", "analyticms",
-        # Maxar family
-        "worldview", "wv1", "wv2", "wv3", "wv4", "geoeye1", "ge1", "quickbird", "ikonos",
-        # RapidEye
-        "rapideye", "re1", "re2", "re3", "re4", "re5",
-        # Aerial / DEM
-        "aerial", "uav", "drone", "swissimage", "dem", "hillshade",
-    ]
+    # Landsat
+    "landsat4",
+    "landsat5",
+    "landsat7",
+    "landsat8",
+    "landsat9",
+    "l4",
+    "l5",
+    "l7",
+    "l8",
+    "l9",
+    "lt04",
+    "lt05",
+    "lc08",
+    "lc09",
+    "le07",
+    # Sentinel-2 (MSI) # May be some problems with "T32TLR", "T31TGL", targets.
+    "sentinel2",
+    "sentinel-2",
+    "s2",
+    "s2a",
+    "s2b",
+    "msi",
+    "T32TLR",
+    "T31TGL",
+    # SPOT / Airbus VHR
+    "spot4",
+    "spot5",
+    "spot6",
+    "spot7",
+    "sp4",
+    "sp5",
+    "sp6",
+    "sp7",
+    "s4p",
+    "s5p",
+    "s6p",
+    "s7p",
+    "pleiades-neo",
+    "pneo",
+    "pleiades",
+    "pléiades",
+    "phr1a",
+    "phr1b",
+    "ple",
+    # Planet
+    "planetscope",
+    "planet",
+    "psscene",
+    "superdove",
+    "ps2",
+    "ps2sd",
+    "pscope",
+    "analyticms",
+    # Maxar family
+    "worldview",
+    "wv1",
+    "wv2",
+    "wv3",
+    "wv4",
+    "geoeye1",
+    "ge1",
+    "quickbird",
+    "ikonos",
+    # RapidEye
+    "rapideye",
+    "re1",
+    "re2",
+    "re3",
+    "re4",
+    "re5",
+    # Aerial / DEM
+    "aerial",
+    "uav",
+    "drone",
+    "swissimage",
+    "dem",
+    "hillshade",
+]
 
 # Opening-tag suffix: either ">" or " attr=...>". Written as an optional group that
 # must start with whitespace, so it admits attributes without ever widening the tag
@@ -151,14 +261,14 @@ _TAG_ATTRS = r"(?:\s[^>]*)?"
 
 # Sensor-family → XML tag pattern mapping for acquisition date extraction
 _XML_DATE_TAGS: dict[str, str] = {
-    "spot":        rf"<IMAGING_DATE{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_DATE>",
-    "pleiades":    rf"<IMAGING_DATE{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_DATE>",
+    "spot": rf"<IMAGING_DATE{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_DATE>",
+    "pleiades": rf"<IMAGING_DATE{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_DATE>",
     "planetscope": rf"<eop:acquisitionDate{_TAG_ATTRS}>\s*([^<]+)\s*</eop:acquisitionDate>",
-    "planet":      rf"<eop:acquisitionDate{_TAG_ATTRS}>\s*([^<]+)\s*</eop:acquisitionDate>",
-    "landsat":     rf"<IMAGING_DATE{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_DATE>",
-    "sentinel":    rf"<SENSING_TIME{_TAG_ATTRS}>\s*([^<]+)\s*</SENSING_TIME>",
-    "worldview":   rf"<FIRSTLINETIME{_TAG_ATTRS}>\s*([^<]+)\s*</FIRSTLINETIME>",
-    "geoeye":      rf"<FIRSTLINETIME{_TAG_ATTRS}>\s*([^<]+)\s*</FIRSTLINETIME>",
+    "planet": rf"<eop:acquisitionDate{_TAG_ATTRS}>\s*([^<]+)\s*</eop:acquisitionDate>",
+    "landsat": rf"<IMAGING_DATE{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_DATE>",
+    "sentinel": rf"<SENSING_TIME{_TAG_ATTRS}>\s*([^<]+)\s*</SENSING_TIME>",
+    "worldview": rf"<FIRSTLINETIME{_TAG_ATTRS}>\s*([^<]+)\s*</FIRSTLINETIME>",
+    "geoeye": rf"<FIRSTLINETIME{_TAG_ATTRS}>\s*([^<]+)\s*</FIRSTLINETIME>",
 }
 
 # Applied when sensor family is unknown or the sensor-specific tag is not found
@@ -176,9 +286,9 @@ _GENERIC_XML_DATE_PATTERNS: list[str] = [
 # Sensors whose date tag already embeds the time (e.g. ISO "2021-07-14T10:30:45Z")
 # are handled automatically without a separate time tag.
 _XML_TIME_TAGS: dict[str, str] = {
-    "spot":     rf"<IMAGING_TIME{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_TIME>",
+    "spot": rf"<IMAGING_TIME{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_TIME>",
     "pleiades": rf"<IMAGING_TIME{_TAG_ATTRS}>\s*([^<]+)\s*</IMAGING_TIME>",
-    "landsat":  rf"<SCENE_CENTER_TIME{_TAG_ATTRS}>\s*([^<]+)\s*</SCENE_CENTER_TIME>",
+    "landsat": rf"<SCENE_CENTER_TIME{_TAG_ATTRS}>\s*([^<]+)\s*</SCENE_CENTER_TIME>",
 }
 
 # Generic time-tag fallbacks tried when sensor family is unknown or has no specific entry
@@ -188,6 +298,7 @@ _GENERIC_XML_TIME_PATTERNS: list[str] = [
     rf"<(?:TIME|time){_TAG_ATTRS}>\s*([^<]+)\s*</",
 ]
 
+
 def _gdal_info_json(path: pathlib.Path) -> dict:
     """Open with GDAL and return the JSON info dict; {} on failure."""
     try:
@@ -195,7 +306,8 @@ def _gdal_info_json(path: pathlib.Path) -> dict:
         return gdal.Info(ds, format="json") if ds is not None else {}
     except Exception:
         return {}
-    
+
+
 def _extract_time_components(s: str) -> tuple[int, int, int] | None:
     """Extract (hour, minute, second) from any string containing time information.
 
@@ -226,6 +338,7 @@ def _extract_time_components(s: str) -> tuple[int, int, int] | None:
         return int(m.group(1)), int(m.group(2)), int(m.group(3))
     return None
 
+
 def _parse_time_tag_from_xml(
     xml_text: str, sensor_family: str | None
 ) -> tuple[int, int, int] | None:
@@ -254,6 +367,7 @@ def _parse_time_tag_from_xml(
                 return tc
     return None
 
+
 def search_date_in_filename(filename: str | pathlib.Path) -> str | None:
     """Find the first date in a filename and normalize to YYYY-MM-dd.
 
@@ -270,38 +384,57 @@ def search_date_in_filename(filename: str | pathlib.Path) -> str | None:
         # YYYYmmdd
         (r"(19\d{2}|20\d{2}|21\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])", "%Y%m%d"),
         # YYYY-mm-dd
-        (r"(19\d{2}|20\d{2}|21\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])", "%Y-%m-%d"),
+        (
+            r"(19\d{2}|20\d{2}|21\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])",
+            "%Y-%m-%d",
+        ),
         # YYYY/mm/dd
-        (r"(19\d{2}|20\d{2}|21\d{2})/(0[1-9]|1[0-2])/(0[1-9]|[12]\d|3[01])", "%Y/%m/%d"),
+        (
+            r"(19\d{2}|20\d{2}|21\d{2})/(0[1-9]|1[0-2])/(0[1-9]|[12]\d|3[01])",
+            "%Y/%m/%d",
+        ),
         # DD-MM-YYYY
-        (r"(0[1-9]|[12]\d|3[01])-(0[1-9]|1[0-2])-(19\d{2}|20\d{2}|21\d{2})", "%d-%m-%Y"),
+        (
+            r"(0[1-9]|[12]\d|3[01])-(0[1-9]|1[0-2])-(19\d{2}|20\d{2}|21\d{2})",
+            "%d-%m-%Y",
+        ),
         # DD/MM/YYYY
-        (r"(0[1-9]|[12]\d|3[01])/(0[1-9]|1[0-2])/(19\d{2}|20\d{2}|21\d{2})", "%d/%m/%Y"),
+        (
+            r"(0[1-9]|[12]\d|3[01])/(0[1-9]|1[0-2])/(19\d{2}|20\d{2}|21\d{2})",
+            "%d/%m/%Y",
+        ),
         # YYYYmmddhhmmss (14 digits)
-        (r"(19\d{2}|20\d{2}|21\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])([01]\d|2[0-3])([0-5]\d){2}", "%Y%m%d%H%M%S"),
+        (
+            r"(19\d{2}|20\d{2}|21\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])([01]\d|2[0-3])([0-5]\d){2}",
+            "%Y%m%d%H%M%S",
+        ),
         # YYYYmmddThhmmss (with 'T' separator)
-        (r"(19\d{2}|20\d{2}|21\d{2})(0[1-9]|1[0-2])([0-2]\d|3[01])T([01]\d|2[0-3])([0-5]\d){2}", "%Y%m%dT%H%M%S"),
+        (
+            r"(19\d{2}|20\d{2}|21\d{2})(0[1-9]|1[0-2])([0-2]\d|3[01])T([01]\d|2[0-3])([0-5]\d){2}",
+            "%Y%m%dT%H%M%S",
+        ),
     ]
 
     s = str(filename)
     for pat, fmt in patterns:
-            m = re.search(pat, s)
-            if not m:
-                continue
-            raw = m.group(0)
-            try:
-                dt = datetime.strptime(raw, fmt)
-                return dt.strftime("%Y-%m-%d")
-            except ValueError:
-                # If 14-digit or T pattern fails, try first 8 digits as date
-                if fmt in ("%Y%m%d%H%M%S", "%Y%m%dT%H%M%S") and len(raw) >= 8:
-                    try:
-                        dt = datetime.strptime(raw[:8], "%Y%m%d")
-                        return dt.strftime("%Y-%m-%d")
-                    except ValueError:
-                        continue
-                continue
+        m = re.search(pat, s)
+        if not m:
+            continue
+        raw = m.group(0)
+        try:
+            dt = datetime.strptime(raw, fmt)
+            return dt.strftime("%Y-%m-%d")
+        except ValueError:
+            # If 14-digit or T pattern fails, try first 8 digits as date
+            if fmt in ("%Y%m%d%H%M%S", "%Y%m%dT%H%M%S") and len(raw) >= 8:
+                try:
+                    dt = datetime.strptime(raw[:8], "%Y%m%d")
+                    return dt.strftime("%Y-%m-%d")
+                except ValueError:
+                    continue
+            continue
     return None
+
 
 def _parse_date_from_xml(
     xml_text: str, sensor_family: str | None
@@ -347,6 +480,7 @@ def _parse_date_from_xml(
                 return date, time_c
     return None, None
 
+
 # * Works properly
 def sensors(sensors_names: Optional[Iterable[str]] = None) -> str:
     s = ""
@@ -355,6 +489,7 @@ def sensors(sensors_names: Optional[Iterable[str]] = None) -> str:
         s += string.upper() + "|"
     s = s[:-1]
     return s
+
 
 # * Works properly
 def sensor_normalize(text: Optional[str]) -> dict:
@@ -373,9 +508,12 @@ def sensor_normalize(text: Optional[str]) -> dict:
 
     def out(sensor, *, platform=None, family=None, conf=0.95, matched=None):
         return {"sensor": sensor, "platform": platform, "family": family}
-    
+
     # --- Sentinel-2 (S2A/S2B or generic)
-    m = re.search(r"\b(sentinel[-\s]?2|s2)\s*([ab])?\b|\bsen2*([ab])?\b|\bsent2*([ab])?\b|\b[A-Za-z]{1}\d{2}[A-Za-z]{3}\b|\b[A-Za-z]{1}\d{2}[A-Za-z]{3}\b", t)
+    m = re.search(
+        r"\b(sentinel[-\s]?2|s2)\s*([ab])?\b|\bsen2*([ab])?\b|\bsent2*([ab])?\b|\b[A-Za-z]{1}\d{2}[A-Za-z]{3}\b|\b[A-Za-z]{1}\d{2}[A-Za-z]{3}\b",
+        t,
+    )
     if m:
         var = m.group(2).upper() if m.group(2) else None
         plat = f"sentinel-{var}" if var else None
@@ -383,7 +521,10 @@ def sensor_normalize(text: Optional[str]) -> dict:
 
     # --- Landsat (L5/L7/L8/L9 codes; classic names)
     # m = re.search(r"\b(?:landsat\s*(5|7|8|9)|l(5|7|8|9))\b", t)
-    m = re.search(r"\b(?:landsat\s*(4|5|7|8|9)|l(4|5|7|8|9)|lc0?(4|5|7|8|9)|le0?(4|5|7|8|9)|lt0?(4|5|7|8|9))\b", t)
+    m = re.search(
+        r"\b(?:landsat\s*(4|5|7|8|9)|l(4|5|7|8|9)|lc0?(4|5|7|8|9)|le0?(4|5|7|8|9)|lt0?(4|5|7|8|9))\b",
+        t,
+    )
     if m:
         num = next(g for g in m.groups() if g)
         return out(f"landsat{num}", platform=f"landsat{num}", family="landsat")
@@ -404,14 +545,18 @@ def sensor_normalize(text: Optional[str]) -> dict:
         return out("pleiadesneo", platform=plat, family="pleiades")
 
     # --- Pléiades 1A/1B (variant optional: a bare "pleiades" is still Pléiades)
-    m = re.search(r"\bpl[eé]iades(?:[-\s]?(1[ab]))?\b|\bple\b|\bpl1[ab]\b|\bphr[1-2][ab]\b", t)
+    m = re.search(
+        r"\bpl[eé]iades(?:[-\s]?(1[ab]))?\b|\bple\b|\bpl1[ab]\b|\bphr[1-2][ab]\b", t
+    )
     if m:
         variant = re.search(r"[12][ab]", m.group(0))
         plat = f"pleiades-{variant.group(0)}" if variant else None
         return out("pleiades", platform=plat, family="pleiades")
 
     # --- PlanetScope (PS2, PS2.SD / SuperDove, PSScene)
-    m = re.search(r"\b(superdove|ps2\.?sd|psscene|planetscope|ps2|psb|planet|analyticms)\b", t)
+    m = re.search(
+        r"\b(superdove|ps2\.?sd|psscene|planetscope|ps2|psb|planet|analyticms)\b", t
+    )
     if m:
         token = m.group(1)
         var = "SuperDove" if token in {"superdove", "ps2.sd", "ps2sd"} else None
@@ -447,18 +592,23 @@ def sensor_normalize(text: Optional[str]) -> dict:
 
     # --- SwissImage
     if re.search(r"\bswissimage\b", t):
-        return out("aerial", platform="swissimage", family="aerial")#, matched="swissimage")
-    
+        return out(
+            "aerial", platform="swissimage", family="aerial"
+        )  # , matched="swissimage")
+
     # --- Aerial / UAV / Drone / Orthophoto (generic)
     if re.search(r"\b(aerial|orthophoto|uav|drone)\b", t):
-        return out("aerial", platform="aerial", family="aerial")#, matched="aerial/uav/drone")
+        return out(
+            "aerial", platform="aerial", family="aerial"
+        )  # , matched="aerial/uav/drone")
 
     # --- DEM / hillshade
     if re.search(r"\bdem\b|\bhillshade\b", t):
-        return out("dem", platform=None, family="dem")#, matched="dem/hillshade")
+        return out("dem", platform=None, family="dem")  # , matched="dem/hillshade")
 
     # Unknown
     return out("unknown", conf=0.0, matched=None)
+
 
 def extract_acquisition_date(
     raster_path: str | pathlib.Path,
@@ -508,9 +658,7 @@ def extract_acquisition_date(
     _date_raw = search_date_in_filename(raster_path.name)
     if _date_raw:
         _date_compact = _date_raw.replace("-", "")  # "20170801"
-        _tm = re.search(
-            rf"{_date_compact}[_\-T](\d{{6}})[_\-.]", raster_path.name
-        )
+        _tm = re.search(rf"{_date_compact}[_\-T](\d{{6}})[_\-.]", raster_path.name)
         _time_token: str | None = _tm.group(1) if _tm else None  # "094239"
         for ext in ("*.xml", "*.dim"):
             for p in sorted(parent.glob(ext)):

@@ -4,6 +4,7 @@ These three artifacts replace the previous pattern of hunting for "some xDisp
 raster" to match against, and of passing a DEM reprojected against one
 arbitrary pair to a run that loops over all of them.
 """
+
 import pathlib
 import tempfile
 
@@ -20,12 +21,15 @@ import geoutils as gu
 from geomulticorr import open_gmc_session
 from geomulticorr.utils._grid import grid_key, grids_match
 
-
 EPSG = 2154  # RGF93 / Lambert-93 — the geodatabase template CRS
 # A pzone AOI in metres, deliberately NOT aligned to a 10 m lattice so the
 # canonical snapping has something to do.
-AOI = [(900_005.0, 6_450_003.0), (900_305.0, 6_450_003.0),
-       (900_305.0, 6_450_203.0), (900_005.0, 6_450_203.0)]
+AOI = [
+    (900_005.0, 6_450_003.0),
+    (900_305.0, 6_450_003.0),
+    (900_305.0, 6_450_203.0),
+    (900_005.0, 6_450_203.0),
+]
 
 
 @pytest.fixture
@@ -36,8 +40,9 @@ def session(tmp_path):
     return s
 
 
-def _dem_source(path, epsg=EPSG, res=10.0, origin=(899_800.0, 6_450_500.0),
-                height=80, width=80):
+def _dem_source(
+    path, epsg=EPSG, res=10.0, origin=(899_800.0, 6_450_500.0), height=80, width=80
+):
     """A synthetic DEM covering the AOI with a tilted elevation surface."""
     yy, xx = np.mgrid[0:height, 0:width]
     data = (1000.0 + 0.5 * xx + 0.3 * yy).astype("float32")
@@ -54,7 +59,10 @@ class TestBuildReferenceGrid:
     def test_creates_grid_file(self, session, tmp_path):
         out = session.build_reference_grid("TestPz", resolution=10.0)
         assert out.exists()
-        assert out == tmp_path / "gridproj" / "TestPz" / "reference_raster" / "TestPz_grid.tif"
+        assert (
+            out
+            == tmp_path / "gridproj" / "TestPz" / "reference_raster" / "TestPz_grid.tif"
+        )
 
     def test_grid_matches_canonical_grid(self, session):
         """The persisted grid is exactly what _compute_canonical_grid computes."""
@@ -335,7 +343,9 @@ class TestLoadMovingAreas:
         session.load_moving_areas("TestPz", self._polygons())
         plain = session.get_moving_areas("TestPz").ds.geometry.area.sum()
 
-        session.load_moving_areas("TestPz", self._polygons(), buffer=25.0, overwrite=True)
+        session.load_moving_areas(
+            "TestPz", self._polygons(), buffer=25.0, overwrite=True
+        )
         buffered = session.get_moving_areas("TestPz").ds.geometry.area.sum()
 
         assert buffered > plain

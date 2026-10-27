@@ -80,6 +80,7 @@ from geomulticorr.data_sources._layout import (
 
 try:
     from tqdm import tqdm as _tqdm
+
     _HAS_TQDM = True
 except ImportError:
     _HAS_TQDM = False
@@ -98,6 +99,7 @@ def _url_basename(url: str) -> Optional[str]:
     if not name or not Path(name).suffix:
         return None
     return safe_filename(name, fallback="") or None
+
 
 M2M_BASE_URL = "https://m2m.cr.usgs.gov/api/api/json/stable"
 M2M_LOGIN_ENDPOINT = f"{M2M_BASE_URL}/login-token"
@@ -320,7 +322,11 @@ class M2MClient:
                     "start": date_range[0],
                     "end": date_range[1],
                 },
-                "cloudCoverFilter": {"min": 0, "max": cloud_max, "includeUnknown": False},
+                "cloudCoverFilter": {
+                    "min": 0,
+                    "max": cloud_max,
+                    "includeUnknown": False,
+                },
             },
             "sortOrder": "ASC",
             "maxResults": max_results,
@@ -328,7 +334,9 @@ class M2MClient:
         }
 
         try:
-            response = self._post(M2M_SEARCH_ENDPOINT, payload, timeout=TIMEOUT_SEARCH_S)
+            response = self._post(
+                M2M_SEARCH_ENDPOINT, payload, timeout=TIMEOUT_SEARCH_S
+            )
             results = response.get("data", {}).get("results", [])
             LOGGER.info(
                 f"M2M search: {len(results)} scenes in '{collection_id}' "
@@ -405,7 +413,8 @@ class M2MClient:
         if not self.session_token:
             self.login()
         response = self._post(
-            M2M_DOWNLOAD_RETRIEVE_ENDPOINT, {"label": label},
+            M2M_DOWNLOAD_RETRIEVE_ENDPOINT,
+            {"label": label},
             timeout=TIMEOUT_DOWNLOAD_RETRIEVE_S,
         )
         return response.get("data", {})
@@ -481,7 +490,10 @@ class M2MClient:
                 LOGGER.warning(
                     "RATE_LIMIT on %s (another request from this account is still "
                     "running); waiting %.0fs then retrying (%d/%d)",
-                    url.rsplit("/", 1)[-1], wait, attempt + 1, rate_limit_retries,
+                    url.rsplit("/", 1)[-1],
+                    wait,
+                    attempt + 1,
+                    rate_limit_retries,
                 )
                 _time.sleep(wait)
         raise RuntimeError("unreachable")  # pragma: no cover
@@ -519,7 +531,9 @@ class M2MClient:
                 payload_err = json.loads(exc.read().decode("utf-8"))
                 code = payload_err.get("errorCode") or ""
                 message = payload_err.get("errorMessage") or ""
-                detail = f" — {code}: {message}".rstrip(": ") if (code or message) else ""
+                detail = (
+                    f" — {code}: {message}".rstrip(": ") if (code or message) else ""
+                )
             except Exception:  # body absent or not JSON
                 pass
 
@@ -636,9 +650,23 @@ class M2MImageFinder:
                             "image_id": scene["entityId"],
                             "collection_key": coll_key,
                             "acquisition_date": acq_date,
-                            "cloud_percent": cloud if cloud not in (None, "-1") else None,
+                            "cloud_percent": (
+                                cloud if cloud not in (None, "-1") else None
+                            ),
                             "display_id": scene["displayId"],
-                            "bands_available": ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B9", "B10", "B11"],
+                            "bands_available": [
+                                "B1",
+                                "B2",
+                                "B3",
+                                "B4",
+                                "B5",
+                                "B6",
+                                "B7",
+                                "B8",
+                                "B9",
+                                "B10",
+                                "B11",
+                            ],
                         }
                     )
             except Exception as e:
@@ -647,8 +675,13 @@ class M2MImageFinder:
         if not all_scenes:
             return gpd.GeoDataFrame(
                 columns=[
-                    "image_id", "collection_key", "acquisition_date",
-                    "cloud_percent", "display_id", "bands_available", "geometry"
+                    "image_id",
+                    "collection_key",
+                    "acquisition_date",
+                    "cloud_percent",
+                    "display_id",
+                    "bands_available",
+                    "geometry",
                 ],
                 geometry="geometry",
                 crs="EPSG:4326",
@@ -670,7 +703,9 @@ class M2MImageFinder:
             )
 
         gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326")
-        gdf = gdf.sort_values(["acquisition_date", "cloud_percent"], ascending=[False, True])
+        gdf = gdf.sort_values(
+            ["acquisition_date", "cloud_percent"], ascending=[False, True]
+        )
         return gdf.reset_index(drop=True)
 
     def download_images(
@@ -822,7 +857,9 @@ class M2MImageFinder:
                     )
 
             if not downloads:
-                LOGGER.warning(f"No downloadable products matched for collection '{collection_key}'")
+                LOGGER.warning(
+                    f"No downloadable products matched for collection '{collection_key}'"
+                )
                 continue
 
             label = f"gmc_{collection_key}"
@@ -830,13 +867,16 @@ class M2MImageFinder:
             # metadata is four entries, so a 100-scene group is a 400-entry
             # request — enough to push download-request past any timeout.
             chunks = [
-                downloads[i:i + max_files_per_request]
+                downloads[i : i + max_files_per_request]
                 for i in range(0, len(downloads), max_files_per_request)
             ]
             if len(chunks) > 1:
                 LOGGER.info(
                     "%s: %d files -> %d download-request chunks of <=%d",
-                    collection_key, len(downloads), len(chunks), max_files_per_request,
+                    collection_key,
+                    len(downloads),
+                    len(chunks),
+                    max_files_per_request,
                 )
 
             ready: List[Dict[str, Any]] = []
@@ -855,7 +895,11 @@ class M2MImageFinder:
                         "download_request chunk %d/%d for '%s' did not return (%s). "
                         "The server may have staged it anyway — recovering via "
                         "label %r rather than discarding the request.",
-                        chunk_no, len(chunks), collection_key, e, label,
+                        chunk_no,
+                        len(chunks),
+                        collection_key,
+                        e,
+                        label,
                     )
                     recovering = True
 
@@ -893,8 +937,12 @@ class M2MImageFinder:
                         "finder.resume_label(%r, output_dir=...), which reuses the "
                         "queue as a worklist and skips scene-search and "
                         "download-options.",
-                        collection_key, chunk_no, len(chunks), len(preparing),
-                        max_poll_attempts, label,
+                        collection_key,
+                        chunk_no,
+                        len(chunks),
+                        len(preparing),
+                        max_poll_attempts,
+                        label,
                     )
 
             downloaded_paths.extend(
@@ -1086,7 +1134,8 @@ class M2MImageFinder:
                 _time.sleep(poll_interval_s)
                 continue
             newly = [
-                d for d in (retrieved.get("available") or [])
+                d
+                for d in (retrieved.get("available") or [])
                 if d.get("downloadId") not in seen
             ]
             for d in newly:
@@ -1102,16 +1151,19 @@ class M2MImageFinder:
         # queued record's own ids — no search, no download-options.
         have = {d.get("entityId") for d in ready}
         missing = [
-            rec for rec in queued
+            rec
+            for rec in queued
             if rec.get("entityId") not in have and rec.get("productId")
         ]
         if missing and re_request:
             LOGGER.info(
                 "%d record(s) under %r are no longer retrievable (URL already "
-                "issued); re-requesting them from the queue.", len(missing), label,
+                "issued); re-requesting them from the queue.",
+                len(missing),
+                label,
             )
             chunks = [
-                missing[i:i + max_files_per_request]
+                missing[i : i + max_files_per_request]
                 for i in range(0, len(missing), max_files_per_request)
             ]
             for chunk_no, chunk in enumerate(chunks, start=1):
@@ -1145,7 +1197,9 @@ class M2MImageFinder:
             LOGGER.warning(
                 "%d record(s) under %r are queued but their URLs were already "
                 "issued, so download-retrieve will not return them. Pass "
-                "re_request=True to re-issue.", len(missing), label,
+                "re_request=True to re-issue.",
+                len(missing),
+                label,
             )
 
         if not ready:
@@ -1222,7 +1276,9 @@ class M2MImageFinder:
             for opt in entity_options:
                 if "bundle" in (opt.get("productName") or "").lower():
                     return [opt]
-            return entity_options[:1]  # no explicit bundle: take the first available product
+            return entity_options[
+                :1
+            ]  # no explicit bundle: take the first available product
 
         files = M2MImageFinder._scene_files(options, entity_id)
         matched: List[Dict[str, Any]] = []

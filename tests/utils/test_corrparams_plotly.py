@@ -6,6 +6,7 @@ These builders run inside the widget loop, where an exception reaches only the
 kernel log that VSCode hides — so "never raises" is the headline contract here,
 not a nicety.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -31,8 +32,11 @@ from geomulticorr.utils._corrparams_plotly import (
 @pytest.fixture
 def frame():
     return corrparams_frame_from_pairs(
-        ["a", "b", "c", "d"], [30.0, 400.0, 1200.0, 2500.0], [3.0, 3.0, 1.5, 1.5],
-        sensor_i=["ps", "ps", "spot", "spot"], velocity_m_yr=2.0,
+        ["a", "b", "c", "d"],
+        [30.0, 400.0, 1200.0, 2500.0],
+        [3.0, 3.0, 1.5, 1.5],
+        sensor_i=["ps", "ps", "spot", "spot"],
+        velocity_m_yr=2.0,
     )
 
 
@@ -106,7 +110,11 @@ class TestDesignMap:
     def test_below_floor_pairs_get_a_distinct_symbol(self, frame):
         fig = figure_design_map(frame, k=3.0, c_px=0.15)
         symbols = np.concatenate(
-            [np.asarray(t.marker.symbol).ravel() for t in fig.data if t.mode == "markers"]
+            [
+                np.asarray(t.marker.symbol).ravel()
+                for t in fig.data
+                if t.mode == "markers"
+            ]
         )
         assert "x" in set(symbols)
 
@@ -129,7 +137,9 @@ class TestKernelSearch:
         assert figure_kernel_search(frame).layout.yaxis.type == "log"
 
     def test_strain_ceiling_appears_only_when_asked(self, frame):
-        assert "strain ceiling" not in [t.name for t in figure_kernel_search(frame).data]
+        assert "strain ceiling" not in [
+            t.name for t in figure_kernel_search(frame).data
+        ]
         with_strain = figure_kernel_search(frame, strain_rate_per_yr=0.02)
         assert "strain ceiling" in [t.name for t in with_strain.data]
 
@@ -174,7 +184,9 @@ class TestStyleTables:
         assert all(c.startswith("#") for c in GROUP_PALETTE)
 
     def test_design_colors_cover_every_role(self):
-        assert {"floor", "ceiling", "band", "pairs", "flagged", "limit"} <= set(DESIGN_COLORS)
+        assert {"floor", "ceiling", "band", "pairs", "flagged", "limit"} <= set(
+            DESIGN_COLORS
+        )
 
 
 class TestAutoSearchRendering:
@@ -185,15 +197,23 @@ class TestAutoSearchRendering:
     @pytest.fixture
     def all_auto(self):
         return corrparams_frame_from_pairs(
-            ["a", "b"], [30.0, 60.0], [3.0, 3.0], sensor_i=["ps", "ps"],
-            velocity_m_yr=2.0, explicit_search_above_days=365,
+            ["a", "b"],
+            [30.0, 60.0],
+            [3.0, 3.0],
+            sensor_i=["ps", "ps"],
+            velocity_m_yr=2.0,
+            explicit_search_above_days=365,
         )
 
     @pytest.fixture
     def mixed(self):
         return corrparams_frame_from_pairs(
-            ["a", "b"], [30.0, 2000.0], [3.0, 3.0], sensor_i=["ps", "ps"],
-            velocity_m_yr=2.0, explicit_search_above_days=365,
+            ["a", "b"],
+            [30.0, 2000.0],
+            [3.0, 3.0],
+            sensor_i=["ps", "ps"],
+            velocity_m_yr=2.0,
+            explicit_search_above_days=365,
         )
 
     def test_all_auto_omits_the_ceiling_line(self, all_auto):
@@ -206,7 +226,9 @@ class TestAutoSearchRendering:
 
     def test_all_auto_omits_the_shaded_band(self, all_auto):
         """A band needs two boundaries; with one it would be unbounded."""
-        assert "measurable" not in [str(t.name) for t in figure_design_map(all_auto).data]
+        assert "measurable" not in [
+            str(t.name) for t in figure_design_map(all_auto).data
+        ]
 
     def test_the_detection_floor_is_always_drawn(self, all_auto):
         names = [str(t.name) for t in figure_design_map(all_auto).data]

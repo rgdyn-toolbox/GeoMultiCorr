@@ -13,6 +13,7 @@
 # (https://www.gnu.org/licenses/agpl-3.0.txt), WITHOUT ANY WARRANTY.
 # ---------------------------------------------------------------------------- #
 """Archive layout helpers: product-id parsing and server-name sanitisation."""
+
 import pytest
 
 from geomulticorr.data_sources._layout import (
@@ -130,7 +131,9 @@ class TestContentDisposition:
         assert out == "evil.sh"
 
     def test_encoded_traversal_is_neutralised(self):
-        out = filename_from_content_disposition("attachment; filename*=UTF-8''..%2F..%2Fevil.sh")
+        out = filename_from_content_disposition(
+            "attachment; filename*=UTF-8''..%2F..%2Fevil.sh"
+        )
         assert out == "evil.sh"
 
 

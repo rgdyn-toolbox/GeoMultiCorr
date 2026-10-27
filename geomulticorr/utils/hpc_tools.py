@@ -38,6 +38,7 @@ Supported cluster profiles
 - ``"gricad"``           : GRICAD cluster (OAR + conda via bashrc)
 - ``"isterre"``          : ISTerre cluster (OAR + modules + soft env)
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -50,7 +51,7 @@ from pathlib import Path
 CLUSTER_CHOICES: tuple = (None, "local", "gricad", "isterre")
 
 _OAR_PROJECT: dict[str, str] = {
-    "gricad":  "rgdyn",
+    "gricad": "rgdyn",
     "isterre": "iste-equ-risques",
 }
 
@@ -58,17 +59,17 @@ _OAR_PROJECT: dict[str, str] = {
 # Validation
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def validate_cluster(cluster) -> None:
     """Raise ``ValueError`` if *cluster* is not in :data:`CLUSTER_CHOICES`."""
     if cluster not in CLUSTER_CHOICES:
-        raise ValueError(
-            f"cluster must be one of {CLUSTER_CHOICES}, got {cluster!r}"
-        )
+        raise ValueError(f"cluster must be one of {CLUSTER_CHOICES}, got {cluster!r}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OAR header generation
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def oar_header(
     job_name: str,
@@ -111,8 +112,16 @@ def oar_header(
         return []
     if project is None:
         project = _OAR_PROJECT[cluster]
-    _out = Path(output_dir) / f"{job_name}_%jobid%.out" if output_dir else f"./{job_name}_%jobid%.out"
-    _err = Path(output_dir) / f"{job_name}_%jobid%.err" if output_dir else f"./{job_name}_%jobid%.err"
+    _out = (
+        Path(output_dir) / f"{job_name}_%jobid%.out"
+        if output_dir
+        else f"./{job_name}_%jobid%.out"
+    )
+    _err = (
+        Path(output_dir) / f"{job_name}_%jobid%.err"
+        if output_dir
+        else f"./{job_name}_%jobid%.err"
+    )
     lines = [
         f"#OAR -n {job_name}\n",
         f"#OAR -l /nodes={nodes}/core={cores},walltime={walltime}\n",
@@ -128,6 +137,7 @@ def oar_header(
 # ─────────────────────────────────────────────────────────────────────────────
 # Cluster base environment
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def cluster_base_env(cluster: str) -> list[str]:
     """Return the base environment-setup lines for *cluster*.
@@ -152,6 +162,7 @@ def cluster_base_env(cluster: str) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Job submission and local execution
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def oarsub_submit(script_path: Path, cwd: Path | None = None) -> None:
     """Submit *script_path* to OAR via ``oarsub -S``.

@@ -3,6 +3,7 @@
 Tests layout detection, pz_dir() resolution, folder creation, migration,
 and backward compatibility across both layouts.
 """
+
 import pathlib
 import tempfile
 import shutil
@@ -13,9 +14,14 @@ from shapely.geometry import Polygon
 
 from geomulticorr import open_gmc_session
 from geomulticorr.core.session import (
-    PZ_KIND_OPTICAL, PZ_KIND_IMAGE_CORRELATION, PZ_KIND_REFERENCE_DEM,
-    PZ_KIND_REFERENCE_RASTER, PZ_KIND_VECTOR, PZ_KIND_INVERSION,
-    PZ_KIND_FIGURES, NEW_LAYOUT_PZ_SUBDIRS
+    PZ_KIND_OPTICAL,
+    PZ_KIND_IMAGE_CORRELATION,
+    PZ_KIND_REFERENCE_DEM,
+    PZ_KIND_REFERENCE_RASTER,
+    PZ_KIND_VECTOR,
+    PZ_KIND_INVERSION,
+    PZ_KIND_FIGURES,
+    NEW_LAYOUT_PZ_SUBDIRS,
 )
 
 
@@ -66,6 +72,7 @@ class TestIsConformToGmcTemplate:
         """New-layout project should conform (no raster_data_ required)."""
         session, project_path = temp_project_new
         from geomulticorr.core.session import is_conform_to_gmc_template
+
         assert is_conform_to_gmc_template(project_path) is True
 
     def test_conform_legacy_layout(self, tmp_path):
@@ -81,6 +88,7 @@ class TestIsConformToGmcTemplate:
         session._legacy_layout = True
 
         from geomulticorr.core.session import is_conform_to_gmc_template
+
         assert is_conform_to_gmc_template(project_path) is True
 
     def test_not_conform_missing_qgz(self, tmp_path):
@@ -90,6 +98,7 @@ class TestIsConformToGmcTemplate:
         (project_path / f"GMC_geodatabase_broken_proj.gpkg").touch()
 
         from geomulticorr.core.session import is_conform_to_gmc_template
+
         assert is_conform_to_gmc_template(project_path) is False
 
 
@@ -148,8 +157,14 @@ class TestPzDirMethod:
     def test_new_layout_subdirs(self):
         """masks was removed; reference_raster, then elevation, were added."""
         assert NEW_LAYOUT_PZ_SUBDIRS == (
-            "optical", "image_correlation", "reference_dem", "reference_raster",
-            "vector", "inversion", "figures", "elevation",
+            "optical",
+            "image_correlation",
+            "reference_dem",
+            "reference_raster",
+            "vector",
+            "inversion",
+            "figures",
+            "elevation",
         )
         assert "masks" not in NEW_LAYOUT_PZ_SUBDIRS
 
@@ -182,6 +197,7 @@ class TestInsertPzoneStructure:
         session.insert_pzone([(0, 0), (1, 0), (1, 1), (0, 1)], "test_pz", "TP")
 
         from geomulticorr.core.pzone import Pzone
+
         pz = Pzone("test_pz", session)
 
         expected = project_path / "test_pz" / "reference_dem" / "test_pz_dem.tif"
@@ -243,7 +259,7 @@ class TestSieveBulkPathResolution:
 
         # We can't fully test sieve_bulk without georasters, but we can verify
         # it would try to create the right directories by checking the method exists
-        assert hasattr(session, 'sieve_bulk')
+        assert hasattr(session, "sieve_bulk")
 
 
 class TestPairModeTwo:
@@ -266,7 +282,12 @@ class TestPairModeTwo:
         # Pair mode-2 constructor would try to load these
         # (will fail on raster I/O, but path construction is what we test)
         from geomulticorr.core.pair import Pair
-        image_corr_dir = optical_dir.parent / "image_correlation" / "test_pz_2024-01-01_sentinel2__2024-01-15_sentinel2"
+
+        image_corr_dir = (
+            optical_dir.parent
+            / "image_correlation"
+            / "test_pz_2024-01-01_sentinel2__2024-01-15_sentinel2"
+        )
         image_corr_dir.mkdir(parents=True, exist_ok=True)
 
         # Mode-2 would construct: Pair(session=session, target_path=image_corr_dir)
@@ -313,8 +334,11 @@ class TestTIOInversionDir:
 
         inversion_dir = session.pz_dir("test_pz", PZ_KIND_INVERSION) / "PDL_spot"
         for direction in ("EW", "NS"):
-            path = (inversion_dir / f"inverse_{direction}"
-                    / f"inverse_{direction}_parameters.json")
+            path = (
+                inversion_dir
+                / f"inverse_{direction}"
+                / f"inverse_{direction}_parameters.json"
+            )
             assert path.parent.parent == inversion_dir
 
 
@@ -350,8 +374,10 @@ class TestSaveWeightsFigureRouting:
         figures/inversion is still a plain subfolder, not a kind.
         """
         assert len(NEW_LAYOUT_PZ_SUBDIRS) == 8
-        assert not any("/" in s or s.endswith("inversion") and s != "inversion"
-                       for s in NEW_LAYOUT_PZ_SUBDIRS)
+        assert not any(
+            "/" in s or s.endswith("inversion") and s != "inversion"
+            for s in NEW_LAYOUT_PZ_SUBDIRS
+        )
 
     def test_legacy_layout_discards_the_pzone(self, temp_project_new):
         """Which is exactly why save_weights_figure warns and bypasses pz_dir."""
@@ -371,13 +397,15 @@ class TestSavePairsFigure:
         session.insert_pzone([(0, 0), (1, 0), (1, 1), (0, 1)], "test_pz", "TP")
 
         # Create a minimal pairs frame
-        frame = pd.DataFrame({
-            'pz': ['test_pz'],
-            'pa_left_date': ['2024-01-01'],
-            'pa_right_date': ['2024-01-15'],
-            'pa_left_sensor': ['sentinel2'],
-            'pa_right_sensor': ['sentinel2'],
-        })
+        frame = pd.DataFrame(
+            {
+                "pz": ["test_pz"],
+                "pa_left_date": ["2024-01-01"],
+                "pa_right_date": ["2024-01-15"],
+                "pa_left_sensor": ["sentinel2"],
+                "pa_right_sensor": ["sentinel2"],
+            }
+        )
 
         # save_pairs_figure should route to pz_dir(test_pz, FIGURES)
         # (we don't actually save here, just verify the logic)
@@ -414,7 +442,7 @@ class TestMigrateToNewStructure:
     def test_migrate_exists_as_method(self, temp_project_new):
         """migrate_to_new_structure() should exist on Session."""
         session, _ = temp_project_new
-        assert hasattr(session, 'migrate_to_new_structure')
+        assert hasattr(session, "migrate_to_new_structure")
 
 
 class TestBatchVerbosity:
@@ -425,10 +453,13 @@ class TestBatchVerbosity:
     extraction/correction helpers emit, which are useful on a single pair.
     """
 
-    @pytest.mark.parametrize("method_name", [
-        "extract_pairs_raw_displacements",
-        "apply_pairs_corrections",
-    ])
+    @pytest.mark.parametrize(
+        "method_name",
+        [
+            "extract_pairs_raw_displacements",
+            "apply_pairs_corrections",
+        ],
+    )
     def test_verbose_exists_and_defaults_to_false(self, method_name):
         import inspect
         from geomulticorr.core.session import Session

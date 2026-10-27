@@ -2,27 +2,27 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # gee_image_search_download.py
 # creation date: 2026-10-16.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -48,11 +48,13 @@ from pyproj import CRS as _CRS
 # Optional progress bar
 try:
     from tqdm import tqdm as _tqdm
+
     _HAS_TQDM = True
 except Exception:
     _HAS_TQDM = False
 
 LOGGER = _logging.getLogger("gee_image_search_download")
+
 
 # -------------------------
 # 1) Connection utilities
@@ -114,8 +116,12 @@ class GEEClient:
         try:
             if self.service_account:
                 if not self.key_file:
-                    raise ValueError("When using a service account, provide 'key_file'.")
-                credentials = ee.ServiceAccountCredentials(self.service_account, self.key_file)
+                    raise ValueError(
+                        "When using a service account, provide 'key_file'."
+                    )
+                credentials = ee.ServiceAccountCredentials(
+                    self.service_account, self.key_file
+                )
                 ee.Initialize(credentials=credentials, project=self.project)
             else:
                 if self.project:
@@ -275,6 +281,7 @@ class ImageCollectionCatalog:
         """Return all registered collection keys."""
         return list(self._specs.keys())
 
+
 # -------------------------
 # 3) Image search and metadata
 # -------------------------
@@ -340,10 +347,10 @@ class ImageFinder:
                 pass
         self.aoi_ee: ee.Geometry = self._coerce_to_ee_geometry(aoi)
 
-
-
     # ---- public API
-    def search_metadata(self, collection_keys: Optional[Sequence[str]] = None) -> gpd.GeoDataFrame:
+    def search_metadata(
+        self, collection_keys: Optional[Sequence[str]] = None
+    ) -> gpd.GeoDataFrame:
         """Search collections and build a GeoDataFrame of per‑image metadata.
 
         Parameters
@@ -387,8 +394,16 @@ class ImageFinder:
             ic = (
                 ic.filterBounds(self.aoi_ee)
                 .filter(ee.Filter.lt(spec.cloud_property, self.cloud_max))
-                .filter(ee.Filter.calendarRange(self.year_range[0], self.year_range[1], "year"))
-                .filter(ee.Filter.calendarRange(self.month_range[0], self.month_range[1], "month"))
+                .filter(
+                    ee.Filter.calendarRange(
+                        self.year_range[0], self.year_range[1], "year"
+                    )
+                )
+                .filter(
+                    ee.Filter.calendarRange(
+                        self.month_range[0], self.month_range[1], "month"
+                    )
+                )
             )
 
             # Map to a FeatureCollection with server-side computed metrics
@@ -399,12 +414,16 @@ class ImageFinder:
                 footprint_area_km2 = footprint_area_m2.divide(ee.Number(1e6))
                 inter_area_m2 = ee.Number(inter.area(1))
                 overlap_ratio = inter_area_m2.divide(footprint_area_m2)
-                aoi_coverage_percent = inter_area_m2.divide(aoi_area_m2).multiply(ee.Number(100))
+                aoi_coverage_percent = inter_area_m2.divide(aoi_area_m2).multiply(
+                    ee.Number(100)
+                )
                 props = {
                     "image_id": img.id(),
                     "collection_key": spec.key,
                     "collection_name": spec.pretty_name,
-                    "acquisition_date": ee.Date(img.get("system:time_start")).format("YYYY-MM-dd"),
+                    "acquisition_date": ee.Date(img.get("system:time_start")).format(
+                        "YYYY-MM-dd"
+                    ),
                     "cloud_percent": ee.Number(img.get(spec.cloud_property)),
                     "nominal_scale_m": spec.nominal_scale_m,
                     "footprint_area_m2": footprint_area_m2,
@@ -417,16 +436,30 @@ class ImageFinder:
                 # Use the image footprint as the Feature geometry for plotting
                 return ee.Feature(footprint, props)
 
-            fc = ic.map(_to_feature).filter(ee.Filter.gt("aoi_intersection_area_m2", ee.Number(0)))
+            fc = ic.map(_to_feature).filter(
+                ee.Filter.gt("aoi_intersection_area_m2", ee.Number(0))
+            )
             feature_collections.append(fc)
 
         # Merge and bring client-side (single getInfo call per merged FC)
         if not feature_collections:
-            return gpd.GeoDataFrame(columns=[
-                "image_id","collection_key","collection_name","acquisition_date",
-                "cloud_percent","nominal_scale_m","footprint_area_m2","footprint_area_km2",
-                "aoi_coverage_percent","overlap_ratio","geometry"
-            ], geometry="geometry", crs="EPSG:4326")
+            return gpd.GeoDataFrame(
+                columns=[
+                    "image_id",
+                    "collection_key",
+                    "collection_name",
+                    "acquisition_date",
+                    "cloud_percent",
+                    "nominal_scale_m",
+                    "footprint_area_m2",
+                    "footprint_area_km2",
+                    "aoi_coverage_percent",
+                    "overlap_ratio",
+                    "geometry",
+                ],
+                geometry="geometry",
+                crs="EPSG:4326",
+            )
 
         merged_fc = ee.FeatureCollection(feature_collections[0])
         for fc in feature_collections[1:]:
@@ -445,7 +478,11 @@ class ImageFinder:
                     "collection_key": props["collection_key"],
                     "collection_name": props["collection_name"],
                     "acquisition_date": props["acquisition_date"],
-                    "cloud_percent": float(props["cloud_percent"]) if props["cloud_percent"] is not None else None,
+                    "cloud_percent": (
+                        float(props["cloud_percent"])
+                        if props["cloud_percent"] is not None
+                        else None
+                    ),
                     "nominal_scale_m": int(props["nominal_scale_m"]),
                     "footprint_area_m2": float(props["footprint_area_m2"]),
                     "footprint_area_km2": float(props["footprint_area_km2"]),
@@ -458,7 +495,9 @@ class ImageFinder:
         gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326")
         # Sort by date (desc) then cloud (asc)
         gdf["acquisition_date"] = gdf["acquisition_date"].astype("datetime64[ns]")
-        gdf = gdf.sort_values(["acquisition_date", "cloud_percent"], ascending=[False, True]).reset_index(drop=True)
+        gdf = gdf.sort_values(
+            ["acquisition_date", "cloud_percent"], ascending=[False, True]
+        ).reset_index(drop=True)
         return gdf
 
     def bulk_download(
@@ -531,7 +570,9 @@ class ImageFinder:
         required = {"image_id", "collection_key", "nominal_scale_m", "geometry"}
         missing = required - set(images_gdf.columns)
         if missing:
-            raise ValueError(f"images_gdf is missing required columns: {sorted(missing)}")
+            raise ValueError(
+                f"images_gdf is missing required columns: {sorted(missing)}"
+            )
 
         # Prepare AOI geometry once
         region_aoi = self.aoi_ee
@@ -550,8 +591,16 @@ class ImageFinder:
         if max_images is not None:
             rows_iter = list(rows_iter)[: int(max_images)]
 
-        total_count = len(images_gdf) if max_images is None else min(len(images_gdf), int(max_images))
-        iterator = _tqdm(rows_iter, total=total_count, desc="Downloading", unit="img") if (_HAS_TQDM and show_progress) else rows_iter
+        total_count = (
+            len(images_gdf)
+            if max_images is None
+            else min(len(images_gdf), int(max_images))
+        )
+        iterator = (
+            _tqdm(rows_iter, total=total_count, desc="Downloading", unit="img")
+            if (_HAS_TQDM and show_progress)
+            else rows_iter
+        )
 
         for row in iterator:
             image_id_val: str = getattr(row, "image_id")
@@ -572,7 +621,11 @@ class ImageFinder:
                 image_id_full = f"{collection_ee_id}/{image_id_val}"
 
             export_scale = int(scale_override_m or nominal_scale_m)
-            region = region_aoi if region_mode == "aoi" else ee.Geometry(_mapping(footprint_geom))
+            region = (
+                region_aoi
+                if region_mode == "aoi"
+                else ee.Geometry(_mapping(footprint_geom))
+            )
 
             # Build output path: <root>/<collection_key>/<basename>_<date>_<shortid>.tif
             collection_dir = out_root / collection_key
@@ -630,12 +683,14 @@ class ImageFinder:
                     break
                 except Exception as e:
                     msg = str(e)
-                    LOGGER.warning("export_fail", extra={"error": msg, "attempt": attempt})
+                    LOGGER.warning(
+                        "export_fail", extra={"error": msg, "attempt": attempt}
+                    )
                     if attempt >= max_retries:
                         raise RuntimeError(
                             f"Failed to export {image_id_full} (collection {collection_key}). Last error: {e}"
                         )
-                    sleep_s = retry_backoff_s * (2 ** attempt)
+                    sleep_s = retry_backoff_s * (2**attempt)
                     _time.sleep(sleep_s)
                     attempt += 1
 
@@ -644,7 +699,7 @@ class ImageFinder:
     # ---- helpers
     @staticmethod
     def _coerce_to_ee_geometry(
-        aoi: Union[gpd.GeoDataFrame, _BaseGeometry, Mapping, ee.Geometry]
+        aoi: Union[gpd.GeoDataFrame, _BaseGeometry, Mapping, ee.Geometry],
     ) -> ee.Geometry:
         """
         Coerce multiple AOI representations to an ``ee.Geometry``.
@@ -686,6 +741,7 @@ class ImageFinder:
             "AOI must be a GeoDataFrame, Shapely geometry, GeoJSON‑like mapping, or ee.Geometry"
         )
 
+
 # -------------------------
 # Optional: Command Line Interface (CLI)
 # -------------------------
@@ -693,21 +749,69 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Search and download GEE imagery.")
-    parser.add_argument("aoi_file", type=str, help="Path to AOI file (GeoPackage/GeoJSON/Shapefile)")
+    parser.add_argument(
+        "aoi_file", type=str, help="Path to AOI file (GeoPackage/GeoJSON/Shapefile)"
+    )
     parser.add_argument("out_dir", type=str, help="Output directory for downloads")
-    parser.add_argument("--years", type=int, nargs=2, default=(2020, 2025), help="Year range inclusive, e.g. 2019 2021")
-    parser.add_argument("--months", type=int, nargs=2, default=(1, 12), help="Month range inclusive, e.g. 6 9")
+    parser.add_argument(
+        "--years",
+        type=int,
+        nargs=2,
+        default=(2020, 2025),
+        help="Year range inclusive, e.g. 2019 2021",
+    )
+    parser.add_argument(
+        "--months",
+        type=int,
+        nargs=2,
+        default=(1, 12),
+        help="Month range inclusive, e.g. 6 9",
+    )
     parser.add_argument("--cloud", type=int, default=30, help="Max cloud percent")
-    parser.add_argument("--collections", nargs="+", default=None, help="Collection keys to use (e.g., S2_SR L7_SR L8_TOA). If omitted, uses catalog defaults.")
-    parser.add_argument("--region", choices=["aoi", "footprint"], default="aoi", help="Export region mode")
-    parser.add_argument("--scale", type=int, default=None, help="Override export scale (meters)")
-    parser.add_argument("--bands", nargs="+", default=None, help="Override bands for export (applies to all images)")
-    parser.add_argument("--limit", type=int, default=None, help="Max images to download")
-    parser.add_argument("--throttle", type=float, default=0.0, help="Seconds to sleep between downloads")
-    parser.add_argument("--retries", type=int, default=2, help="Max retries per download")
-    parser.add_argument("--backoff", type=float, default=2.0, help="Base seconds for exponential backoff")
-    parser.add_argument("--no-progress", action="store_true", help="Disable progress bar output")
-    parser.add_argument("--log-level", default="INFO", help="Logging level (DEBUG, INFO, WARNING, ERROR)")
+    parser.add_argument(
+        "--collections",
+        nargs="+",
+        default=None,
+        help="Collection keys to use (e.g., S2_SR L7_SR L8_TOA). If omitted, uses catalog defaults.",
+    )
+    parser.add_argument(
+        "--region",
+        choices=["aoi", "footprint"],
+        default="aoi",
+        help="Export region mode",
+    )
+    parser.add_argument(
+        "--scale", type=int, default=None, help="Override export scale (meters)"
+    )
+    parser.add_argument(
+        "--bands",
+        nargs="+",
+        default=None,
+        help="Override bands for export (applies to all images)",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Max images to download"
+    )
+    parser.add_argument(
+        "--throttle", type=float, default=0.0, help="Seconds to sleep between downloads"
+    )
+    parser.add_argument(
+        "--retries", type=int, default=2, help="Max retries per download"
+    )
+    parser.add_argument(
+        "--backoff",
+        type=float,
+        default=2.0,
+        help="Base seconds for exponential backoff",
+    )
+    parser.add_argument(
+        "--no-progress", action="store_true", help="Disable progress bar output"
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="Logging level (DEBUG, INFO, WARNING, ERROR)",
+    )
 
     args = parser.parse_args()
 
@@ -721,7 +825,9 @@ if __name__ == "__main__":
     if args.collections is not None:
         unknown = sorted(set(args.collections) - set(catalog.keys()))
         if unknown:
-            raise SystemExit(f"Unknown collection keys: {unknown}. Available: {catalog.keys()}")
+            raise SystemExit(
+                f"Unknown collection keys: {unknown}. Available: {catalog.keys()}"
+            )
         selected_keys = args.collections
     else:
         selected_keys = None

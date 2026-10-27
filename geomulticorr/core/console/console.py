@@ -33,6 +33,7 @@ package so that progress bars (Live regions) and summary tables write to the
 same stream — two different Console objects writing to the same terminal breaks
 rich's live-region rendering.
 """
+
 from rich.console import Console as _RichConsole
 
 # Module-level singleton. Import this everywhere a rich console is needed

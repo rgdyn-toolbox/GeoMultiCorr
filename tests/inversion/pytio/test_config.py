@@ -8,6 +8,7 @@ weights fix, pasted verbatim: ``input_tio_text(TIOConfig.legacy())`` must stay
 byte-identical to it so an inversion prepared by an earlier release can be
 reproduced exactly.
 """
+
 from __future__ import annotations
 
 import json
@@ -15,8 +16,12 @@ import json
 import numpy as np
 import pytest
 
-from geomulticorr.inversion.pytio import (IPONDER, IPONDER_LINE_INDEX,
-                                          TIOConfig, input_tio_text)
+from geomulticorr.inversion.pytio import (
+    IPONDER,
+    IPONDER_LINE_INDEX,
+    TIOConfig,
+    input_tio_text,
+)
 
 LEGACY_TEXT = (
     "0.0030  %  smoothing coefficient (threshold = 0.0001)\n"
@@ -90,29 +95,34 @@ class TestDefaults:
     def test_iponder_table(self):
         assert IPONDER == {"variance": 0, "none": 1, "file": 2}
         for mode, value in IPONDER.items():
-            line = input_tio_text(TIOConfig(weight_mode=mode)).splitlines()[IPONDER_LINE_INDEX]
+            line = input_tio_text(TIOConfig(weight_mode=mode)).splitlines()[
+                IPONDER_LINE_INDEX
+            ]
             assert line.startswith(f"{value} ")
 
 
 class TestFieldToLineMapping:
     """Every ported knob lands on its own line, rendered the way the Fortran expects."""
 
-    @pytest.mark.parametrize("field, value, index, prefix", [
-        ("gamma", 0.01, 0, "0.0100 "),
-        ("mask_high_rms", True, 1, "0 "),
-        ("rms_threshold", 2.5, 2, "2.5 "),
-        ("unwrap_iterations", 3, 4, "3 "),
-        ("reweight_iterations", 2, 5, "2 "),
-        ("reweight_scale", 0.5, 6, "0.5 "),
-        ("mask_iterations", 1, 7, "1 "),
-        ("mask_residual_threshold", 6.0, 8, "6 "),
-        ("min_pairs_per_image", 2, 17, "2 "),
-        ("equalize_image_weights", True, 18, "0 "),
-        ("frac_discard", 0.4, 19, "0.4 "),
-        ("scheme", "3pt", 28, "0 "),
-        ("pond_liss", 0, 29, "0 "),
-        ("first_deriv_zero", True, 30, "0 "),
-    ])
+    @pytest.mark.parametrize(
+        "field, value, index, prefix",
+        [
+            ("gamma", 0.01, 0, "0.0100 "),
+            ("mask_high_rms", True, 1, "0 "),
+            ("rms_threshold", 2.5, 2, "2.5 "),
+            ("unwrap_iterations", 3, 4, "3 "),
+            ("reweight_iterations", 2, 5, "2 "),
+            ("reweight_scale", 0.5, 6, "0.5 "),
+            ("mask_iterations", 1, 7, "1 "),
+            ("mask_residual_threshold", 6.0, 8, "6 "),
+            ("min_pairs_per_image", 2, 17, "2 "),
+            ("equalize_image_weights", True, 18, "0 "),
+            ("frac_discard", 0.4, 19, "0.4 "),
+            ("scheme", "3pt", 28, "0 "),
+            ("pond_liss", 0, 29, "0 "),
+            ("first_deriv_zero", True, 30, "0 "),
+        ],
+    )
     def test_field_renders_on_its_line(self, field, value, index, prefix):
         lines = input_tio_text(TIOConfig(**{field: value})).splitlines()
         assert lines[index].startswith(prefix), lines[index]
@@ -147,7 +157,9 @@ class TestValidation:
         assert TIOConfig(gamma=0.00001).smoothing is False
 
     def test_n_robust_iterations_is_the_max(self):
-        assert TIOConfig(reweight_iterations=2, mask_iterations=5).n_robust_iterations == 5
+        assert (
+            TIOConfig(reweight_iterations=2, mask_iterations=5).n_robust_iterations == 5
+        )
 
 
 class TestToDict:

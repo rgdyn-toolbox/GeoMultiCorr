@@ -17,6 +17,7 @@
 No test initialises Earth Engine or authenticates: ``ee.Initialize`` and
 ``ee.Authenticate`` are replaced wherever ``connect`` could reach them.
 """
+
 import ee
 import geopandas as gpd
 import pytest
@@ -39,14 +40,18 @@ def ee_calls(monkeypatch):
     monkeypatch.setattr(ee.data, "_initialized", False, raising=False)
     monkeypatch.setattr(ee, "Initialize", lambda **k: calls.append(("init", k)))
     monkeypatch.setattr(ee, "Authenticate", lambda **k: calls.append(("auth", k)))
-    monkeypatch.setattr(ee, "ServiceAccountCredentials", lambda sa, key: ("creds", sa, key))
+    monkeypatch.setattr(
+        ee, "ServiceAccountCredentials", lambda sa, key: ("creds", sa, key)
+    )
     return calls
 
 
 class _FakeGeometry(ee.geometry.Geometry):
     """Offline stand-in: a real ``ee.Geometry`` needs an initialised EE client."""
 
-    def __init__(self, geo=None, *a, **k):  # noqa: D401 - deliberately skips super().__init__
+    def __init__(
+        self, geo=None, *a, **k
+    ):  # noqa: D401 - deliberately skips super().__init__
         self.geo = geo
 
 
@@ -76,7 +81,9 @@ class TestClient:
 
     def test_service_account_credentials(self, ee_calls):
         GEEClient(service_account="sa@x.iam", key_file="k.json", project="p").connect()
-        assert ee_calls == [("init", {"credentials": ("creds", "sa@x.iam", "k.json"), "project": "p"})]
+        assert ee_calls == [
+            ("init", {"credentials": ("creds", "sa@x.iam", "k.json"), "project": "p"})
+        ]
 
     def test_interactive_auth_only_as_a_fallback(self, monkeypatch, ee_calls):
         n = {"init": 0}
@@ -92,13 +99,17 @@ class TestClient:
         assert [c[0] for c in ee_calls] == ["auth", "init"]
 
     def test_no_interactive_auth_when_disabled(self, monkeypatch, ee_calls):
-        monkeypatch.setattr(ee, "Initialize", lambda **k: (_ for _ in ()).throw(RuntimeError("nope")))
+        monkeypatch.setattr(
+            ee, "Initialize", lambda **k: (_ for _ in ()).throw(RuntimeError("nope"))
+        )
         with pytest.raises(RuntimeError, match="nope"):
             GEEClient(authenticate_if_needed=False).connect()
         assert ee_calls == []
 
     def test_service_account_failure_never_opens_a_browser(self, monkeypatch, ee_calls):
-        monkeypatch.setattr(ee, "Initialize", lambda **k: (_ for _ in ()).throw(RuntimeError("denied")))
+        monkeypatch.setattr(
+            ee, "Initialize", lambda **k: (_ for _ in ()).throw(RuntimeError("denied"))
+        )
         with pytest.raises(RuntimeError, match="denied"):
             GEEClient(service_account="sa", key_file="k").connect()
         assert ee_calls == []
@@ -107,17 +118,28 @@ class TestClient:
 class TestCatalog:
     def test_default_keys(self):
         assert ImageCollectionCatalog.default().keys() == [
-            "L9_SR", "L8_SR", "L7_SR", "L5_SR", "S2_SR", "L9_TOA", "L8_TOA", "L7_TOA"
+            "L9_SR",
+            "L8_SR",
+            "L7_SR",
+            "L5_SR",
+            "S2_SR",
+            "L9_TOA",
+            "L8_TOA",
+            "L7_TOA",
         ]
 
-    @pytest.mark.parametrize("key, cloud", [("L8_SR", "CLOUD_COVER"), ("S2_SR", "CLOUDY_PIXEL_PERCENTAGE")])
+    @pytest.mark.parametrize(
+        "key, cloud", [("L8_SR", "CLOUD_COVER"), ("S2_SR", "CLOUDY_PIXEL_PERCENTAGE")]
+    )
     def test_cloud_property_per_family(self, key, cloud):
         assert ImageCollectionCatalog.default().get(key).cloud_property == cloud
 
     def test_toa_entries_select_the_panchromatic_band(self):
         cat = ImageCollectionCatalog.default()
-        assert all(cat.get(k).bands == ["B8"] and cat.get(k).nominal_scale_m == 15
-                   for k in ("L9_TOA", "L8_TOA", "L7_TOA"))
+        assert all(
+            cat.get(k).bands == ["B8"] and cat.get(k).nominal_scale_m == 15
+            for k in ("L9_TOA", "L8_TOA", "L7_TOA")
+        )
 
     def test_unknown_key(self):
         with pytest.raises(KeyError):
@@ -202,7 +224,9 @@ class TestSmallBranches:
         assert [s.key for s in cat.specs()] == cat.keys() and len(cat.specs()) == 8
 
     def test_unparseable_aoi_crs_falls_back_to_wgs84(self):
-        f = ImageFinder(GEEClient(), ImageCollectionCatalog.default(), aoi=AOI, aoi_crs="not-a-crs")
+        f = ImageFinder(
+            GEEClient(), ImageCollectionCatalog.default(), aoi=AOI, aoi_crs="not-a-crs"
+        )
         assert f._aoi_export_crs == "EPSG:4326"
 
 
@@ -210,10 +234,16 @@ def _feature(image_id, date, cloud, key="L8_SR"):
     return {
         "geometry": mapping(_box(5.9, 44.9, 6.2, 45.2)),
         "properties": {
-            "image_id": image_id, "collection_key": key, "collection_name": "name",
-            "acquisition_date": date, "cloud_percent": cloud, "nominal_scale_m": 30,
-            "footprint_area_m2": 2.0e8, "footprint_area_km2": 200.0,
-            "aoi_coverage_percent": 100.0, "overlap_ratio": 0.04,
+            "image_id": image_id,
+            "collection_key": key,
+            "collection_name": "name",
+            "acquisition_date": date,
+            "cloud_percent": cloud,
+            "nominal_scale_m": 30,
+            "footprint_area_m2": 2.0e8,
+            "footprint_area_km2": 200.0,
+            "aoi_coverage_percent": 100.0,
+            "overlap_ratio": 0.04,
         },
     }
 
@@ -257,7 +287,9 @@ def search_env(monkeypatch, ee_calls):
             _feature("LC08_c", "2023-07-01", 5.0),
             _feature("LC08_d", "2023-01-01", None),
         ],
-        "COPERNICUS/S2_SR_HARMONIZED": [_feature("S2_a", "2023-07-01", 1.0, key="S2_SR")],
+        "COPERNICUS/S2_SR_HARMONIZED": [
+            _feature("S2_a", "2023-07-01", 1.0, key="S2_SR")
+        ],
     }
 
     def image_collection(ee_id):
@@ -268,7 +300,9 @@ def search_env(monkeypatch, ee_calls):
     monkeypatch.setattr(ee, "Number", lambda x: MagicMock())
     monkeypatch.setattr(ee, "Date", lambda x: MagicMock())
     monkeypatch.setattr(ee, "Filter", MagicMock())
-    monkeypatch.setattr(ee, "Feature", lambda geom, props: seen["props"].append(props) or props)
+    monkeypatch.setattr(
+        ee, "Feature", lambda geom, props: seen["props"].append(props) or props
+    )
     monkeypatch.setattr(ee, "FeatureCollection", lambda fc: fc)
     f = ImageFinder(GEEClient(), ImageCollectionCatalog.default(), aoi=AOI)
     f.aoi_ee = MagicMock()
@@ -292,7 +326,11 @@ class TestSearchMetadata:
         search_env.search_metadata(["L8_SR"])
         props = search_env._seen["props"][0]
         assert props["collection_key"] == "L8_SR" and props["nominal_scale_m"] == 30
-        assert {"overlap_ratio", "aoi_coverage_percent", "aoi_intersection_area_m2"} <= set(props)
+        assert {
+            "overlap_ratio",
+            "aoi_coverage_percent",
+            "aoi_intersection_area_m2",
+        } <= set(props)
 
     def test_two_collections_are_merged(self, search_env):
         gdf = search_env.search_metadata(["L8_SR", "S2_SR"])
@@ -326,7 +364,15 @@ def export_env(monkeypatch, tmp_path, ee_calls):
         if rec["fail"] > 0:
             rec["fail"] -= 1
             raise OSError("quota")
-        rec["exports"].append({"img": img, "filename": filename, "scale": scale, "crs": crs, "region": region})
+        rec["exports"].append(
+            {
+                "img": img,
+                "filename": filename,
+                "scale": scale,
+                "crs": crs,
+                "region": region,
+            }
+        )
 
     monkeypatch.setattr(ee, "Image", image)
     monkeypatch.setattr(mod.geemap, "ee_export_image", export)
@@ -354,18 +400,27 @@ L8 = ImageCollectionCatalog.default().get("L8_SR")
 class TestBulkDownload:
     def test_missing_columns(self, export_env):
         with pytest.raises(ValueError, match="missing required columns"):
-            export_env.bulk_download(_rows().drop(columns=["nominal_scale_m"]), output_dir=export_env._out)
+            export_env.bulk_download(
+                _rows().drop(columns=["nominal_scale_m"]), output_dir=export_env._out
+            )
 
     @pytest.mark.parametrize("tqdm_on", [True, False])
     def test_paths_ids_bands_and_crs(self, export_env, monkeypatch, tqdm_on):
         monkeypatch.setattr(mod, "_HAS_TQDM", tqdm_on and mod._HAS_TQDM)
         out = export_env.bulk_download(_rows(), output_dir=export_env._out)
-        assert [p.name for p in out] == ["L8_SR_20230701_30m.tif", "L8_SR_20230802_30m.tif"]
+        assert [p.name for p in out] == [
+            "L8_SR_20230701_30m.tif",
+            "L8_SR_20230802_30m.tif",
+        ]
         assert all(p.parent == export_env._out / "L8_SR" for p in out)
         imgs = export_env._rec["images"]
         assert imgs[0].image_id == f"{L8.ee_id}/LC08_a" and imgs[0].bands == L8.bands
         ex = export_env._rec["exports"][0]
-        assert ex["crs"] == "EPSG:4326" and ex["scale"] == 30 and ex["region"] is export_env.aoi_ee
+        assert (
+            ex["crs"] == "EPSG:4326"
+            and ex["scale"] == 30
+            and ex["region"] is export_env.aoi_ee
+        )
 
     def test_full_image_id_is_kept_and_unknown_key_has_no_bands(self, export_env):
         gdf = _rows(image_id=["X/Y/img1", "X/Y/img2"], collection_key=["NOPE", "NOPE"])
@@ -381,12 +436,20 @@ class TestBulkDownload:
 
     def test_overrides_and_footprint_region(self, export_env):
         export_env.bulk_download(
-            _rows(), output_dir=export_env._out, region_mode="footprint", crs="EPSG:2154",
-            scale_override_m=60, bands_override=["SR_B2"], max_images=1,
+            _rows(),
+            output_dir=export_env._out,
+            region_mode="footprint",
+            crs="EPSG:2154",
+            scale_override_m=60,
+            bands_override=["SR_B2"],
+            max_images=1,
         )
         ex = export_env._rec["exports"][0]
         assert ex["scale"] == 60 and ex["crs"] == "EPSG:2154"
-        assert isinstance(ex["region"], _FakeGeometry) and ex["region"] is not export_env.aoi_ee
+        assert (
+            isinstance(ex["region"], _FakeGeometry)
+            and ex["region"] is not export_env.aoi_ee
+        )
         assert ex["img"].bands == ["SR_B2"]
         assert ex["filename"].endswith("L8_SR_20230701_60m.tif")
 
@@ -396,12 +459,18 @@ class TestBulkDownload:
         assert out[0].name == "L8_SR_nodate_30m.tif"
 
     def test_no_date_column_gives_nodate(self, export_env):
-        out = export_env.bulk_download(_rows().drop(columns=["acquisition_date"]), output_dir=export_env._out, max_images=1)
+        out = export_env.bulk_download(
+            _rows().drop(columns=["acquisition_date"]),
+            output_dir=export_env._out,
+            max_images=1,
+        )
         assert out[0].name == "L8_SR_nodate_30m.tif"
 
     def test_file_basename_is_currently_ignored(self, export_env):
         # pins today's behaviour: the basename-based path is built and then overwritten
-        out = export_env.bulk_download(_rows(), output_dir=export_env._out, file_basename="custom", max_images=1)
+        out = export_env.bulk_download(
+            _rows(), output_dir=export_env._out, file_basename="custom", max_images=1
+        )
         assert out[0].name == "L8_SR_20230701_30m.tif"
 
     def test_throttle_sleeps_after_each_export(self, export_env):
@@ -410,14 +479,21 @@ class TestBulkDownload:
 
     def test_retry_then_success_uses_exponential_backoff(self, export_env):
         export_env._rec["fail"] = 2
-        out = export_env.bulk_download(_rows(), output_dir=export_env._out, max_images=1, retry_backoff_s=0.5)
+        out = export_env.bulk_download(
+            _rows(), output_dir=export_env._out, max_images=1, retry_backoff_s=0.5
+        )
         assert len(out) == 1 and export_env._rec["sleeps"] == [0.5, 1.0]
 
     def test_retries_exhausted(self, export_env, caplog):
         export_env._rec["fail"] = 99
         with caplog.at_level(logging.WARNING):
             with pytest.raises(RuntimeError, match="Last error: quota"):
-                export_env.bulk_download(_rows(), output_dir=export_env._out, max_retries=1, retry_backoff_s=0.5)
+                export_env.bulk_download(
+                    _rows(),
+                    output_dir=export_env._out,
+                    max_retries=1,
+                    retry_backoff_s=0.5,
+                )
         assert export_env._rec["sleeps"] == [0.5]
 
     def test_nat_acquisition_date_gives_nodate(self, export_env):

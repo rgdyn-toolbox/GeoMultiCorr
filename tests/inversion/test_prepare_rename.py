@@ -49,11 +49,13 @@ class TestPrepareInversionRename:
 
     def test_prepare_inversion_exists(self):
         assert callable(getattr(TIOInversion, "prepare_inversion", None))
+
     # END def
 
     def test_prepare_alias_still_exists(self):
         """Notebooks calling inv.prepare(...) must keep working until 0.7.0."""
         assert callable(getattr(TIOInversion, "prepare", None))
+
     # END def
 
     def test_prepare_inversion_accepts_verbose(self):
@@ -61,6 +63,7 @@ class TestPrepareInversionRename:
         params = inspect.signature(TIOInversion.prepare_inversion).parameters
         assert "verbose" in params
         assert params["verbose"].default is False
+
     # END def
 
     def test_alias_forwards_arguments(self):
@@ -74,6 +77,7 @@ class TestPrepareInversionRename:
 
         assert result == "done"
         assert seen["kwargs"] == {"weight_mode": "uniform", "cores": 8}
+
     # END def
 
     def test_alias_emits_deprecation_warning(self):
@@ -82,6 +86,7 @@ class TestPrepareInversionRename:
 
         with pytest.warns(DeprecationWarning, match="prepare_inversion"):
             inv.prepare()
+
     # END def
 
     def test_alias_also_warns_on_the_gmc_channel(self, caplog_gmc):
@@ -94,6 +99,7 @@ class TestPrepareInversionRename:
             inv.prepare()
 
         assert "prepare_inversion" in caplog_gmc.text
+
     # END def
 
     def test_nothing_in_the_library_calls_the_alias(self):
@@ -118,5 +124,8 @@ class TestPrepareInversionRename:
                 ):
                     hits.append(f"{path.name}:{node.lineno}")
         assert hits == [], f"internal callers of the deprecated alias: {hits}"
+
     # END def
+
+
 # END class

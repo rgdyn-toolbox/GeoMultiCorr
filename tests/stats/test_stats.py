@@ -27,6 +27,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
 """Unit tests for geomulticorr.stats.stats."""
+
 from __future__ import annotations
 
 import json
@@ -150,9 +151,7 @@ class TestFractionAbove:
     def test_non_finite_excluded_from_numerator_and_denominator(self):
         """inf/nan are dropped before computing the fraction."""
         # 2 finite values (0.6, 0.9), both >= 0.5 → 1.0 (not 2/4).
-        result = fraction_above(
-            np.array([0.6, 0.9, np.nan, np.inf]), thresholds=(0.5,)
-        )
+        result = fraction_above(np.array([0.6, 0.9, np.nan, np.inf]), thresholds=(0.5,))
         assert result[0.5] == pytest.approx(1.0)
 
     def test_default_thresholds_keys_present(self):
@@ -250,9 +249,20 @@ class TestComputeRasterStats:
         path = make_tif(np.ones((10, 10), dtype="float32"))
         result = compute_raster_stats(path)
         expected = {
-            "count_total", "count_valid", "valid_fraction",
-            "mean", "median", "std", "nmad", "min", "max",
-            "p5", "p25", "p50", "p75", "p95",
+            "count_total",
+            "count_valid",
+            "valid_fraction",
+            "mean",
+            "median",
+            "std",
+            "nmad",
+            "min",
+            "max",
+            "p5",
+            "p25",
+            "p50",
+            "p75",
+            "p95",
         }
         assert expected.issubset(result.keys())
 
@@ -394,10 +404,23 @@ class TestBuildPairMetadata:
     """Tests for build_pair_metadata() — identity + spatial metadata dict."""
 
     _EXPECTED_KEYS = {
-        "pair_key", "pair_name", "pzone",
-        "left_date", "left_sensor", "right_date", "right_sensor",
-        "dt_days", "dt_months", "dt_years", "direction",
-        "ncols", "nrows", "resolution_x", "resolution_y", "crs", "bounds",
+        "pair_key",
+        "pair_name",
+        "pzone",
+        "left_date",
+        "left_sensor",
+        "right_date",
+        "right_sensor",
+        "dt_days",
+        "dt_months",
+        "dt_years",
+        "direction",
+        "ncols",
+        "nrows",
+        "resolution_x",
+        "resolution_y",
+        "crs",
+        "bounds",
     }
 
     def test_contains_all_expected_keys(self, mock_pair):
@@ -483,10 +506,12 @@ class TestComputePairRawStats:
 
     #: 16 valid pixels: eight at 0.9, four at 0.6, four at 0.1.
     _CC_DATA = np.array(
-        [[0.9, 0.9, 0.9, 0.9],
-         [0.9, 0.9, 0.9, 0.9],
-         [0.6, 0.6, 0.6, 0.6],
-         [0.1, 0.1, 0.1, 0.1]],
+        [
+            [0.9, 0.9, 0.9, 0.9],
+            [0.9, 0.9, 0.9, 0.9],
+            [0.6, 0.6, 0.6, 0.6],
+            [0.1, 0.1, 0.1, 0.1],
+        ],
         dtype="float32",
     )
 
@@ -501,7 +526,7 @@ class TestComputePairRawStats:
     def test_cc_quality_values_match_hand_computed(self, mock_pair):
         """CC-quality fractions equal the hand-computed shares of valid pixels.
 
-          >= 0.25 → 12/16 = 0.75 ; >= 0.5 → 12/16 = 0.75 ; >= 0.75 → 8/16 = 0.5
+        >= 0.25 → 12/16 = 0.75 ; >= 0.5 → 12/16 = 0.75 ; >= 0.75 → 8/16 = 0.5
         """
         write_geotiff(mock_pair.pa_cc_raw_path, self._CC_DATA)
         cc = compute_pair_raw_stats(mock_pair)["cc"]
@@ -512,7 +537,7 @@ class TestComputePairRawStats:
     def test_cc_fraction_counts_match_hand_computed(self, mock_pair):
         """CC-fraction counts equal the hand-computed # pixels >= τ.
 
-          >= 0.25 → 12 ; >= 0.5 → 12 ; >= 0.75 → 8
+        >= 0.25 → 12 ; >= 0.5 → 12 ; >= 0.75 → 8
         """
         write_geotiff(mock_pair.pa_cc_raw_path, self._CC_DATA)
         cc = compute_pair_raw_stats(mock_pair)["cc"]
@@ -532,7 +557,11 @@ class TestComputePairRawStats:
     def test_cc_keys_absent_from_non_cc_entries(self, mock_pair):
         """ew/ns/magn entries do not carry cc_quality_* or cc_fraction_* keys."""
         data = np.ones((4, 4), dtype="float32")
-        for path in (mock_pair.pa_ew_path, mock_pair.pa_ns_path, mock_pair.pa_magn_path):
+        for path in (
+            mock_pair.pa_ew_path,
+            mock_pair.pa_ns_path,
+            mock_pair.pa_magn_path,
+        ):
             write_geotiff(path, data)
         result = compute_pair_raw_stats(mock_pair)
         for entry in ("ew", "ns", "magn"):
@@ -563,8 +592,11 @@ class TestInitPairStats:
         """Returned dict has metadata, raw/correction/final stats, and weight."""
         result = init_pair_stats(mock_pair)
         assert set(result.keys()) >= {
-            "metadata", "raw_corr_stats", "correction_stats",
-            "final_corrected_stats", "weight",
+            "metadata",
+            "raw_corr_stats",
+            "correction_stats",
+            "final_corrected_stats",
+            "weight",
         }
         assert result["raw_corr_stats"] == {}
         assert result["correction_stats"] == {}
@@ -628,7 +660,9 @@ class TestUpdatePairStats:
         """Target section is replaced with supplied data."""
         init_pair_stats(mock_pair)
         update_pair_stats(mock_pair, "raw_corr_stats", {"ew": {"mean": 1.5}})
-        assert load_pair_stats(mock_pair)["raw_corr_stats"]["ew"]["mean"] == pytest.approx(1.5)
+        assert load_pair_stats(mock_pair)["raw_corr_stats"]["ew"][
+            "mean"
+        ] == pytest.approx(1.5)
 
     def test_preserves_other_sections(self, mock_pair):
         """Updating one section leaves the others intact."""
@@ -650,7 +684,9 @@ class TestUpdatePairStats:
         init_pair_stats(mock_pair)
         update_pair_stats(mock_pair, "raw_corr_stats", {"ew": {"mean": 1.0}})
         update_pair_stats(mock_pair, "raw_corr_stats", {"ew": {"mean": 2.0}})
-        assert load_pair_stats(mock_pair)["raw_corr_stats"]["ew"]["mean"] == pytest.approx(2.0)
+        assert load_pair_stats(mock_pair)["raw_corr_stats"]["ew"][
+            "mean"
+        ] == pytest.approx(2.0)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -664,14 +700,18 @@ class TestSaveCorrectedStats:
 
     def test_saves_ew_and_ns_under_correction_name(self, mock_pair):
         """Stats saved under correction_name with 'ew' and 'ns' sub-keys."""
-        save_corrected_stats(mock_pair, self._raster(1.0), self._raster(2.0), "MedianCentering")
+        save_corrected_stats(
+            mock_pair, self._raster(1.0), self._raster(2.0), "MedianCentering"
+        )
         entry = load_pair_stats(mock_pair)["correction_stats"]["MedianCentering"]
         assert "ew" in entry
         assert "ns" in entry
 
     def test_ew_and_ns_means_match_data(self, mock_pair):
         """Stored mean values match the constant raster values."""
-        save_corrected_stats(mock_pair, self._raster(3.0), self._raster(7.0), "TestCorr")
+        save_corrected_stats(
+            mock_pair, self._raster(3.0), self._raster(7.0), "TestCorr"
+        )
         entry = load_pair_stats(mock_pair)["correction_stats"]["TestCorr"]
         assert entry["ew"]["mean"] == pytest.approx(3.0, abs=1e-4)
         assert entry["ns"]["mean"] == pytest.approx(7.0, abs=1e-4)
@@ -687,8 +727,12 @@ class TestSaveCorrectedStats:
 
     def test_second_call_with_same_name_overwrites(self, mock_pair):
         """Two calls with the same correction_name: second overwrites first."""
-        save_corrected_stats(mock_pair, self._raster(1.0), self._raster(1.0), "TestCorr")
-        save_corrected_stats(mock_pair, self._raster(5.0), self._raster(5.0), "TestCorr")
+        save_corrected_stats(
+            mock_pair, self._raster(1.0), self._raster(1.0), "TestCorr"
+        )
+        save_corrected_stats(
+            mock_pair, self._raster(5.0), self._raster(5.0), "TestCorr"
+        )
         entry = load_pair_stats(mock_pair)["correction_stats"]["TestCorr"]
         assert entry["ew"]["mean"] == pytest.approx(5.0, abs=1e-4)
 
@@ -711,6 +755,7 @@ class TestSaveCorrectedStats:
 
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class TestSaveFinalCorrectedStats:
     """Tests for save_final_corrected_stats() — canonical final-correction copy."""
 
@@ -719,8 +764,12 @@ class TestSaveFinalCorrectedStats:
 
     def test_copies_last_correction_block(self, mock_pair):
         """Without a name, copies the last-inserted correction block."""
-        save_corrected_stats(mock_pair, self._raster(1.0), self._raster(1.0), "MedianCentering")
-        save_corrected_stats(mock_pair, self._raster(3.0), self._raster(3.0), "RampCorrection")
+        save_corrected_stats(
+            mock_pair, self._raster(1.0), self._raster(1.0), "MedianCentering"
+        )
+        save_corrected_stats(
+            mock_pair, self._raster(3.0), self._raster(3.0), "RampCorrection"
+        )
         save_final_corrected_stats(mock_pair)
         js = load_pair_stats(mock_pair)
         assert js["final_corrected_stats"] == js["correction_stats"]["RampCorrection"]
@@ -728,8 +777,12 @@ class TestSaveFinalCorrectedStats:
 
     def test_explicit_name_copies_that_block(self, mock_pair):
         """With last_correction_name, copies that named block (not the last)."""
-        save_corrected_stats(mock_pair, self._raster(1.0), self._raster(1.0), "MedianCentering")
-        save_corrected_stats(mock_pair, self._raster(3.0), self._raster(3.0), "RampCorrection")
+        save_corrected_stats(
+            mock_pair, self._raster(1.0), self._raster(1.0), "MedianCentering"
+        )
+        save_corrected_stats(
+            mock_pair, self._raster(3.0), self._raster(3.0), "RampCorrection"
+        )
         save_final_corrected_stats(mock_pair, last_correction_name="MedianCentering")
         js = load_pair_stats(mock_pair)
         assert js["final_corrected_stats"] == js["correction_stats"]["MedianCentering"]
@@ -737,7 +790,9 @@ class TestSaveFinalCorrectedStats:
 
     def test_is_deep_copy(self, mock_pair):
         """Mutating final_corrected_stats does not alter correction_stats."""
-        save_corrected_stats(mock_pair, self._raster(2.0), self._raster(2.0), "TestCorr")
+        save_corrected_stats(
+            mock_pair, self._raster(2.0), self._raster(2.0), "TestCorr"
+        )
         save_final_corrected_stats(mock_pair)
         js = load_pair_stats(mock_pair)
         js["final_corrected_stats"]["ew"]["mean"] = -999.0
@@ -761,8 +816,14 @@ class TestSavePairWeight:
 
     def test_writes_weight_section(self, mock_pair):
         """weight section stores ew / ns / mode / combine / params."""
-        save_pair_weight(mock_pair, 0.42, 0.55, mode="quality:geomean",
-                         combine="geomean", params={"weight_mode": "quality"})
+        save_pair_weight(
+            mock_pair,
+            0.42,
+            0.55,
+            mode="quality:geomean",
+            combine="geomean",
+            params={"weight_mode": "quality"},
+        )
         w = load_pair_stats(mock_pair)["weight"]
         assert w["ew"] == pytest.approx(0.42)
         assert w["ns"] == pytest.approx(0.55)
@@ -870,8 +931,7 @@ class TestResolveStatColumns:
         """String section selects the canonical final-correction block."""
         cols = resolve_stat_columns(
             self._JSON,
-            {"pa_ew_nmad_corr": ("ew", "nmad"),
-             "pa_ns_nmad_corr": ("ns", "nmad")},
+            {"pa_ew_nmad_corr": ("ew", "nmad"), "pa_ns_nmad_corr": ("ns", "nmad")},
             "final_corrected_stats",
         )
         assert cols == {"pa_ew_nmad_corr": 0.05, "pa_ns_nmad_corr": 0.15}
@@ -880,8 +940,10 @@ class TestResolveStatColumns:
         """String section selects the raw block; values pulled exactly."""
         cols = resolve_stat_columns(
             self._JSON,
-            {"pa_ew_nmad": ("ew", "nmad"),
-             "pa_cc_quality050": ("cc", "cc_quality_gte_050")},
+            {
+                "pa_ew_nmad": ("ew", "nmad"),
+                "pa_cc_quality050": ("cc", "cc_quality_gte_050"),
+            },
             "raw_corr_stats",
         )
         assert cols == {"pa_ew_nmad": 0.11, "pa_cc_quality050": 0.73}
@@ -899,8 +961,7 @@ class TestResolveStatColumns:
         """A callable section (last_correction_block) picks the last entry."""
         cols = resolve_stat_columns(
             self._JSON,
-            {"pa_ew_nmad_corr": ("ew", "nmad"),
-             "pa_ns_nmad_corr": ("ns", "nmad")},
+            {"pa_ew_nmad_corr": ("ew", "nmad"), "pa_ns_nmad_corr": ("ns", "nmad")},
             last_correction_block,
         )
         assert cols == {"pa_ew_nmad_corr": 0.05, "pa_ns_nmad_corr": 0.15}
@@ -909,8 +970,10 @@ class TestResolveStatColumns:
         """Missing layer or stat key resolves to nan (not KeyError)."""
         cols = resolve_stat_columns(
             self._JSON,
-            {"missing_layer": ("magn", "nmad"),
-             "missing_key": ("ew", "does_not_exist")},
+            {
+                "missing_layer": ("magn", "nmad"),
+                "missing_key": ("ew", "does_not_exist"),
+            },
             "raw_corr_stats",
         )
         assert math.isnan(cols["missing_layer"])
@@ -947,8 +1010,15 @@ class TestStatsEdgePaths:
 
         path = tmp_path / "multi.tif"
         with rasterio.open(
-            path, "w", driver="GTiff", height=4, width=4, count=2, dtype="float32",
-            crs="EPSG:32632", transform=from_bounds(0, 0, 40, 40, 4, 4),
+            path,
+            "w",
+            driver="GTiff",
+            height=4,
+            width=4,
+            count=2,
+            dtype="float32",
+            crs="EPSG:32632",
+            transform=from_bounds(0, 0, 40, 40, 4, 4),
         ) as dst:
             dst.write(np.full((4, 4), 1.0, dtype="float32"), 1)
             dst.write(np.full((4, 4), 7.0, dtype="float32"), 2)

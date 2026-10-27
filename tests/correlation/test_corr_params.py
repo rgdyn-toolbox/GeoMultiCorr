@@ -7,6 +7,7 @@ The numeric expectations here are taken from the worked examples in
 drift in these formulas moves every derived parameter set and every published
 design map without failing anything else.
 """
+
 from __future__ import annotations
 
 import math
@@ -127,11 +128,17 @@ class TestNoiseFloor:
 class TestDetectionFloor:
     @pytest.mark.parametrize(
         "velocity, expected_days",
-        [(1.0, 1.5 * DAYS_PER_YEAR), (2.0, 0.75 * DAYS_PER_YEAR), (5.0, 0.3 * DAYS_PER_YEAR)],
+        [
+            (1.0, 1.5 * DAYS_PER_YEAR),
+            (2.0, 0.75 * DAYS_PER_YEAR),
+            (5.0, 0.3 * DAYS_PER_YEAR),
+        ],
     )
     def test_guide_table_of_minimum_useful_baselines(self, velocity, expected_days):
         """Guide §2.4: on 3 m imagery a 1 m/yr landform needs ~18 months."""
-        assert snr(velocity, expected_days, GUIDE_RES, GUIDE_C) == pytest.approx(GUIDE_K)
+        assert snr(velocity, expected_days, GUIDE_RES, GUIDE_C) == pytest.approx(
+            GUIDE_K
+        )
 
     def test_min_detectable_velocity_is_inverse_in_baseline(self):
         v1 = min_detectable_velocity(365.25, GUIDE_RES, GUIDE_C, GUIDE_K)
@@ -140,7 +147,9 @@ class TestDetectionFloor:
         assert v1 == pytest.approx(GUIDE_K * GUIDE_SIGMA)
 
     def test_min_detectable_velocity_vectorises(self):
-        out = min_detectable_velocity(np.array([365.25, 730.5]), GUIDE_RES, GUIDE_C, GUIDE_K)
+        out = min_detectable_velocity(
+            np.array([365.25, 730.5]), GUIDE_RES, GUIDE_C, GUIDE_K
+        )
         assert isinstance(out, np.ndarray)
         assert out[0] == pytest.approx(2.0 * out[1])
 
@@ -160,7 +169,9 @@ class TestDetectionFloor:
 class TestSearchRange:
     def test_symmetric_box_covers_displacement_plus_allowances(self):
         """Guide §2.4: 5 m/yr over 4 yr at 3 m is 6.7 px, +2 coreg +2 margin."""
-        box = required_search_px(5.0, 4 * DAYS_PER_YEAR, GUIDE_RES, coreg_px=2, margin_px=2)
+        box = required_search_px(
+            5.0, 4 * DAYS_PER_YEAR, GUIDE_RES, coreg_px=2, margin_px=2
+        )
         assert box == (-11, -11, 11, 11)
         assert search_half_width_px(box) == 11.0
 
@@ -172,7 +183,12 @@ class TestSearchRange:
     def test_asymmetric_box_is_elongated_along_flow(self):
         """Guide §6.1 — the single largest cost saving available."""
         box = required_search_px(
-            5.0, 4 * DAYS_PER_YEAR, GUIDE_RES, coreg_px=2, margin_px=2, flow_azimuth_deg=90.0
+            5.0,
+            4 * DAYS_PER_YEAR,
+            GUIDE_RES,
+            coreg_px=2,
+            margin_px=2,
+            flow_azimuth_deg=90.0,
         )
         x_lo, y_lo, x_hi, y_hi = box
         assert x_hi > 6  # eastward reach covers the 6.7 px displacement
@@ -192,14 +208,18 @@ class TestSearchRange:
 
     def test_asymmetric_box_is_much_cheaper(self):
         sym = required_search_px(20.0, 4 * DAYS_PER_YEAR, GUIDE_RES)
-        asym = required_search_px(20.0, 4 * DAYS_PER_YEAR, GUIDE_RES, flow_azimuth_deg=90.0)
+        asym = required_search_px(
+            20.0, 4 * DAYS_PER_YEAR, GUIDE_RES, flow_azimuth_deg=90.0
+        )
         assert cost_index(21, asym) < cost_index(21, sym) / 5.0
 
     def test_search_half_width_of_auto_is_nan(self):
         assert math.isnan(search_half_width_px(None))
 
     def test_max_measurable_velocity_is_the_ceiling_line(self):
-        v = max_measurable_velocity(4 * DAYS_PER_YEAR, GUIDE_RES, 11.0, coreg_px=2, margin_px=2)
+        v = max_measurable_velocity(
+            4 * DAYS_PER_YEAR, GUIDE_RES, 11.0, coreg_px=2, margin_px=2
+        )
         assert v == pytest.approx(7 * GUIDE_RES / 4.0)
 
     def test_max_measurable_velocity_never_negative(self):
@@ -207,9 +227,7 @@ class TestSearchRange:
 
 
 class TestKernelSizing:
-    @pytest.mark.parametrize(
-        "resolution, expected", [(1.5, 41), (3.0, 21), (10.0, 7)]
-    )
+    @pytest.mark.parametrize("resolution, expected", [(1.5, 41), (3.0, 21), (10.0, 7)])
     def test_matched_ground_footprint_across_sensors(self, resolution, expected):
         """Guide §4.2: a 60 m template is a different pixel count per sensor."""
         assert kernel_from_footprint(60.0, resolution) == expected
@@ -243,7 +261,9 @@ class TestStrainCeiling:
         [(0.02, 1.0, 50.0), (0.02, 4.0, 12.5), (0.1, 4.0, 2.5)],
     )
     def test_guide_worked_strain_limits(self, gradient, dt_years, expected):
-        assert strain_kernel_limit_px(gradient, dt_years * DAYS_PER_YEAR) == pytest.approx(expected)
+        assert strain_kernel_limit_px(
+            gradient, dt_years * DAYS_PER_YEAR
+        ) == pytest.approx(expected)
 
     def test_longer_baselines_want_smaller_kernels(self):
         """The counterintuitive result of guide §3.1, stated as a test."""
@@ -286,7 +306,9 @@ class TestDynamicRange:
 
     def test_velocity_ratio_widens_the_span(self):
         narrow = n_parameter_sets(550.0, 3650.0, 12.0, GUIDE_C, GUIDE_K)
-        wide = n_parameter_sets(550.0, 3650.0, 12.0, GUIDE_C, GUIDE_K, velocity_ratio=50.0)
+        wide = n_parameter_sets(
+            550.0, 3650.0, 12.0, GUIDE_C, GUIDE_K, velocity_ratio=50.0
+        )
         assert wide > narrow
 
     def test_never_below_one(self):
@@ -409,7 +431,9 @@ class TestFeasibilityBounds:
     def test_band_width_equals_dynamic_range(self):
         """The two boundaries are parallel; their ratio is S/(k*c)."""
         dt = np.array([100.0, 1000.0])
-        b = feasibility_bounds(dt, GUIDE_RES, GUIDE_C, 12.0, k=GUIDE_K, coreg_px=0, margin_px=0)
+        b = feasibility_bounds(
+            dt, GUIDE_RES, GUIDE_C, 12.0, k=GUIDE_K, coreg_px=0, margin_px=0
+        )
         np.testing.assert_allclose(
             b["v_max"] / b["v_min"], dynamic_range(12.0, GUIDE_C, GUIDE_K)
         )
@@ -424,14 +448,18 @@ class TestFeasibilityBounds:
 class TestSgmOverride:
     @pytest.mark.parametrize("algorithm", SGM_ALGORITHMS)
     def test_sgm_forces_kernel_and_cost_mode(self, algorithm):
-        kernel, subpixel, cost, overridden = sgm_kernel_override(algorithm, (41, 41), (41, 41), 2)
+        kernel, subpixel, cost, overridden = sgm_kernel_override(
+            algorithm, (41, 41), (41, 41), 2
+        )
         assert kernel == SGM_KERNEL
         assert subpixel == SGM_KERNEL
         assert cost == SGM_COST_MODE
         assert overridden is True
 
     def test_block_matching_passes_through_untouched(self):
-        kernel, subpixel, cost, overridden = sgm_kernel_override("asp_bm", (41, 41), (35, 35), 2)
+        kernel, subpixel, cost, overridden = sgm_kernel_override(
+            "asp_bm", (41, 41), (35, 35), 2
+        )
         assert (kernel, subpixel, cost, overridden) == ((41, 41), (35, 35), 2, False)
 
 
@@ -465,7 +493,9 @@ class TestSuggestParameters:
 
     def test_diagnostics_are_self_consistent(self):
         out = self._good()
-        assert out["disp_m"] == pytest.approx(expected_displacement(2.0, 3 * DAYS_PER_YEAR))
+        assert out["disp_m"] == pytest.approx(
+            expected_displacement(2.0, 3 * DAYS_PER_YEAR)
+        )
         assert out["disp_px"] == pytest.approx(out["disp_m"] / GUIDE_RES)
         assert out["snr"] == pytest.approx(out["disp_m"] / out["noise_floor_m"])
         assert out["footprint_m"] == pytest.approx(21 * GUIDE_RES)
@@ -492,7 +522,10 @@ class TestSuggestParameters:
 
     def test_warns_below_the_detection_floor(self):
         out = self._good(dt_days=30.0, velocity_m_yr=1.0)
-        assert any("below the detection floor" in w or "detection floor" in w for w in out["warnings"])
+        assert any(
+            "below the detection floor" in w or "detection floor" in w
+            for w in out["warnings"]
+        )
         assert out["snr"] < GUIDE_K
 
     def test_warns_over_the_cost_budget(self):
@@ -587,7 +620,9 @@ class TestConditionalSearch:
         assert out["corr_seed_mode"] == 0
 
     def test_exactly_at_the_threshold_is_explicit(self):
-        assert self._at(365.0, explicit_search_above_days=365)["corr_search"] is not None
+        assert (
+            self._at(365.0, explicit_search_above_days=365)["corr_search"] is not None
+        )
 
     def test_zero_threshold_makes_every_pair_explicit(self):
         assert self._at(1.0, explicit_search_above_days=0)["corr_search"] is not None
@@ -678,15 +713,20 @@ class TestUniformConflicts:
         assert any("costs" in c for c in out)
 
     def test_a_compatible_uniform_value_is_silent(self):
-        assert uniform_conflicts(self._strained(), kernel_px=11,
-                                 corr_search=(-30, -30, 30, 30)) == []
+        assert (
+            uniform_conflicts(
+                self._strained(), kernel_px=11, corr_search=(-30, -30, 30, 30)
+            )
+            == []
+        )
 
     def test_nothing_overridden_is_silent(self):
         assert uniform_conflicts(self._strained()) == []
 
     def test_conflicts_are_strings(self):
-        out = uniform_conflicts(self._strained(), kernel_px=41,
-                                corr_search=(-2, -2, 2, 2))
+        out = uniform_conflicts(
+            self._strained(), kernel_px=41, corr_search=(-2, -2, 2, 2)
+        )
         assert out and all(isinstance(c, str) for c in out)
 
     def test_a_pair_with_no_strain_limit_never_trips_the_ceiling(self):
@@ -702,8 +742,13 @@ class TestFormatDtSpan:
 
     @pytest.mark.parametrize(
         "lo, hi, unit",
-        [(10, 60, "d"), (30, 90, "mo"), (90, 270, "mo"), (270, 810, "yr"),
-         (810, 2430, "yr")],
+        [
+            (10, 60, "d"),
+            (30, 90, "mo"),
+            (90, 270, "mo"),
+            (270, 810, "yr"),
+            (810, 2430, "yr"),
+        ],
     )
     def test_picks_a_readable_unit(self, lo, hi, unit):
         assert format_dt_span(lo, hi).endswith(unit)

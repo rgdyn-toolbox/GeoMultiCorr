@@ -45,6 +45,7 @@ twins in :mod:`geomulticorr.utils.gmc_functions`, never ``fig.write_image``.
 
 Public API: :func:`corrparams_figure_stem`, :func:`save_corrparams_figure`.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -66,10 +67,19 @@ from geomulticorr.utils._pairs_export import (
 #: Order the parameters appear in a stem, so the same settings always produce
 #: byte-identical names regardless of dict ordering.
 _STEM_KEY_ORDER: tuple[str, ...] = (
-    "velocity_m_yr", "footprint_m", "c_px", "k",
-    "coreg_px", "margin_px", "flow_azimuth_deg", "strain_rate_per_yr",
-    "subpixel_mode", "dt_bin_ratio",
-    "explicit_search_above_days", "uniform_kernel_px", "uniform_search_box",
+    "velocity_m_yr",
+    "footprint_m",
+    "c_px",
+    "k",
+    "coreg_px",
+    "margin_px",
+    "flow_azimuth_deg",
+    "strain_rate_per_yr",
+    "subpixel_mode",
+    "dt_bin_ratio",
+    "explicit_search_above_days",
+    "uniform_kernel_px",
+    "uniform_search_box",
 )
 
 #: Short forms, so a stem carrying six parameters stays a filename rather than a
@@ -210,8 +220,10 @@ def save_corrparams_figure(
     view_kwargs = dict(view_kwargs or {})
 
     def _target(suffix: str) -> pathlib.Path:
-        return (out_dir / f"{stem}.{suffix}") if overwrite else _unique_path(
-            out_dir, stem, suffix
+        return (
+            (out_dir / f"{stem}.{suffix}")
+            if overwrite
+            else _unique_path(out_dir, stem, suffix)
         )
 
     written: dict[str, pathlib.Path] = {}

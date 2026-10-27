@@ -8,6 +8,7 @@ row, including the one-sided boundary stencils. That property is what makes
 the smoothing prior neutral to a constant velocity; a stencil coefficient
 error would show up here before it showed up in any inverted map.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -33,8 +34,8 @@ class TestIncidenceMatrix:
 
     def test_row_times_increments_equals_the_pair_displacement(self):
         rng = np.random.default_rng(0)
-        u = np.cumsum(rng.normal(size=6))            # cumulative series
-        m = np.diff(u)                                # increments
+        u = np.cumsum(rng.normal(size=6))  # cumulative series
+        m = np.diff(u)  # increments
         pairs = np.array([[0, 5], [2, 4], [5, 1]])
         J = incidence_matrix(pairs, 6)
         expected = u[pairs[:, 1]] - u[pairs[:, 0]]
@@ -98,5 +99,7 @@ class TestLaplacianNullSpace:
         D0 = laplacian(t, pond_liss=0)
         D2 = laplacian(t, pond_liss=2)
         assert not np.allclose(D0, D2)
-        np.testing.assert_allclose(laplacian(np.linspace(0, 3, 7), pond_liss=0),
-                                   laplacian(np.linspace(0, 3, 7), pond_liss=2))
+        np.testing.assert_allclose(
+            laplacian(np.linspace(0, 3, 7), pond_liss=0),
+            laplacian(np.linspace(0, 3, 7), pond_liss=2),
+        )

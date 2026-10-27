@@ -71,6 +71,7 @@ Available symbols by level:
     · LIST
     ▸ LAUNCH
 """
+
 from __future__ import annotations
 
 import logging
@@ -108,20 +109,20 @@ logging.addLevelName(LAUNCH, "LAUNCH")
 # reasoning about "how important is this record" must go through severity(),
 # never through record.levelno directly, or a plain setLevel(WARNING) leaks them.
 _SEVERITY: dict[int, int] = {
-    logging.DEBUG:    logging.DEBUG,
-    LIST:             15,
-    logging.INFO:     logging.INFO,
-    FOLDER:           logging.INFO,
-    SETTINGS:         logging.INFO,
-    SEARCH:           logging.INFO,
-    FILE:             logging.INFO,
-    SUCCESS:          logging.INFO,
-    STATISTICS:       logging.INFO,
-    TIMER:            logging.INFO,
-    SAVE:             logging.INFO,
-    LAUNCH:           logging.INFO,
-    logging.WARNING:  logging.WARNING,
-    logging.ERROR:    logging.ERROR,
+    logging.DEBUG: logging.DEBUG,
+    LIST: 15,
+    logging.INFO: logging.INFO,
+    FOLDER: logging.INFO,
+    SETTINGS: logging.INFO,
+    SEARCH: logging.INFO,
+    FILE: logging.INFO,
+    SUCCESS: logging.INFO,
+    STATISTICS: logging.INFO,
+    TIMER: logging.INFO,
+    SAVE: logging.INFO,
+    LAUNCH: logging.INFO,
+    logging.WARNING: logging.WARNING,
+    logging.ERROR: logging.ERROR,
     logging.CRITICAL: logging.CRITICAL,
 }
 
@@ -166,7 +167,9 @@ class _QuietFilter(logging.Filter):
 
 
 @contextmanager
-def quiet(min_level: int = logging.WARNING, *, enabled: bool = True) -> Iterator["GMCLogger"]:
+def quiet(
+    min_level: int = logging.WARNING, *, enabled: bool = True
+) -> Iterator["GMCLogger"]:
     """Temporarily silence low-severity GMC records.
 
     Wrap a batch loop whose per-item helpers are chatty by design. Those helpers
@@ -271,39 +274,39 @@ class GMCFormatter(logging.Formatter):
     """
 
     ICONS = {
-        logging.DEBUG:    "·",
-        logging.INFO:     "ℹ",
-        logging.WARNING:  "⚠",
-        logging.ERROR:    "✗",
+        logging.DEBUG: "·",
+        logging.INFO: "ℹ",
+        logging.WARNING: "⚠",
+        logging.ERROR: "✗",
         logging.CRITICAL: "✗✗",
-        SUCCESS:          "✓",
-        FOLDER:           "»",
-        SETTINGS:         "~",
-        SEARCH:           "?",
-        FILE:             "»",
-        STATISTICS:       "≈",
-        TIMER:            "◷",
-        SAVE:             "↓",
-        LIST:             "·",
-        LAUNCH:           "▸",
+        SUCCESS: "✓",
+        FOLDER: "»",
+        SETTINGS: "~",
+        SEARCH: "?",
+        FILE: "»",
+        STATISTICS: "≈",
+        TIMER: "◷",
+        SAVE: "↓",
+        LIST: "·",
+        LAUNCH: "▸",
     }
 
     STYLES = {
-        logging.DEBUG:    "\033[2m",     # dim
-        logging.INFO:     "\033[0m",     # default
-        logging.WARNING:  "\033[1;33m",  # bold yellow
-        logging.ERROR:    "\033[1;31m",  # bold red
+        logging.DEBUG: "\033[2m",  # dim
+        logging.INFO: "\033[0m",  # default
+        logging.WARNING: "\033[1;33m",  # bold yellow
+        logging.ERROR: "\033[1;31m",  # bold red
         logging.CRITICAL: "\033[1;31m",  # bold red
-        SUCCESS:          "\033[1;32m",  # bold green
-        FOLDER:           "\033[34m",    # blue
-        SETTINGS:         "\033[36m",    # cyan
-        SEARCH:           "\033[36m",    # cyan
-        FILE:             "\033[36m",    # cyan
-        STATISTICS:       "\033[35m",    # magenta
-        TIMER:            "\033[35m",    # magenta
-        SAVE:             "\033[32m",    # green
-        LIST:             "\033[2m",     # dim
-        LAUNCH:           "\033[1;36m",  # bold cyan
+        SUCCESS: "\033[1;32m",  # bold green
+        FOLDER: "\033[34m",  # blue
+        SETTINGS: "\033[36m",  # cyan
+        SEARCH: "\033[36m",  # cyan
+        FILE: "\033[36m",  # cyan
+        STATISTICS: "\033[35m",  # magenta
+        TIMER: "\033[35m",  # magenta
+        SAVE: "\033[32m",  # green
+        LIST: "\033[2m",  # dim
+        LAUNCH: "\033[1;36m",  # bold cyan
     }
 
     RESET = "\033[0m"

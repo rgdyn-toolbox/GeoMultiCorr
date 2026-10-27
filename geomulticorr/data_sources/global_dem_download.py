@@ -137,7 +137,10 @@ class DEMProvider(ABC):
 
     def tile_ids(self, west: float, south: float, east: float, north: float):
         """Tile ids covering the bounding box, latitude-filtered."""
-        return [self.tile_id(lon, lat) for lon, lat in self.tile_indices(west, south, east, north)]
+        return [
+            self.tile_id(lon, lat)
+            for lon, lat in self.tile_indices(west, south, east, north)
+        ]
 
 
 class SRTMProvider(DEMProvider):
@@ -409,13 +412,15 @@ class DEMFinder:
                 lon = -lon
 
             tile_box = box(lon, lat, lon + 1, lat + 1)
-            rows.append({
-                "tile_id": tile_id,
-                "provider": self.provider_name,
-                "resolution_m": self.provider.native_res_m,
-                "vertical_datum": self.provider.vertical_datum,
-                "geometry": tile_box,
-            })
+            rows.append(
+                {
+                    "tile_id": tile_id,
+                    "provider": self.provider_name,
+                    "resolution_m": self.provider.native_res_m,
+                    "vertical_datum": self.provider.vertical_datum,
+                    "geometry": tile_box,
+                }
+            )
 
         gdf = gpd.GeoDataFrame(rows, crs="EPSG:4326")
         return gdf
@@ -467,6 +472,7 @@ class DEMFinder:
         if show_progress:
             try:
                 from tqdm import tqdm
+
                 pbar = tqdm(tile_ids, desc=f"Downloading {self.provider_name} tiles")
             except ImportError:
                 pbar = tile_ids
@@ -474,7 +480,9 @@ class DEMFinder:
             pbar = tile_ids
 
         for tile_id in pbar:
-            tile_path = self.client.download_tile(self.provider_name, tile_id, timeout=timeout)
+            tile_path = self.client.download_tile(
+                self.provider_name, tile_id, timeout=timeout
+            )
             if tile_path:
                 cached_tiles.append(str(tile_path))
 
@@ -488,10 +496,21 @@ class DEMFinder:
         else:
             # Multiple tiles: build VRT then translate
             vrt_path = output_path.with_suffix(".vrt")
-            gdalbuildvrt_cmd = ["gdalbuildvrt", "-resolution", "highest", str(vrt_path)] + cached_tiles
+            gdalbuildvrt_cmd = [
+                "gdalbuildvrt",
+                "-resolution",
+                "highest",
+                str(vrt_path),
+            ] + cached_tiles
             subprocess.run(gdalbuildvrt_cmd, check=True, capture_output=True)
 
-            gdal_translate_cmd = ["gdal_translate", "-co", "COMPRESS=deflate", str(vrt_path), str(output_path)]
+            gdal_translate_cmd = [
+                "gdal_translate",
+                "-co",
+                "COMPRESS=deflate",
+                str(vrt_path),
+                str(output_path),
+            ]
             subprocess.run(gdal_translate_cmd, check=True, capture_output=True)
 
             vrt_path.unlink(missing_ok=True)

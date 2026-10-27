@@ -6,6 +6,7 @@ Locks down the TOT_<date>_<component>.tif convention (EW/NS/magn all
 suffixed) introduced to replace the previous unsuffixed TOT_<date>.tif,
 which left the two directions indistinguishable once copied elsewhere.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -102,17 +103,21 @@ class TestPostProcess:
 
         # No unsuffixed leftovers of the old naming scheme.
         assert not (inv.inversion_dir / "inverse_EW" / f"TOT_{_DATES[0]}.tif").exists()
-        assert not (inv.inversion_dir / "inverse_magn" / f"TOT_{_DATES[0]}.tif").exists()
+        assert not (
+            inv.inversion_dir / "inverse_magn" / f"TOT_{_DATES[0]}.tif"
+        ).exists()
 
     def test_second_call_skips_existing_outputs(self, inv, monkeypatch):
         inv.post_process()
 
         monkeypatch.setattr(
-            inv, "_tot_to_geotiff",
+            inv,
+            "_tot_to_geotiff",
             lambda *a, **k: pytest.fail("should not reconvert an existing output"),
         )
         monkeypatch.setattr(
-            inv, "_compute_magnitude",
+            inv,
+            "_compute_magnitude",
             lambda *a, **k: pytest.fail("should not recompute an existing magnitude"),
         )
 

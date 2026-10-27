@@ -5,6 +5,7 @@ needs a geodatabase) and only the attributes each method touches. ASP and the
 shell (``os.system``) are replaced by recorders, so the command strings are
 checked but nothing runs.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -32,9 +33,14 @@ def _thumb(root: Path, date: str, th_type="opt", pz="Pz"):
     path = sub / f"{pz}_{date}_planetscope.tif"
     path.write_bytes(b"x")
     return SimpleNamespace(
-        th_pz_name=pz, th_path=path, th_type=th_type, th_date=date,
-        th_date_datetime=d, th_sensor="planetscope",
-        th_key=f"{pz}_{date}_planetscope", geometry=None,
+        th_pz_name=pz,
+        th_path=path,
+        th_type=th_type,
+        th_date=date,
+        th_date_datetime=d,
+        th_sensor="planetscope",
+        th_key=f"{pz}_{date}_planetscope",
+        geometry=None,
     )
 
 
@@ -46,20 +52,33 @@ def _pair(tmp_path, status="empty") -> Pair:
     p.pa_type = "opt"
     p.pa_path = tmp_path / "image_correlation" / KEY
     for attr, suffix in (
-        ("pa_raw_left_path", "-L.tif"), ("pa_raw_right_path", "-R.tif"),
-        ("pa_disparity_rd_path", "-RD.tif"), ("pa_disparity_f_path", "-F.tif"),
-        ("pa_cc_raw_path", "-F-ncc.tif"), ("pa_ew_path", "-F_EW.tif"),
-        ("pa_ns_path", "-F_NS.tif"), ("pa_cc_path", "-F_CC.tif"),
-        ("pa_magn_path", "_magn.tif"), ("pa_plot_raw_path", "_raw_disp.jpg"),
+        ("pa_raw_left_path", "-L.tif"),
+        ("pa_raw_right_path", "-R.tif"),
+        ("pa_disparity_rd_path", "-RD.tif"),
+        ("pa_disparity_f_path", "-F.tif"),
+        ("pa_cc_raw_path", "-F-ncc.tif"),
+        ("pa_ew_path", "-F_EW.tif"),
+        ("pa_ns_path", "-F_NS.tif"),
+        ("pa_cc_path", "-F_CC.tif"),
+        ("pa_magn_path", "_magn.tif"),
+        ("pa_plot_raw_path", "_raw_disp.jpg"),
         ("pa_stats_path", ".json"),
     ):
         setattr(p, attr, p.pa_path / f"{KEY}{suffix}")
-    left = SimpleNamespace(th_date="2024-01-01", th_sensor="planetscope",
-                           th_date_datetime=dt.datetime(2024, 1, 1),
-                           th_path=tmp_path / "left.tif", th_key="Pz_2024-01-01_planetscope")
-    right = SimpleNamespace(th_date="2024-01-15", th_sensor="planetscope",
-                            th_date_datetime=dt.datetime(2024, 1, 15),
-                            th_path=tmp_path / "right.tif", th_key="Pz_2024-01-15_planetscope")
+    left = SimpleNamespace(
+        th_date="2024-01-01",
+        th_sensor="planetscope",
+        th_date_datetime=dt.datetime(2024, 1, 1),
+        th_path=tmp_path / "left.tif",
+        th_key="Pz_2024-01-01_planetscope",
+    )
+    right = SimpleNamespace(
+        th_date="2024-01-15",
+        th_sensor="planetscope",
+        th_date_datetime=dt.datetime(2024, 1, 15),
+        th_path=tmp_path / "right.tif",
+        th_key="Pz_2024-01-15_planetscope",
+    )
     left.th_path.write_bytes(b"x")
     right.th_path.write_bytes(b"x")
     p.pa_left, p.pa_right = left, right
@@ -74,10 +93,19 @@ def _pair(tmp_path, status="empty") -> Pair:
 
 def _write_disparity(path: Path, shape=(8, 6), res=3.0):
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = np.stack([np.full(shape, 1.0), np.full(shape, 2.0), np.ones(shape)]).astype("float32")
+    data = np.stack([np.full(shape, 1.0), np.full(shape, 2.0), np.ones(shape)]).astype(
+        "float32"
+    )
     with rasterio.open(
-        path, "w", driver="GTiff", height=shape[0], width=shape[1], count=3,
-        dtype="float32", crs="EPSG:32632", transform=from_origin(500000, 4649000, res, res),
+        path,
+        "w",
+        driver="GTiff",
+        height=shape[0],
+        width=shape[1],
+        count=3,
+        dtype="float32",
+        crs="EPSG:32632",
+        transform=from_origin(500000, 4649000, res, res),
     ) as dst:
         dst.write(data)
 
@@ -85,14 +113,22 @@ def _write_disparity(path: Path, shape=(8, 6), res=3.0):
 def _write_single(path: Path, shape=(8, 6), value=1.0, res=3.0):
     path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(
-        path, "w", driver="GTiff", height=shape[0], width=shape[1], count=1,
-        dtype="float32", crs="EPSG:32632", transform=from_origin(500000, 4649000, res, res),
+        path,
+        "w",
+        driver="GTiff",
+        height=shape[0],
+        width=shape[1],
+        count=1,
+        dtype="float32",
+        crs="EPSG:32632",
+        transform=from_origin(500000, 4649000, res, res),
     ) as dst:
         dst.write(np.full(shape, value, dtype="float32"), 1)
 
 
 class _FakeRaster:
     """Stand-in for gu.Raster: records ctor args, scales on ``*``."""
+
     calls: list = []
 
     def __init__(self, path, **kw):
@@ -140,7 +176,9 @@ class TestConstruction:
             Pair(left=a, right=a)
 
     def test_different_pzone_rejected(self, tmp_path):
-        a, b = _thumb(tmp_path, "2024-01-01"), _thumb(tmp_path, "2024-01-15", pz="Other")
+        a, b = _thumb(tmp_path, "2024-01-01"), _thumb(
+            tmp_path, "2024-01-15", pz="Other"
+        )
         with pytest.raises(AssertionError, match="same pzone"):
             Pair(left=a, right=b)
 
@@ -199,7 +237,10 @@ class TestRasterLoaders:
         m1, m2 = p.get_magn_raster(), p.get_magn_raster()
         c1, c2 = p.get_cc_raster(), p.get_cc_raster()
         assert m1 is m2 and c1 is c2
-        assert [c[0] for c in fake_raster.calls] == [str(p.pa_magn_path), str(p.pa_cc_raw_path)]
+        assert [c[0] for c in fake_raster.calls] == [
+            str(p.pa_magn_path),
+            str(p.pa_cc_raw_path),
+        ]
 
     def test_disp_corr_raster_reads_three_bands_once(self, tmp_path, fake_raster):
         p = _pair(tmp_path)
@@ -265,7 +306,9 @@ class TestLegacyCorrelation:
         p = _pair(tmp_path)
         p.pa_path.mkdir(parents=True)
         p.pa_disparity_f_path.touch()
-        monkeypatch.setattr(gmc_pair, "ASP", lambda **k: pytest.fail("ASP must not run"))
+        monkeypatch.setattr(
+            gmc_pair, "ASP", lambda **k: pytest.fail("ASP must not run")
+        )
         assert p.launch_correlation() is True
 
     def test_launch_correlation_delegates_to_asp(self, tmp_path, monkeypatch):
@@ -354,8 +397,9 @@ class TestExtractRawDisplacements:
     def pair_with_disparity(self, tmp_path, monkeypatch):
         p = _pair(tmp_path)
         _write_disparity(p.pa_disparity_f_path)
-        monkeypatch.setattr(gmc_pair.gmc_stats, "save_raw_corr_stats",
-                            lambda pair: {"stats": "ok"})
+        monkeypatch.setattr(
+            gmc_pair.gmc_stats, "save_raw_corr_stats", lambda pair: {"stats": "ok"}
+        )
         return p
 
     def test_requires_disparity(self, tmp_path):
@@ -367,8 +411,10 @@ class TestExtractRawDisplacements:
         assert p.extract_raw_displacements(save_plot=False) == {"stats": "ok"}
         ew = gu.Raster(str(p.pa_ew_path))
         ns = gu.Raster(str(p.pa_ns_path))
-        assert float(np.nanmedian(ew.data)) == pytest.approx(3.0)       # 1 px * 3 m
-        assert float(np.nanmedian(ns.data)) == pytest.approx(-6.0)      # 2 px * 3 m, flipped
+        assert float(np.nanmedian(ew.data)) == pytest.approx(3.0)  # 1 px * 3 m
+        assert float(np.nanmedian(ns.data)) == pytest.approx(
+            -6.0
+        )  # 2 px * 3 m, flipped
         assert not p.pa_plot_raw_path.exists()
 
     def test_plot_and_cc_copy(self, pair_with_disparity, monkeypatch):
@@ -407,7 +453,9 @@ class TestExtractRawDisplacements:
         p = pair_with_disparity
         bounds = rasterio.coords.BoundingBox(500000, 4648976, 500018, 4649000)
         p.extract_raw_displacements(
-            save_plot=False, target_resolution=6.0, canonical_bounds=bounds,
+            save_plot=False,
+            target_resolution=6.0,
+            canonical_bounds=bounds,
             canonical_grid_size=(3, 4),
         )
         r = gu.Raster(str(p.pa_ew_path))
@@ -421,13 +469,21 @@ class TestVectorizeMovingAreas:
         data = np.zeros((40, 40), dtype="uint8")
         data[5:25, 5:25] = 1  # 20x20 px block
         with rasterio.open(
-            path, "w", driver="GTiff", height=40, width=40, count=1, dtype="uint8",
-            crs="EPSG:32632", transform=from_origin(500000, 4649000, 10.0, 10.0),
+            path,
+            "w",
+            driver="GTiff",
+            height=40,
+            width=40,
+            count=1,
+            dtype="uint8",
+            crs="EPSG:32632",
+            transform=from_origin(500000, 4649000, 10.0, 10.0),
         ) as dst:
             dst.write(data, 1)
 
     def test_writes_gpkg(self, tmp_path):
         import geopandas as gpd
+
         p = _pair(tmp_path)
         self._write_classes(p)
         p.vectorize_moving_areas(epsg=32632, n_clusters=2)
@@ -436,6 +492,7 @@ class TestVectorizeMovingAreas:
 
     def test_min_surf_filter_and_name(self, tmp_path):
         import geopandas as gpd
+
         p = _pair(tmp_path)
         self._write_classes(p)
         p.vectorize_moving_areas(epsg=32632, min_surf=10, n_clusters=2)
@@ -451,10 +508,15 @@ class TestVectorizeMovingAreas:
 
 
 class TestInterestingRasterAndSlices:
-    @pytest.mark.parametrize("mode,attr", [
-        ("X", "get_xDisp_raster"), ("y", "get_yDisp_raster"),
-        ("vx", "get_xVel"), ("VY", "get_yVel"),
-    ])
+    @pytest.mark.parametrize(
+        "mode,attr",
+        [
+            ("X", "get_xDisp_raster"),
+            ("y", "get_yDisp_raster"),
+            ("vx", "get_xVel"),
+            ("VY", "get_yVel"),
+        ],
+    )
     def test_mode_dispatch(self, tmp_path, monkeypatch, mode, attr):
         p = _pair(tmp_path)
         monkeypatch.setattr(p, attr, lambda: attr)

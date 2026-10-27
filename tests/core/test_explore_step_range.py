@@ -5,6 +5,7 @@
 A hardcoded ceiling silently drops the longest-baseline pairs on any archive with
 more images than the constant — the regression these tests lock out.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -74,7 +75,9 @@ def _make_session(pzones: list):
     return _StubSession(pzones)
 
 
-def _thumbs(n: int, sensor: str = "planetscope", pz: str = "PZ1", start: str = "2016-03-01"):
+def _thumbs(
+    n: int, sensor: str = "planetscope", pz: str = "PZ1", start: str = "2016-03-01"
+):
     dates = pd.date_range(start, periods=n, freq="73D").strftime("%Y-%m-%d")
     return [_Thumb(d, sensor, pz) for d in dates]
 
@@ -90,10 +93,13 @@ class _Controls:
 
     def __init__(self, box):
         self.box = box
-        self.view, self.strategy, self.step, self.pz, self.type = box.children[0].children
+        self.view, self.strategy, self.step, self.pz, self.type = box.children[
+            0
+        ].children
         self.maxdt, self.mindt, self.sensor = box.children[1].children
-        (self.colorby, self.bins, self.dedupe,
-         self.arrows, self.mirror) = box.children[2].children
+        self.colorby, self.bins, self.dedupe, self.arrows, self.mirror = box.children[
+            2
+        ].children
         self.summary = box.children[4]
 
     def set(self, widget, value):
@@ -176,7 +182,10 @@ class TestCeilingTracksFilters:
 
     def test_pzone_selection_changes_ceiling(self):
         session = _make_session(
-            [_Pzone("BIG", _thumbs(18, pz="BIG")), _Pzone("SMALL", _thumbs(5, pz="SMALL"))]
+            [
+                _Pzone("BIG", _thumbs(18, pz="BIG")),
+                _Pzone("SMALL", _thumbs(5, pz="SMALL")),
+            ]
         )
         ctrl = _Controls(_explore(session, strategy="step"))
         assert ctrl.step.max == 17  # <all> → bounded by the largest pzone
@@ -220,7 +229,7 @@ class TestNoReentrantRecompute:
         ctrl = _Controls(_explore(session, strategy="step", max_step=15))
 
         calls = self._count_recomputes(monkeypatch)
-        ctrl.set(ctrl.sensor, "spot")     # 17 -> 5, clamping value 15 -> 5
+        ctrl.set(ctrl.sensor, "spot")  # 17 -> 5, clamping value 15 -> 5
         assert ctrl.step.value == 5
         assert calls["n"] == 1
 
@@ -229,7 +238,7 @@ class TestNoReentrantRecompute:
         ctrl = _Controls(_explore(session, strategy="step", max_step=2))
 
         calls = self._count_recomputes(monkeypatch)
-        ctrl.set(ctrl.mindt, "100")        # Text widget; no ceiling change at all
+        ctrl.set(ctrl.mindt, "100")  # Text widget; no ceiling change at all
         assert calls["n"] == 1
 
     def test_duration_string_filter_recomputes_once(self, monkeypatch):
@@ -245,7 +254,7 @@ class TestNoReentrantRecompute:
         widget callback reaches only the kernel log, which VSCode hides."""
         session = _make_session([_Pzone("PZ1", _thumbs(18))])
         ctrl = _Controls(_explore(session, strategy="step", max_step=2))
-        ctrl.set(ctrl.mindt, "nonsense")   # must not propagate
+        ctrl.set(ctrl.mindt, "nonsense")  # must not propagate
 
     def test_moving_the_slider_recomputes_once(self, monkeypatch):
         session = _make_session([_Pzone("PZ1", _thumbs(18))])
@@ -257,7 +266,7 @@ class TestNoReentrantRecompute:
 
 
 class TestMirrorCheckboxReflectsAvailability:
-    """"mirror directions" must not look broken when there is nothing to mirror."""
+    """ "mirror directions" must not look broken when there is nothing to mirror."""
 
     def _ctrl(self, strategy, **kwargs):
         session = _make_session([_Pzone("PZ1", _thumbs(18))])
@@ -321,7 +330,9 @@ class TestForwardOnlyFigureIsLabelled:
         from geomulticorr.utils._pairs_frame import pairs_frame_from_indices
 
         dates = pd.date_range("2016-03-01", periods=18, freq="73D")
-        both = pairs_frame_from_indices(dates, _strategy_pair_indices(18, "redundancy", 5))
+        both = pairs_frame_from_indices(
+            dates, _strategy_pair_indices(18, "redundancy", 5)
+        )
         texts = [a.text for a in pp.figure_network(both).layout.annotations]
         assert len(texts) == 2
         assert any("above: forward" in t for t in texts)
@@ -349,32 +360,38 @@ class TestNonInteractiveMode:
     def test_arguments_drive_the_result(self):
         session = self._session()
         few, _ = session.explore_pairs_strategy(
-            strategy="step", max_step=2, interactive=False)
+            strategy="step", max_step=2, interactive=False
+        )
         many, _ = session.explore_pairs_strategy(
-            strategy="step", max_step=17, interactive=False)
-        assert len(few) == 33      # sum(18-k) for k=1,2
-        assert len(many) == 153    # 18*17/2
+            strategy="step", max_step=17, interactive=False
+        )
+        assert len(few) == 33  # sum(18-k) for k=1,2
+        assert len(many) == 153  # 18*17/2
 
     def test_view_selects_the_figure(self):
         session = self._session()
-        _, chord = session.explore_pairs_strategy(view="chord", strategy="step",
-                                                  max_step=3, interactive=False)
-        _, hist = session.explore_pairs_strategy(view="dt_hist", strategy="step",
-                                                 max_step=3, interactive=False)
-        assert len(chord.data) == 5                 # ring, links, hover, nodes, ticks
+        _, chord = session.explore_pairs_strategy(
+            view="chord", strategy="step", max_step=3, interactive=False
+        )
+        _, hist = session.explore_pairs_strategy(
+            view="dt_hist", strategy="step", max_step=3, interactive=False
+        )
+        assert len(chord.data) == 5  # ring, links, hover, nodes, ticks
         assert hist.data[0].type == "histogram"
 
     def test_dt_filters_applied(self):
         session = self._session()
         frame, _ = session.explore_pairs_strategy(
-            strategy="step", max_step=17, max_dt_days=200, interactive=False)
+            strategy="step", max_step=17, max_dt_days=200, interactive=False
+        )
         assert len(frame) > 0
         assert frame["dt_days"].max() <= 200
 
     def test_max_step_clamped_to_the_data(self):
         session = self._session()
         frame, _ = session.explore_pairs_strategy(
-            strategy="redundancy", max_step=999, interactive=False)
+            strategy="redundancy", max_step=999, interactive=False
+        )
         assert len(frame) == 306
         assert session._last_pairs_params["max_step"] == 17
 
@@ -382,8 +399,9 @@ class TestNonInteractiveMode:
         import inspect
 
         session = self._session()
-        session.explore_pairs_strategy(strategy="redundancy", max_step=5,
-                                       interactive=False)
+        session.explore_pairs_strategy(
+            strategy="redundancy", max_step=5, interactive=False
+        )
         params = session._last_pairs_params
         assert params["strategy"] == "redundancy"
         assert params["max_step"] == 5
@@ -398,7 +416,8 @@ class TestNonInteractiveMode:
         thumbs = _thumbs(12, "planetscope") + _thumbs(6, "spot", start="2020-01-01")
         session = _make_session([_Pzone("PZ1", thumbs)])
         frame, _ = session.explore_pairs_strategy(
-            strategy="consecutive", sensor_filter="spot", interactive=False)
+            strategy="consecutive", sensor_filter="spot", interactive=False
+        )
         assert set(frame["sensor_i"]) == {"spot"}
         assert len(frame) == 5
 
@@ -415,23 +434,27 @@ class TestNonInteractiveMode:
 
         session = self._session()
         monkeypatch.setattr(builtins, "__import__", guard)
-        frame, fig = session.explore_pairs_strategy(strategy="step", max_step=3,
-                                                    interactive=False)
+        frame, fig = session.explore_pairs_strategy(
+            strategy="step", max_step=3, interactive=False
+        )
         assert len(frame) > 0
 
     def test_figure_title_uses_the_shared_builder(self):
         """Chord dedupes, so the title reports drawn curves *and* total pairs."""
         _, fig = self._session().explore_pairs_strategy(
-            strategy="redundancy", max_step=17, view="chord", interactive=False)
+            strategy="redundancy", max_step=17, view="chord", interactive=False
+        )
         assert "153 chords drawn of 306 pairs [redundancy]" in fig.layout.title.text
 
-    @pytest.mark.parametrize("strategy, max_step",
-                             [("step", 4), ("redundancy", 7), ("consecutive", None)])
+    @pytest.mark.parametrize(
+        "strategy, max_step", [("step", 4), ("redundancy", 7), ("consecutive", None)]
+    )
     def test_frame_matches_the_interactive_one(self, strategy, max_step):
         """Both modes must agree pair-for-pair — they share one _build_frame."""
         kwargs = {"max_step": max_step} if max_step else {}
         frame, _ = self._session().explore_pairs_strategy(
-            strategy=strategy, interactive=False, **kwargs)
+            strategy=strategy, interactive=False, **kwargs
+        )
 
         ctrl = _Controls(_explore(self._session(), strategy=strategy))
         if max_step:
@@ -441,7 +464,8 @@ class TestNonInteractiveMode:
 
     def test_default_view_is_baseline(self):
         _, fig = self._session().explore_pairs_strategy(
-            strategy="step", max_step=2, interactive=False)
+            strategy="step", max_step=2, interactive=False
+        )
         assert fig.layout.yaxis.title.text == "Temporal baseline Δt (days)"
         # forward-only data still yields both direction traces, the second empty
         assert [t.name for t in fig.data] == ["forward", "backward"]
@@ -450,7 +474,8 @@ class TestNonInteractiveMode:
     def test_empty_selection_returns_empty_frame_not_an_error(self):
         session = self._session()
         frame, fig = session.explore_pairs_strategy(
-            strategy="step", max_step=3, sensor_filter="nope", interactive=False)
+            strategy="step", max_step=3, sensor_filter="nope", interactive=False
+        )
         assert len(frame) == 0
         assert "No pairs" in fig.layout.annotations[0].text
 
@@ -463,8 +488,9 @@ class TestHeadlessAutoSave:
 
     def test_saves_by_default(self):
         session = self._session()
-        session.explore_pairs_strategy(strategy="redundancy", max_step=5,
-                                       view="chord", interactive=False)
+        session.explore_pairs_strategy(
+            strategy="redundancy", max_step=5, view="chord", interactive=False
+        )
         assert len(session.saved) == 1
         call = session.saved[0]
         assert call["view"] == "chord"
@@ -473,43 +499,50 @@ class TestHeadlessAutoSave:
 
     def test_savefig_false_writes_nothing(self):
         session = self._session()
-        session.explore_pairs_strategy(strategy="redundancy", max_step=5,
-                                       interactive=False, savefig=False)
+        session.explore_pairs_strategy(
+            strategy="redundancy", max_step=5, interactive=False, savefig=False
+        )
         assert session.saved == []
 
     def test_formats_are_forwarded(self):
         session = self._session()
-        session.explore_pairs_strategy(strategy="step", max_step=3,
-                                       interactive=False,
-                                       formats=("png", "jpg", "pdf"))
+        session.explore_pairs_strategy(
+            strategy="step",
+            max_step=3,
+            interactive=False,
+            formats=("png", "jpg", "pdf"),
+        )
         assert session.saved[0]["formats"] == ("png", "jpg", "pdf")
 
     def test_view_options_forwarded_so_saved_matches_returned(self):
         session = self._session()
-        session.explore_pairs_strategy(strategy="redundancy", max_step=5,
-                                       view="network", interactive=False)
+        session.explore_pairs_strategy(
+            strategy="redundancy", max_step=5, view="network", interactive=False
+        )
         call = session.saved[0]
         assert call["mirror_direction"] is True
-        assert call["dedupe"] is False           # network default
+        assert call["dedupe"] is False  # network default
         assert call["color_by"] == "dt"
 
     def test_title_matches_the_returned_figure(self):
         session = self._session()
-        _, fig = session.explore_pairs_strategy(strategy="redundancy", max_step=17,
-                                                view="chord", interactive=False)
+        _, fig = session.explore_pairs_strategy(
+            strategy="redundancy", max_step=17, view="chord", interactive=False
+        )
         assert session.saved[0]["title"] == fig.layout.title.text
 
     def test_empty_frame_skips_saving(self):
         session = self._session()
         frame, _ = session.explore_pairs_strategy(
-            strategy="step", max_step=3, sensor_filter="nope", interactive=False)
+            strategy="step", max_step=3, sensor_filter="nope", interactive=False
+        )
         assert len(frame) == 0
         assert session.saved == []
 
     def test_interactive_mode_ignores_savefig(self):
         session = self._session()
         _explore(session, strategy="redundancy", savefig=True)
-        assert session.saved == []      # the button saves, not the constructor
+        assert session.saved == []  # the button saves, not the constructor
 
 
 class TestArgumentValidation:
@@ -544,8 +577,8 @@ class TestLongestPairsRecovered:
         at_ten = ctrl_18.summary.value
         ctrl_18.set(ctrl_18.step, 17)
         at_max = ctrl_18.summary.value
-        assert "250 pairs" in at_ten     # what the old slider capped you to
-        assert "306 pairs" in at_max     # what the data actually supports
+        assert "250 pairs" in at_ten  # what the old slider capped you to
+        assert "306 pairs" in at_max  # what the data actually supports
 
     def test_stash_carries_the_new_ceiling_to_update_pairs(self):
         """The tuned max_step must survive the documented commit workflow."""

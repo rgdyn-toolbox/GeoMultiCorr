@@ -8,6 +8,7 @@ commit method does not accept, an assumption the frame builder cannot take.
 Each has a failure mode that is silent at import time and only shows up as a
 ``TypeError`` or a missing figure much later.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -26,7 +27,10 @@ from geomulticorr.utils._corrparams_frame import (  # noqa: E402
     CORR_MODE_KEYS,
     corrparams_frame_from_pairs,
 )
-from geomulticorr.utils._corrparams_plotly import VIEW_BUILDERS, VIEW_LABELS  # noqa: E402
+from geomulticorr.utils._corrparams_plotly import (
+    VIEW_BUILDERS,
+    VIEW_LABELS,
+)  # noqa: E402
 from geomulticorr.utils.gmc_functions import CORRPARAMS_MPL_BUILDERS  # noqa: E402
 
 
@@ -61,10 +65,9 @@ class TestStashContract:
     def test_assumption_keys_match_what_the_plan_records(self):
         """The plan records both halves: the derivation inputs and the uniform
         overrides that replaced their result."""
-        assert (
-            set(Session._CORR_ASSUMPTION_KEYS) | set(Session._CORR_UNIFORM_KEYS)
-            == set(PLAN_ASSUMPTION_KEYS)
-        )
+        assert set(Session._CORR_ASSUMPTION_KEYS) | set(
+            Session._CORR_UNIFORM_KEYS
+        ) == set(PLAN_ASSUMPTION_KEYS)
 
     def test_the_two_halves_do_not_overlap(self):
         """Uniform overrides are applied after the derivation, not fed into it."""
@@ -77,7 +80,9 @@ class TestStashContract:
         assert set(Session._CORR_ASSUMPTION_KEYS) <= accepted
 
     def test_explorer_defaults_cover_every_assumption(self):
-        assert set(Session._CORR_ASSUMPTION_KEYS) <= Session._CORRPARAMS_EXPLORER_DEFAULTS
+        assert (
+            set(Session._CORR_ASSUMPTION_KEYS) <= Session._CORRPARAMS_EXPLORER_DEFAULTS
+        )
 
     def test_explorer_defaults_cover_every_uniform_override(self):
         assert set(Session._CORR_UNIFORM_KEYS) <= Session._CORRPARAMS_EXPLORER_DEFAULTS
@@ -118,14 +123,18 @@ class TestSgmOverrideIsAppliedEverywhere:
 
         path = tmp_path / "p.txt"
         asp_helper.build_correlation_params(
-            corr_algorithm="asp_mgm", corr_kernel=(21, 21),
-            subpixel_kernel=(21, 21), params_file_path=path,
+            corr_algorithm="asp_mgm",
+            corr_kernel=(21, 21),
+            subpixel_kernel=(21, 21),
+            params_file_path=path,
         )
         written = parse_params_file(path)["corr-kernel"]
 
         cmd = asp_helper._build_correval_cmd(
-            str(tmp_path / "pfx"), corr_algorithm="asp_mgm",
-            corr_kernel=(21, 21), metric="ncc",
+            str(tmp_path / "pfx"),
+            corr_algorithm="asp_mgm",
+            corr_kernel=(21, 21),
+            metric="ncc",
         )
         used = next(c for c in cmd if "kernel-size" in c).split(None, 1)[1]
         assert written == used == "9 9"
@@ -139,7 +148,9 @@ class TestSgmOverrideIsAppliedEverywhere:
         )
         assert parse_params_file(path)["corr-kernel"] == "31 31"
         cmd = asp_helper._build_correval_cmd(
-            str(tmp_path / "pfx"), corr_algorithm="asp_bm",
-            corr_kernel=(31, 31), metric="ncc",
+            str(tmp_path / "pfx"),
+            corr_algorithm="asp_bm",
+            corr_kernel=(31, 31),
+            metric="ncc",
         )
         assert "--kernel-size 31 31" in cmd

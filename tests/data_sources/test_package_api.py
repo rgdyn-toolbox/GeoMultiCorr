@@ -13,6 +13,7 @@
 # (https://www.gnu.org/licenses/agpl-3.0.txt), WITHOUT ANY WARRANTY.
 # ---------------------------------------------------------------------------- #
 """Package-level contracts for geomulticorr.data_sources."""
+
 import re
 from pathlib import Path
 
@@ -30,8 +31,15 @@ def test_every_public_name_is_importable():
 
 @pytest.mark.parametrize(
     "name",
-    ["MPC_ImageFinder", "PlanetClient", "M2MClient", "GEEClient", "DEMClient",
-     "DinamisClient", "DINAMIS_DEFAULT_FILENAME_TEMPLATE"],
+    [
+        "MPC_ImageFinder",
+        "PlanetClient",
+        "M2MClient",
+        "GEEClient",
+        "DEMClient",
+        "DinamisClient",
+        "DINAMIS_DEFAULT_FILENAME_TEMPLATE",
+    ],
 )
 def test_headline_api_is_exported(name):
     assert name in ds.__all__
@@ -72,13 +80,15 @@ def test_no_hardcoded_secret_in_source(path):
     for label, pattern in _SECRET_SHAPES.items():
         assert not re.search(pattern, text), f"{path.name}: looks like a {label}"
     for m in _LITERAL_CREDENTIAL.finditer(text):
-        assert _PLACEHOLDER.search(m.group("val")), (
-            f"{path.name}: literal assigned to {m.group(1)!r}: {m.group('val')[:12]}..."
-        )
+        assert _PLACEHOLDER.search(
+            m.group("val")
+        ), f"{path.name}: literal assigned to {m.group(1)!r}: {m.group('val')[:12]}..."
 
 
 def test_credentials_are_only_read_from_the_environment():
     env_names = set()
     for path in PKG_DIR.glob("*.py"):
-        env_names |= set(re.findall(r'environ(?:\.get)?\(?\[?\s*"([A-Z0-9_]+)"', path.read_text()))
+        env_names |= set(
+            re.findall(r'environ(?:\.get)?\(?\[?\s*"([A-Z0-9_]+)"', path.read_text())
+        )
     assert {"PL_API_KEY", "USGS_M2M_TOKEN", "MDT_SPOT67_STAC_SECRET_KEY"} <= env_names

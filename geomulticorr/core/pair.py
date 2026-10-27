@@ -47,7 +47,10 @@ import geomulticorr.core.thumb as gmc_thumb
 import geomulticorr.stats.stats as gmc_stats
 from geomulticorr.utils._grid import write_binary_raster
 from geomulticorr.utils._image_types import (
-    IMAGE_TYPE_OPTICAL, IMAGE_TYPES, pair_subdir, pzone_root_of_thumb_path,
+    IMAGE_TYPE_OPTICAL,
+    IMAGE_TYPES,
+    pair_subdir,
+    pzone_root_of_thumb_path,
 )
 from geomulticorr.utils.gmc_functions import plot_show_raw_results
 from geomulticorr.correlation.correlation import ASP
@@ -65,15 +68,15 @@ if not ROOT_OUTPUTS.exists():
 class Pair:
     """
     Represents an image pair for optical correlation analysis.
-    
+
     A Pair is created from two Thumb objects (optical images) from the same processing zone.
     It manages correlation workflows, displacement computation, and result storage.
-    
+
     Pairs can be constructed in two ways:
-    
+
     1. From two Thumb objects: ``pair = thumb_a + thumb_b``
     2. From a session and pair directory path (for loading existing pairs)
-    
+
     The pair orchestrates the full workflow: clipping, ASP correlation,
     displacement extraction, magnitude computation, and vectorization.
     """
@@ -81,34 +84,34 @@ class Pair:
     def __init__(self, session=None, target_path=None, left=None, right=None):
         """
         Initialize a Pair object from either two Thumbs or a pair directory path.
-        
+
         **Construction mode 1: From two Thumbs**
-        
+
         Provide ``left`` and ``right`` Thumb objects. They must belong to the same
         processing zone. This is the typical mode when creating a new pair.
-        
+
         **Construction mode 2: From existing pair directory**
-        
+
         Provide ``session`` and ``target_path``. The path must point to a directory
         under ``image_correlation/`` with the naming pattern:
         ``<pzone>_<date1>-<sensor1>_<date2>-<sensor2>``
-        
+
         Thumbs are reconstructed from the session's raster archive.
-        
+
         :param session: GMC session object (required if loading from path).
         :type session: Session or None
-        
+
         :param target_path: Path to an existing pair directory.
         :type target_path: str, Path, or None
-        
+
         :param left: First Thumb (required if creating from thumbs).
         :type left: Thumb or None
-        
+
         :param right: Second Thumb (required if creating from thumbs).
         :type right: Thumb or None
-        
+
         :raises AssertionError: If left and right are from different pzones, or if they are the same thumb.
-        
+
         :ivar pa_pz_name: Processing zone name.
         :ivar pa_key: Pair identifier, the two thumb keys joined by ``__`` with the
             pzone written once: ``<pz>_<date>_<sensor>[_<res>m]__<date>_<sensor>[_<res>m]``.
@@ -132,8 +135,10 @@ class Pair:
             parent = target_path.parent
             if parent.name.lower() == "image_correlation":
                 pa_type = IMAGE_TYPE_OPTICAL
-            elif (parent.name.lower() in IMAGE_TYPES
-                  and parent.parent.name.lower() == "image_correlation"):
+            elif (
+                parent.name.lower() in IMAGE_TYPES
+                and parent.parent.name.lower() == "image_correlation"
+            ):
                 pa_type = parent.name.lower()
             else:
                 pa_type = None
@@ -197,8 +202,10 @@ class Pair:
         # their own subfolder, so an optical and a hillshade pair of the same
         # dates never share a directory.
         self.pa_path = Path(
-            pzone_root_of_thumb_path(left.th_path), "image_correlation",
-            pair_subdir(self.pa_type), f"{self.pa_key}"
+            pzone_root_of_thumb_path(left.th_path),
+            "image_correlation",
+            pair_subdir(self.pa_type),
+            f"{self.pa_key}",
         ).absolute()
 
         # Symlink paths — point to the sieved thumb images (no clipping, no copy)
@@ -235,10 +242,10 @@ class Pair:
     def __repr__(self):
         """
         Return a formatted string representation of the Pair.
-        
+
         Displays key metadata: processing zone, left/right dates and sensors,
         temporal direction, temporal baseline, and correlation status.
-        
+
         :return: Formatted string representation.
         :rtype: str
         """
@@ -256,14 +263,14 @@ status    : {self.pa_status}
     def get_status(self):
         """
         Determine the correlation processing status of this pair.
-        
+
         Status levels:
-        
+
         - **empty**: Pair directory does not exist yet.
         - **clipped**: Symlinks to input thumbs created; awaiting correlation.
         - **complete**: ASP correlation finished; all outputs present.
         - **corrupt**: Pair directory exists but outputs are incomplete or malformed.
-        
+
         :return: Current pair status.
         :rtype: str ("empty", "clipped", "complete", or "corrupt")
         """
@@ -281,10 +288,10 @@ status    : {self.pa_status}
     def check_corr_outputs(self) -> dict[str, bool]:
         """
         Check which ASP correlation output files exist for this pair.
-        
+
         Verifies the presence of all expected ASP output suffixes defined in the
         ASP class (e.g., ``-F.tif``, ``-ncc.tif``, ``-RD.tif``).
-        
+
         :return: Dictionary mapping each expected suffix to True (file exists) or False (missing).
         :rtype: dict[str, bool]
         """
@@ -296,10 +303,10 @@ status    : {self.pa_status}
     def to_pdserie(self):
         """
         Convert Pair metadata to a pandas Series.
-        
+
         Serializes all pair attributes and file paths into a pandas Series for
         integration with GeoDataFrames and tabular workflows.
-        
+
         :return: Series containing pair metadata, dates, sensors, paths, and geometry.
         :rtype: pd.Series
         """
@@ -327,10 +334,10 @@ status    : {self.pa_status}
     def get_magn_raster(self):
         """
         Load and cache the displacement magnitude raster.
-        
+
         Reads the magnitude raster file (``pa_magn_path``) from disk on first call,
         then caches it as ``pa_magn`` for subsequent calls.
-        
+
         :return: Magnitude raster in metres.
         :rtype: geoutils.Raster
         """
@@ -345,10 +352,10 @@ status    : {self.pa_status}
     def get_cc_raster(self):
         """
         Load and cache the correlation coefficient raster.
-        
+
         Reads the raw NCC (normalized cross-correlation) raster from disk on first call,
         then caches it as ``pa_cc`` for subsequent calls.
-        
+
         :return: Correlation coefficient raster (range 0–1).
         :rtype: geoutils.Raster
         """
@@ -361,10 +368,10 @@ status    : {self.pa_status}
     def get_disp_corr_raster(self):
         """
         Load the full 3-band disparity raster (xDisp, yDisp, GoodPixMap).
-        
+
         Reads the final disparity output from ASP (``pa_disparity_f_path``)
         containing horizontal displacement, vertical displacement, and quality map.
-        
+
         :return: 3-band raster with all disparity components.
         :rtype: geoutils.Raster
         """
@@ -379,19 +386,17 @@ status    : {self.pa_status}
     def get_xDisp_raster(self):
         """
         Load and cache the horizontal (EW) displacement raster in pixels.
-        
+
         Extracts band 1 from the final disparity raster. Values are in pixel coordinates
         before unit conversion (see ``pa_ew_path`` for metre-converted version).
-        
+
         :return: Horizontal displacement raster (pixels).
         :rtype: geoutils.Raster
         """
         try:
             return self.pa_xDisp
         except AttributeError:
-            raw = gu.Raster(
-                str(self.pa_disparity_f_path), load_pixels=True, nBands=1
-            )
+            raw = gu.Raster(str(self.pa_disparity_f_path), load_pixels=True, nBands=1)
             pxSizeX, _ = raw.res
             self.pa_xDisp = raw * pxSizeX
             return self.pa_xDisp
@@ -399,19 +404,17 @@ status    : {self.pa_status}
     def get_yDisp_raster(self):
         """
         Load and cache the vertical (NS) displacement raster in pixels.
-        
+
         Extracts band 2 from the final disparity raster. Values are in pixel coordinates
         before unit conversion (see ``pa_ns_path`` for metre-converted version).
-        
+
         :return: Vertical displacement raster (pixels).
         :rtype: geoutils.Raster
         """
         try:
             return self.pa_yDisp
         except AttributeError:
-            raw = gu.Raster(
-                str(self.pa_disparity_f_path), load_pixels=True, nBands=2
-            )
+            raw = gu.Raster(str(self.pa_disparity_f_path), load_pixels=True, nBands=2)
             _, pxSizeY = raw.res
             # Flip NS sign (ASP uses upper-left corner convention)
             self.pa_yDisp = raw * (pxSizeY * -1.0)
@@ -420,9 +423,9 @@ status    : {self.pa_status}
     def get_xVel(self):
         """
         Compute annual horizontal (EW) velocity.
-        
+
         Divides horizontal displacement by the temporal baseline (``pa_dt_years``).
-        
+
         :return: Horizontal velocity raster in pixels/year.
         :rtype: geoutils.Raster
         """
@@ -431,9 +434,9 @@ status    : {self.pa_status}
     def get_yVel(self):
         """
         Compute annual vertical (NS) velocity.
-        
+
         Divides vertical displacement by the temporal baseline (``pa_dt_years``).
-        
+
         :return: Vertical velocity raster in pixels/year.
         :rtype: geoutils.Raster
         """
@@ -442,9 +445,9 @@ status    : {self.pa_status}
     def get_vMagn_raster(self):
         """
         Compute annual velocity magnitude.
-        
+
         Divides the displacement magnitude by the temporal baseline (``pa_dt_years``).
-        
+
         :return: Velocity magnitude raster in metres/year.
         :rtype: geoutils.Raster
         """
@@ -455,14 +458,14 @@ status    : {self.pa_status}
     def clip(self, numBand=1):
         """
         Prepare the pair for correlation by creating symlinks to input thumbs.
-        
+
         Creates the pair directory and symbolic links to the left and right Thumb files.
         This is the first step before launching ASP correlation. If the pair already
         has a "clipped" or "complete" status, returns early.
-        
+
         :param numBand: Unused parameter (for API compatibility).
         :type numBand: int
-        
+
         :return: True if clipping succeeded.
         :rtype: bool
         """
@@ -492,29 +495,29 @@ status    : {self.pa_status}
     ):
         """
         Launch ASP correlation via the ASP correlation handler.
-        
+
         .. warning::
             This method is deprecated. Use the new correlation pipeline in
             ``geomulticorr.correlation.correlation`` instead.
-        
+
         Triggers the full ASP correlation workflow if the pair is not already complete.
         Passes parameters to the ASP handler for execution.
-        
+
         :param corr_algorithm: ASP correlation algorithm (default "asp_mgm").
         :type corr_algorithm: str
-        
+
         :param corr_kernel_size: Correlation kernel size in pixels.
         :type corr_kernel_size: int
-        
+
         :param corr_xthreshold: Cross-correlation threshold for outlier rejection.
         :type corr_xthreshold: float
-        
+
         :param corr_tile_size: Tile size for processing.
         :type corr_tile_size: int
-        
+
         :param dry_run: If True, prepare but do not execute correlation.
         :type dry_run: bool
-        
+
         :return: True if correlation succeeded or was already complete.
         :rtype: bool
         """
@@ -542,26 +545,26 @@ status    : {self.pa_status}
     ):
         """
         Execute ASP correlation directly (legacy method).
-        
+
         .. warning::
             This method is deprecated and uses outdated parameters.
             Use the new correlation pipeline instead.
-        
+
         Constructs and executes an ``parallel_stereo`` command with the specified
         parameters. Outputs are written directly to the pair directory.
-        
+
         :param corr_algorithm: Algorithm code for stereo (default 2 = semi-global).
         :type corr_algorithm: int
-        
+
         :param corr_kernel_size: Correlation window size.
         :type corr_kernel_size: int
-        
+
         :param corr_xthreshold: Cross-correlation threshold.
         :type corr_xthreshold: float
-        
+
         :param corr_tile_size: Tile size for processing.
         :type corr_tile_size: int
-        
+
         :return: True if execution completed (regardless of success).
         :rtype: bool
         """
@@ -603,21 +606,21 @@ status    : {self.pa_status}
     def corr_eval(self, corr_kernel_size=7, metric="ncc"):
         """
         Compute correlation quality metrics using ASP's ``corr_eval`` tool (legacy).
-        
+
         .. warning::
             This method is deprecated. Use the modern corrections pipeline for
             quality assessment.
-        
+
         Calls the ASP ``corr_eval`` command to generate a normalized cross-correlation
         (NCC) quality raster. Renames the output to follow GMC naming conventions and
         applies a default QGIS style.
-        
+
         :param corr_kernel_size: Kernel size for correlation evaluation.
         :type corr_kernel_size: int
-        
+
         :param metric: Quality metric ("ncc" by default).
         :type metric: str
-        
+
         :return: True if evaluation succeeded.
         :rtype: bool
         """
@@ -667,16 +670,16 @@ status    : {self.pa_status}
     def save_corrdata(self, verbose=False):
         """
         Move ASP correlation outputs from temporary storage to the pair directory (legacy).
-        
+
         .. warning::
             This method is deprecated. Modern workflows write directly to the pair directory.
-        
+
         Relocates correlation results from GeoMultiCorr's temporary staging area
         (``geomulticorr/temp/``) to the final project pair directory.
-        
+
         :param verbose: If True, print shell command output; otherwise suppress it.
         :type verbose: bool
-        
+
         :return: True if transfer succeeded; False if the directory does not exist afterward.
         :rtype: bool
         """
@@ -704,14 +707,14 @@ status    : {self.pa_status}
     def compute_magnitude(self):
         """
         Compute and save the displacement magnitude raster in metres.
-        
+
         Extracts EW and NS displacements from the final disparity raster (``pa_disparity_f_path``),
         converts from pixel to metre coordinates, computes the vector magnitude,
         and saves to ``pa_magn_path``. Returns cached result on subsequent calls.
-        
+
         :return: Magnitude raster in metres.
         :rtype: geoutils.Raster
-        
+
         :raises AssertionError: If the disparity raster does not exist.
         """
 
@@ -779,9 +782,7 @@ status    : {self.pa_status}
             if mask is None:
                 continue
 
-            write_binary_raster(
-                mask, reference.transform, reference.crs, out_path
-            )
+            write_binary_raster(mask, reference.transform, reference.crs, out_path)
             written[key] = out_path
 
         return written
@@ -897,7 +898,9 @@ status    : {self.pa_status}
         # exact dimensions), preventing off-by-one row/column mismatches between
         # sensors with different native resolutions (e.g. SPOT 1.5 m vs Planet 3 m).
         if target_resolution is not None:
-            use_canonical = canonical_bounds is not None and canonical_grid_size is not None
+            use_canonical = (
+                canonical_bounds is not None and canonical_grid_size is not None
+            )
             for path in [self.pa_ew_path, self.pa_ns_path, self.pa_cc_path]:
                 if path.exists():
                     r = gu.Raster(str(path))
@@ -908,7 +911,9 @@ status    : {self.pa_status}
                             resampling=resampling,
                         )
                     else:
-                        r_resampled = r.reproject(res=target_resolution, resampling=resampling)
+                        r_resampled = r.reproject(
+                            res=target_resolution, resampling=resampling
+                        )
                     r_resampled.to_file(str(path), dtype=out_dtype, nodata=out_nodata)
             logger.info(
                 f"Resampled EW/NS/NCC to {target_resolution} m ({resampling}): {self.pa_key}"
@@ -1024,35 +1029,35 @@ status    : {self.pa_status}
     ):
         """
         Execute the full pair processing pipeline (legacy method).
-        
+
         .. warning::
             This method is deprecated. Use individual workflow methods or the
             modern corrections pipeline instead.
-        
+
         Runs all processing steps in sequence: clipping, correlation, data migration,
         quality evaluation, magnitude computation, and vectorization.
-        
+
         :param epsg: EPSG code for vector output CRS.
         :type epsg: int
-        
+
         :param corr_algorithm: ASP algorithm code.
         :type corr_algorithm: int
-        
+
         :param corr_kernel_size: Correlation kernel size.
         :type corr_kernel_size: int
-        
+
         :param corr_xthreshold: Cross-correlation threshold.
         :type corr_xthreshold: float
-        
+
         :param vector_res: Output vector point spacing in metres.
         :type vector_res: int
-        
+
         :param method: Resampling method for vectorization ("average", etc.).
         :type method: str
-        
+
         :param metric_eval: Quality metric ("ncc", etc.).
         :type metric_eval: str
-        
+
         :return: True if all steps completed successfully.
         :rtype: bool
         """
@@ -1156,34 +1161,34 @@ status    : {self.pa_status}
     def vectorize_moving_areas(self, epsg=21781, min_surf="", n_clusters=4, mode="m"):
         """
         Create vector polygon layer from moving areas (K-Means clustering result).
-        
+
         Vectorizes the classified raster (from K-Means clustering; see ``get_moving_areas``)
         into polygon geometries, filters by minimum surface area, and saves to a GeoPackage.
-        
+
         **Prerequisites:**
-        
+
         - A classified raster must exist: ``KMe_N<n_clusters>_<pa_key>.tif``
           (generated by ``get_moving_areas`` method)
-        
+
         **Output files:**
-        
+
         - GeoPackage with polygon geometries
         - Optional minimum surface filter applied if ``min_surf`` is provided
-        
+
         :param epsg: Target EPSG code for output CRS (default: 21781 = CH1903+).
         :type epsg: int
-        
+
         :param min_surf: Minimum polygon surface area in km² to retain (empty string = no filter).
         :type min_surf: str or float
-        
+
         :param n_clusters: Number of clusters used in K-Means classification.
         :type n_clusters: int
-        
+
         :param mode: Displacement mode ("m", "x", "y", etc.; for future use).
         :type mode: str
-        
+
         :return: None
-        
+
         :raises FileNotFoundError: If the classified raster does not exist.
         """
         mask = None
@@ -1222,25 +1227,25 @@ status    : {self.pa_status}
     def get_interesting_geoim(self, mode):
         """
         Retrieve the raster corresponding to a requested displacement or velocity mode.
-        
+
         Provides a unified interface for accessing different raster types (displacement,
         velocity, or component-specific). Useful for generalized analysis workflows.
-        
+
         **Supported modes:**
-        
+
         - ``m``: Displacement magnitude (metres)
         - ``x``: EW displacement (metres)
         - ``y``: NS displacement (metres)
         - ``vm``: Velocity magnitude (metres/year)
         - ``vx``: EW velocity (metres/year)
         - ``vy``: NS velocity (metres/year)
-        
+
         :param mode: Mode identifier (case-insensitive).
         :type mode: str
-        
+
         :return: Raster object for the requested mode.
         :rtype: geoutils.Raster
-        
+
         :raises ValueError: If the mode is not recognized.
         """
         match mode.lower():
@@ -1266,17 +1271,17 @@ status    : {self.pa_status}
     def get_slice(self, geoLine, mode="m"):
         """
         Extract displacement values along a linear geomultifeature.
-        
+
         Samples a cross-section of displacement or velocity values at regular intervals
         along a provided line geometry. Useful for profile analysis and transect studies.
-        
+
         :param geoLine: Linear geometry; can be a GeoSeries, GeoDataFrame,
                         shapely LineString, file path, or coordinate pair (A, B).
         :type geoLine: gpd.GeoSeries, gpd.GeoDataFrame, shapely.geometry.LineString, str, Path, or tuple
-        
+
         :param mode: Displacement/velocity mode ("m", "x", "y", "vm", "vx", "vy").
         :type mode: str
-        
+
         :return: Cross-section values along the line.
         :rtype: array-like
         """
@@ -1285,32 +1290,32 @@ status    : {self.pa_status}
     def get_slices(self, geoLine, ribLength, ribStep, ribOrientation="v", mode="m"):
         """
         Extract displacement profiles perpendicular to a linear feature.
-        
+
         Creates perpendicular "ribs" (transects) at regular intervals along a provided
         line, sampling displacement or velocity values. Useful for geomorphic feature
         analysis (e.g., glacier flow across a centerline).
-        
+
         **Profile parameters:**
-        
+
         - ``ribLength``: Total rib length (metres)
         - ``ribStep``: Spacing between ribs along the feature (metres)
         - ``ribOrientation``: Direction perpendicular to the feature ("v" = vertical, "h" = horizontal)
-        
+
         :param geoLine: Linear geometry (GeoSeries, GeoDataFrame, LineString, path, or tuple).
         :type geoLine: gpd.GeoSeries, gpd.GeoDataFrame, shapely.geometry.LineString, str, Path, or tuple
-        
+
         :param ribLength: Total length of each perpendicular rib (metres).
         :type ribLength: float
-        
+
         :param ribStep: Spacing between ribs along the centerline (metres).
         :type ribStep: float
-        
+
         :param ribOrientation: Rib orientation ("v" or "h"; default "v").
         :type ribOrientation: str
-        
+
         :param mode: Displacement/velocity mode ("m", "x", "y", "vm", "vx", "vy").
         :type mode: str
-        
+
         :return: Transect profiles with displacement values.
         :rtype: array-like
         """

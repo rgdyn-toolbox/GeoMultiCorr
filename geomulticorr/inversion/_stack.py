@@ -60,6 +60,7 @@ No ``geomulticorr.core`` imports; the TOT discovery helpers come from
 :mod:`geomulticorr.stats.inversion_extractor` (``stats`` initialises before
 ``inversion``, the reverse import would be a cycle).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -140,7 +141,9 @@ def load_cumulative_stack(
             f"components are dropped: {', '.join(dropped)}"
         )
     if not dates:
-        raise FileNotFoundError(f"No date has every requested component under {inv_dir}.")
+        raise FileNotFoundError(
+            f"No date has every requested component under {inv_dir}."
+        )
 
     if chunks == "auto":
         chunks_arg = {} if _dask_available() else None
@@ -227,13 +230,18 @@ def write_cumulative_stack(
     out_dir = Path(out_dir)
     comps = [c for c in (components or COMPONENTS) if c in ds.data_vars]
     if "magn" in ds.data_vars and "magn" in (components or ()):
-        logger.warning("write_cumulative_stack: 'magn' is derived from EW/NS, never written as given.")
+        logger.warning(
+            "write_cumulative_stack: 'magn' is derived from EW/NS, never written as given."
+        )
     comps = [c for c in comps if c != "magn"]
     if not comps:
         raise ValueError("nothing to write: the dataset carries none of EW/NS")
 
-    dates = [str(d) for d in ds["date"].values] if "date" in ds.coords else \
-            list(pd.to_datetime(ds["time"].values).strftime("%Y%m%d"))
+    dates = (
+        [str(d) for d in ds["date"].values]
+        if "date" in ds.coords
+        else list(pd.to_datetime(ds["time"].values).strftime("%Y%m%d"))
+    )
 
     written: dict[str, dict[str, Path]] = {}
     for comp in comps:

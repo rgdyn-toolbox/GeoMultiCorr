@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Unit tests for the correlation-plan JSON and the parameter precedence."""
+
 from __future__ import annotations
 
 import json
@@ -50,7 +51,9 @@ class TestBuildPlan:
         json.dumps(plan)
 
     def test_tuples_become_lists(self):
-        plan = build_correlation_plan(groups={"g": {"params": {"corr_kernel": (21, 21)}}})
+        plan = build_correlation_plan(
+            groups={"g": {"params": {"corr_kernel": (21, 21)}}}
+        )
         assert plan["groups"]["g"]["params"]["corr_kernel"] == [21, 21]
 
     def test_records_what_it_deliberately_omits(self):
@@ -67,8 +70,9 @@ class TestBuildPlan:
 
 class TestWriteRead:
     def test_round_trip(self, tmp_path):
-        plan = build_correlation_plan(name="run1", pzone="PZ",
-                                      assumptions={"velocity_m_yr": 2.0})
+        plan = build_correlation_plan(
+            name="run1", pzone="PZ", assumptions={"velocity_m_yr": 2.0}
+        )
         path = write_correlation_plan(plan_path(tmp_path, "run1"), plan)
         assert path is not None
         back = read_correlation_plan(path)
@@ -88,7 +92,10 @@ class TestWriteRead:
         """Losing a trace must not cost an otherwise prepared correlation run."""
         blocker = tmp_path / "blocked"
         blocker.write_text("not a directory")
-        assert write_correlation_plan(blocker / "plan.json", build_correlation_plan()) is None
+        assert (
+            write_correlation_plan(blocker / "plan.json", build_correlation_plan())
+            is None
+        )
 
     def test_read_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
@@ -120,7 +127,9 @@ class TestResolvePrecedence:
         assert params["corr_kernel"] == (21, 21)
 
     def test_only_known_keys_survive(self):
-        params, _ = resolve_pair_params("p", "", {**SCALARS, "nodes": 4, "walltime": "1:00"})
+        params, _ = resolve_pair_params(
+            "p", "", {**SCALARS, "nodes": 4, "walltime": "1:00"}
+        )
         assert set(params) <= set(PLAN_PARAM_KEYS)
 
     def test_group_beats_scalars(self):
@@ -132,7 +141,9 @@ class TestResolvePrecedence:
 
     def test_override_beats_group(self):
         params, source = resolve_pair_params(
-            "p", "g", SCALARS,
+            "p",
+            "g",
+            SCALARS,
             groups={"g": {"params": {"corr_kernel": (9, 9)}}},
             overrides={"p": {"corr_kernel": (31, 31)}},
         )
@@ -168,10 +179,17 @@ class TestResolvePrecedence:
 
 class TestParamsFileComparison:
     def _write(self, asp_helper, path, **kwargs):
-        params = dict(corr_algorithm="asp_bm", corr_kernel=(21, 21), corr_search=None,
-                      corr_xthreshold=10, corr_seed_mode=1,
-                      subpixel_refinement_mode=2, subpixel_kernel=(21, 21),
-                      prefilter_mode=2, cost_mode=2)
+        params = dict(
+            corr_algorithm="asp_bm",
+            corr_kernel=(21, 21),
+            corr_search=None,
+            corr_xthreshold=10,
+            corr_seed_mode=1,
+            subpixel_refinement_mode=2,
+            subpixel_kernel=(21, 21),
+            prefilter_mode=2,
+            cost_mode=2,
+        )
         params.update(kwargs)
         asp_helper.build_correlation_params(params_file_path=path, **params)
         return path
@@ -193,11 +211,16 @@ class TestParamsFileComparison:
     def test_a_changed_kernel_is_detected(self, asp_helper, tmp_path):
         """The silent no-op this fix exists for."""
         path = self._write(asp_helper, tmp_path / "p.txt")
-        assert params_differ_from_file(path, {**SCALARS, "corr_kernel": (31, 31)}) is True
+        assert (
+            params_differ_from_file(path, {**SCALARS, "corr_kernel": (31, 31)}) is True
+        )
 
     def test_a_changed_search_box_is_detected(self, asp_helper, tmp_path):
         path = self._write(asp_helper, tmp_path / "p.txt")
-        assert params_differ_from_file(path, {**SCALARS, "corr_search": (-5, -5, 5, 5)}) is True
+        assert (
+            params_differ_from_file(path, {**SCALARS, "corr_search": (-5, -5, 5, 5)})
+            is True
+        )
 
     def test_dropping_an_explicit_search_is_detected(self, asp_helper, tmp_path):
         path = self._write(asp_helper, tmp_path / "p.txt", corr_search=(-5, -5, 5, 5))
@@ -208,14 +231,23 @@ class TestParamsFileComparison:
 
     def test_sgm_override_is_applied_before_comparing(self, asp_helper, tmp_path):
         """Otherwise every asp_mgm run would look changed forever."""
-        path = self._write(asp_helper, tmp_path / "p.txt",
-                           corr_algorithm="asp_mgm", corr_kernel=(21, 21))
+        path = self._write(
+            asp_helper,
+            tmp_path / "p.txt",
+            corr_algorithm="asp_mgm",
+            corr_kernel=(21, 21),
+        )
         requested = {**SCALARS, "corr_algorithm": "asp_mgm", "corr_kernel": (21, 21)}
         assert params_differ_from_file(path, requested) is False
 
     def test_flag_mismatch_is_detected(self, asp_helper, tmp_path):
-        path = self._write(asp_helper, tmp_path / "p.txt", save_disparity_difference=True)
-        assert params_differ_from_file(path, SCALARS, save_disparity_difference=False) is True
+        path = self._write(
+            asp_helper, tmp_path / "p.txt", save_disparity_difference=True
+        )
+        assert (
+            params_differ_from_file(path, SCALARS, save_disparity_difference=False)
+            is True
+        )
 
 
 class TestJsonable:
@@ -309,9 +341,10 @@ class TestInputParamsDifferFromFile:
 
     def test_flag_present_and_requested_is_unchanged(self, tmp_path):
         path = self._file(tmp_path, "corr-kernel 21 21", "individually-normalize")
-        assert input_params_differ_from_file(
-            path, {"individual_normalization": True}
-        ) is False
+        assert (
+            input_params_differ_from_file(path, {"individual_normalization": True})
+            is False
+        )
 
 
 class TestParamsDifferFromFileEdges:
@@ -346,6 +379,9 @@ class TestParamsDifferFromFileEdges:
 
     def test_none_search_without_a_search_line_is_unchanged(self, tmp_path):
         path = self._file(tmp_path, *self.BASE)
-        assert params_differ_from_file(
-            path, {"corr_search": None, "corr_kernel": (21, 21)}
-        ) is False
+        assert (
+            params_differ_from_file(
+                path, {"corr_search": None, "corr_kernel": (21, 21)}
+            )
+            is False
+        )

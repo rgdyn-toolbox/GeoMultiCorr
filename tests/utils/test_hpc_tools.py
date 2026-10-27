@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Unit tests for the shared OAR/HPC helpers."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -99,7 +100,7 @@ class TestSubmitAndRun:
     def test_oarsub_submit_defaults_cwd_to_script_dir(self, recorded_run, tmp_path):
         script = tmp_path / "job.sh"
         oarsub_submit(script)
-        (cmd, kwargs), = recorded_run
+        ((cmd, kwargs),) = recorded_run
         assert cmd == "oarsub -S ./job.sh"
         assert kwargs == {"shell": True, "cwd": str(tmp_path), "check": True}
 
@@ -110,7 +111,7 @@ class TestSubmitAndRun:
 
     def test_run_local_inherits_cwd_when_none(self, recorded_run):
         run_local("echo hi")
-        (cmd, kwargs), = recorded_run
+        ((cmd, kwargs),) = recorded_run
         assert cmd == "echo hi"
         assert kwargs == {"shell": True, "cwd": None, "check": True}
 

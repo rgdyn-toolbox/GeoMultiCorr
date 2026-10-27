@@ -6,6 +6,7 @@ The two backends share one grouping rule — a single sensor group draws exactly
 the two direction series it always did; several groups draw one series per
 (direction, sensor) — so the tests drive both from the same frames.
 """
+
 from __future__ import annotations
 
 import matplotlib
@@ -25,10 +26,15 @@ from geomulticorr.utils.gmc_functions import plot_inversion_weights  # noqa: E40
 def _frame(sensors=None):
     n = 4
     return weights_frame(
-        [f"pz_p{i}" for i in range(n)], [30.0, 90.0, 200.0, 400.0],
-        [0.9, 0.6, 0.3, 0.2], [0.8, 0.5, 0.2, 0.1],
-        nmad_ew=[0.2] * n, nmad_ns=[0.3] * n, cc=[0.7] * n,
-        corr_direction=["Forward"] * n, sensor=sensors,
+        [f"pz_p{i}" for i in range(n)],
+        [30.0, 90.0, 200.0, 400.0],
+        [0.9, 0.6, 0.3, 0.2],
+        [0.8, 0.5, 0.2, 0.1],
+        nmad_ew=[0.2] * n,
+        nmad_ns=[0.3] * n,
+        cc=[0.7] * n,
+        corr_direction=["Forward"] * n,
+        sensor=sensors,
     )
 
 
@@ -44,12 +50,21 @@ class TestPlotlyGrouping:
     def test_mixed_sensors_give_one_trace_per_direction_and_sensor(self):
         fig = figure_weights(_frame(["planetscope", "spot6", "planetscope", "spot6"]))
         names = [t.name for t in fig.data]
-        assert names == ["EW · planetscope", "EW · spot6", "NS · planetscope", "NS · spot6"]
+        assert names == [
+            "EW · planetscope",
+            "EW · spot6",
+            "NS · planetscope",
+            "NS · spot6",
+        ]
         assert [t.legendgroup for t in fig.data] == ["EW", "EW", "NS", "NS"]
         assert len(fig.data[0].x) == 2
-        assert fig.data[0].marker.color != fig.data[1].marker.color    # colour by sensor
-        assert fig.data[0].marker.color == fig.data[2].marker.color    # same sensor, both dirs
-        assert fig.data[0].marker.symbol == fig.data[1].marker.symbol  # symbol by direction
+        assert fig.data[0].marker.color != fig.data[1].marker.color  # colour by sensor
+        assert (
+            fig.data[0].marker.color == fig.data[2].marker.color
+        )  # same sensor, both dirs
+        assert (
+            fig.data[0].marker.symbol == fig.data[1].marker.symbol
+        )  # symbol by direction
         assert fig.data[0].marker.symbol != fig.data[2].marker.symbol
 
     def test_visibility_follows_directions_across_groups(self):
@@ -80,11 +95,18 @@ class TestMatplotlibTwin:
             plt.close(fig)
 
     def test_mixed_sensors_four_collections_with_legend_labels(self):
-        fig, ax = plot_inversion_weights(_frame(["planetscope", "spot6", "planetscope", "spot6"]))
+        fig, ax = plot_inversion_weights(
+            _frame(["planetscope", "spot6", "planetscope", "spot6"])
+        )
         try:
             assert len(ax.collections) == 4
             labels = [h.get_label() for h in ax.collections]
-            assert labels == ["EW · planetscope", "EW · spot6", "NS · planetscope", "NS · spot6"]
+            assert labels == [
+                "EW · planetscope",
+                "EW · spot6",
+                "NS · planetscope",
+                "NS · spot6",
+            ]
         finally:
             plt.close(fig)
 

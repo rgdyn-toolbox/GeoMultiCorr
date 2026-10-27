@@ -39,6 +39,7 @@ The contracts worth not re-breaking:
 * the weight vectors are computed **from that dict**, so the two cannot disagree;
 * one recompute per weighting change, and **zero** on a view-only change.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -99,9 +100,9 @@ class TestSplatContracts:
     @pytest.mark.parametrize("method", ["write_liste_couple", "prepare_inversion"])
     def test_keys_are_a_subset_of_both_writers(self, method):
         params = set(inspect.signature(getattr(TIOInversion, method)).parameters)
-        assert set(TIOInversion._WEIGHT_PARAM_KEYS) <= params, (
-            f"{method} cannot accept the stash as **kwargs"
-        )
+        assert (
+            set(TIOInversion._WEIGHT_PARAM_KEYS) <= params
+        ), f"{method} cannot accept the stash as **kwargs"
 
     def test_direction_is_excluded(self):
         """Including it would make both splats raise TypeError — it is view-only."""
@@ -112,8 +113,9 @@ class TestSplatContracts:
 
     def test_dt_range_is_carried(self, inv):
         """Before this, the explorer could never reproduce a dt_range run."""
-        inv.explore_weights("sigmoid", interactive=False, savefig=False,
-                            dt_range=(300, 400))
+        inv.explore_weights(
+            "sigmoid", interactive=False, savefig=False, dt_range=(300, 400)
+        )
         assert inv._last_weights_params["dt_range"] == (300.0, 400.0)
 
     def test_stash_is_json_safe(self, inv):
@@ -136,8 +138,7 @@ class TestHeadless:
         assert frame["pa_key"].tolist() == [p.pa_key for p in inv.pairs]
 
     def test_direction_selects_the_visible_series(self, inv):
-        _, fig = inv.explore_weights(interactive=False, savefig=False,
-                                     direction="EW")
+        _, fig = inv.explore_weights(interactive=False, savefig=False, direction="EW")
         assert [t.visible for t in fig.data] == [True, False]
 
     def test_weights_are_stashed_too(self, inv):
@@ -157,15 +158,17 @@ class TestComputeReadsTheStash:
     """Params and vectors are one thing derived from the other, not two."""
 
     def test_vectors_match_a_direct_recompute_from_the_dict(self, inv):
-        inv.explore_weights("quality", interactive=False, savefig=False,
-                            combine="wmean", cc_gamma=1.4)
+        inv.explore_weights(
+            "quality", interactive=False, savefig=False, combine="wmean", cc_gamma=1.4
+        )
         params = dict(inv._last_weights_params)
         mode = params.pop("weight_mode")
         expected = inv.compute_pair_weights(mode, direction="EW", **params)
         assert inv._last_weights["EW"] == pytest.approx(expected)
 
-    def test_the_stash_replays_through_write_liste_couple(self, inv, tmp_path,
-                                                          monkeypatch):
+    def test_the_stash_replays_through_write_liste_couple(
+        self, inv, tmp_path, monkeypatch
+    ):
         """The documented commit step must actually run."""
         inv.inversion_dir = tmp_path
         inv._DIRECTIONS = ("EW", "NS")
@@ -174,8 +177,7 @@ class TestComputeReadsTheStash:
         monkeypatch.setattr(inv, "_sync_pair_weights", lambda *a, **k: None)
 
         inv.explore_weights("quality", interactive=False, savefig=False)
-        written = inv.write_liste_couple(**inv._last_weights_params,
-                                         sync_geodb=False)
+        written = inv.write_liste_couple(**inv._last_weights_params, sync_geodb=False)
         assert written["EW"] == pytest.approx(inv._last_weights["EW"])
 
 
@@ -192,8 +194,13 @@ class TestDefaultsValidation:
 
     @pytest.mark.parametrize("key", TIOInversion._WEIGHTS_EXPLORER_DEFAULTS)
     def test_every_declared_default_is_accepted(self, inv, key):
-        value = {"direction": "EW", "combine": "wmean", "invert": True,
-                 "dt_range": (10, 20), "sensor_weights": {"spot": 0.5}}.get(key, 1.0)
+        value = {
+            "direction": "EW",
+            "combine": "wmean",
+            "invert": True,
+            "dt_range": (10, 20),
+            "sensor_weights": {"spot": 0.5},
+        }.get(key, 1.0)
         inv.explore_weights(interactive=False, savefig=False, **{key: value})
 
 
@@ -220,15 +227,20 @@ class TestWidgetTree:
         import ipywidgets as widgets
 
         box = self._build(widget_inv)
-        buttons = [w for row in box.children
-                   if isinstance(row, widgets.HBox)
-                   for w in row.children if isinstance(w, widgets.Button)]
+        buttons = [
+            w
+            for row in box.children
+            if isinstance(row, widgets.HBox)
+            for w in row.children
+            if isinstance(w, widgets.Button)
+        ]
         assert [b.description for b in buttons] == ["Save figure"]
 
     def test_construction_stashes_and_computes(self, widget_inv):
         self._build(widget_inv)
         assert set(widget_inv._last_weights_params) == set(
-            TIOInversion._WEIGHT_PARAM_KEYS)
+            TIOInversion._WEIGHT_PARAM_KEYS
+        )
         assert widget_inv._last_weights is not None
 
     def _controls(self, box):
@@ -249,7 +261,8 @@ class TestWidgetTree:
         calls = []
         original = TIOInversion.compute_pair_weights
         monkeypatch.setattr(
-            TIOInversion, "compute_pair_weights",
+            TIOInversion,
+            "compute_pair_weights",
             lambda self, *a, **k: calls.append(1) or original(self, *a, **k),
         )
         with contextlib.redirect_stdout(io.StringIO()):
@@ -265,7 +278,8 @@ class TestWidgetTree:
         calls = []
         original = TIOInversion.compute_pair_weights
         monkeypatch.setattr(
-            TIOInversion, "compute_pair_weights",
+            TIOInversion,
+            "compute_pair_weights",
             lambda self, *a, **k: calls.append(1) or original(self, *a, **k),
         )
         with contextlib.redirect_stdout(io.StringIO()):
@@ -299,8 +313,9 @@ class TestQualityMetricsAreHoisted:
 
     def test_repeated_calls_read_the_files_once(self, inv, monkeypatch):
         reads = []
-        monkeypatch.setattr(tio, "load_pair_stats",
-                            lambda p: reads.append(p.pa_key) or _stats())
+        monkeypatch.setattr(
+            tio, "load_pair_stats", lambda p: reads.append(p.pa_key) or _stats()
+        )
         inv._quality_metrics = None
 
         inv.compute_pair_weights("quality", direction="EW")
@@ -332,12 +347,16 @@ class TestSensorWeightsInTheExplorer:
     """The thirteenth key: a Text control parsed in a try, stashed as a sorted dict."""
 
     def test_headless_stashes_the_sorted_dict(self, inv):
-        inv.explore_weights(interactive=False, savefig=False,
-                            sensor_weights={"spot": 1.0, "planetscope": 0.5})
+        inv.explore_weights(
+            interactive=False,
+            savefig=False,
+            sensor_weights={"spot": 1.0, "planetscope": 0.5},
+        )
         stashed = inv._last_weights_params["sensor_weights"]
         assert stashed == {"planetscope": 0.5, "spot": 1.0}
         assert list(stashed) == ["planetscope", "spot"]
         import json
+
         json.dumps(inv._last_weights_params)
 
     def test_headless_empty_mapping_is_none(self, inv):
@@ -346,7 +365,9 @@ class TestSensorWeightsInTheExplorer:
 
     def test_frame_carries_the_sensor_column(self, inv):
         for i, p in enumerate(inv.pairs):
-            p.pa_left.th_sensor = p.pa_right.th_sensor = "spot6" if i % 2 else "planetscope"
+            p.pa_left.th_sensor = p.pa_right.th_sensor = (
+                "spot6" if i % 2 else "planetscope"
+            )
         frame, _ = inv.explore_weights(interactive=False, savefig=False)
         assert list(frame["sensor"]) == ["planetscope", "spot6", "planetscope", "spot6"]
 
@@ -354,7 +375,9 @@ class TestSensorWeightsInTheExplorer:
     def widget_inv(self, inv):
         pytest.importorskip("ipywidgets")
         for i, p in enumerate(inv.pairs):
-            p.pa_left.th_sensor = p.pa_right.th_sensor = "spot6" if i % 2 else "planetscope"
+            p.pa_left.th_sensor = p.pa_right.th_sensor = (
+                "spot6" if i % 2 else "planetscope"
+            )
         return inv
 
     def _build(self, obj, **kwargs):
@@ -363,6 +386,7 @@ class TestSensorWeightsInTheExplorer:
 
     def _controls(self, box):
         import ipywidgets as widgets
+
         found = {}
         for row in box.children:
             if isinstance(row, widgets.HBox):
@@ -380,11 +404,13 @@ class TestSensorWeightsInTheExplorer:
         calls = []
         original = TIOInversion.compute_pair_weights
         monkeypatch.setattr(
-            TIOInversion, "compute_pair_weights",
-            lambda self, *a, **k: calls.append(1) or original(self, *a, **k))
+            TIOInversion,
+            "compute_pair_weights",
+            lambda self, *a, **k: calls.append(1) or original(self, *a, **k),
+        )
         with contextlib.redirect_stdout(io.StringIO()):
             controls["sensor w"].value = "planetscope=0.5"
-        assert len(calls) == 2                               # one pass, two directions
+        assert len(calls) == 2  # one pass, two directions
         assert widget_inv._last_weights_params["sensor_weights"] == {"planetscope": 0.5}
         assert widget_inv._last_weights["EW"] == [0.5, 1.0, 0.5, 1.0]
 
@@ -398,7 +424,9 @@ class TestSensorWeightsInTheExplorer:
         assert any("✘ sensor w" in w.value for w in status)
 
     def test_clearing_the_text_removes_the_factor(self, widget_inv):
-        box = self._build(widget_inv, weight_mode="uniform", sensor_weights={"spot": 0.5})
+        box = self._build(
+            widget_inv, weight_mode="uniform", sensor_weights={"spot": 0.5}
+        )
         controls = self._controls(box)
         assert widget_inv._last_weights["EW"] == [1.0, 0.5, 1.0, 0.5]
         with contextlib.redirect_stdout(io.StringIO()):

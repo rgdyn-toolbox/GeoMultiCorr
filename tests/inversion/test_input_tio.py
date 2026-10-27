@@ -10,6 +10,7 @@ old block through ``TIOConfig.legacy()``, the storage of the resolved config
 on the instance (so the trace records what was written), and the warning that
 fires when weights are written the solver will not read.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -25,15 +26,22 @@ from tests.inversion.pytio.test_config import LEGACY_TEXT
 
 @pytest.fixture
 def inv(tmp_path, monkeypatch):
-    monkeypatch.setattr(tio, "load_pair_stats", lambda p: {
-        "final_corrected_stats": {"ew": {"nmad": 0.3}, "ns": {"nmad": 0.3}},
-        "raw_corr_stats": {"cc": {"cc_quality_gte_050": 0.7}},
-    })
+    monkeypatch.setattr(
+        tio,
+        "load_pair_stats",
+        lambda p: {
+            "final_corrected_stats": {"ew": {"nmad": 0.3}, "ns": {"nmad": 0.3}},
+            "raw_corr_stats": {"cc": {"cc_quality_gte_050": 0.7}},
+        },
+    )
     obj = TIOInversion.__new__(TIOInversion)
     obj.pairs = [
-        SimpleNamespace(pa_key=f"PZ_p{i}", pa_dt_days=30 * (i + 1),
-                        pa_left=SimpleNamespace(th_date="2022-01-01"),
-                        pa_right=SimpleNamespace(th_date=f"2022-0{i + 2}-01"))
+        SimpleNamespace(
+            pa_key=f"PZ_p{i}",
+            pa_dt_days=30 * (i + 1),
+            pa_left=SimpleNamespace(th_date="2022-01-01"),
+            pa_right=SimpleNamespace(th_date=f"2022-0{i + 2}-01"),
+        )
         for i in range(3)
     ]
     obj.inversion_name = "t"
@@ -64,7 +72,9 @@ class TestBuildInputTioText:
         assert lines[10] == "img" and lines[12] == "cpl"
 
     def test_a_tuned_config_lands_in_the_text(self):
-        lines = _build_input_tio_text(solver=TIOConfig(gamma=0.02, reweight_iterations=2)).splitlines()
+        lines = _build_input_tio_text(
+            solver=TIOConfig(gamma=0.02, reweight_iterations=2)
+        ).splitlines()
         assert lines[0].startswith("0.0200 ")
         assert lines[5].startswith("2 ")
 
@@ -101,14 +111,25 @@ class TestWriteInputTio:
 
 class TestPrepareInversionSolverArgument:
     def _stub_everything(self, monkeypatch, calls):
-        for name in ("write_file_info_rsc", "export_pair_to_binary",
-                     "_create_symlinks", "write_liste_image", "write_liste_image_inv",
-                     "write_input_tio", "write_launch_script", "write_run_parameters"):
+        for name in (
+            "write_file_info_rsc",
+            "export_pair_to_binary",
+            "_create_symlinks",
+            "write_liste_image",
+            "write_liste_image_inv",
+            "write_input_tio",
+            "write_launch_script",
+            "write_run_parameters",
+        ):
             monkeypatch.setattr(TIOInversion, name, lambda *a, **k: None)
-        monkeypatch.setattr(TIOInversion, "setup_directories",
-                            lambda self: calls.append("setup_directories"))
-        monkeypatch.setattr(TIOInversion, "write_liste_couple",
-                            lambda *a, **k: {"EW": [1], "NS": [1]})
+        monkeypatch.setattr(
+            TIOInversion,
+            "setup_directories",
+            lambda self: calls.append("setup_directories"),
+        )
+        monkeypatch.setattr(
+            TIOInversion, "write_liste_couple", lambda *a, **k: {"EW": [1], "NS": [1]}
+        )
         monkeypatch.setattr(tio, "print_tio_export_summary", lambda *a, **k: None)
 
     def test_bad_solver_raises_before_anything_is_written(self, inv, monkeypatch):
@@ -121,8 +142,9 @@ class TestPrepareInversionSolverArgument:
     def test_solver_is_stored_and_logged(self, inv, monkeypatch, caplog_gmc):
         calls: list = []
         self._stub_everything(monkeypatch, calls)
-        inv.prepare_inversion(solver=TIOConfig(gamma=0.02, reweight_iterations=2),
-                              print_summary=False)
+        inv.prepare_inversion(
+            solver=TIOConfig(gamma=0.02, reweight_iterations=2), print_summary=False
+        )
         assert inv.solver.gamma == 0.02
         assert "iponder=2" in caplog_gmc.text
         assert "reweight_iterations=2" in caplog_gmc.text
@@ -162,9 +184,12 @@ class TestIgnoredWeightsWarning:
 
 class TestOptionalBinaries:
     def test_missing_binaries_do_not_raise_at_construction(self, tmp_path, caplog_gmc):
-        session = SimpleNamespace(_legacy_layout=False,
-                                  pz_dir=lambda pz, kind=None: tmp_path / pz / str(kind))
-        pairs = [SimpleNamespace(pa_key="PZ_2020-01-01_s__2020-02-01_s", pa_pz_name="PZ")]
+        session = SimpleNamespace(
+            _legacy_layout=False, pz_dir=lambda pz, kind=None: tmp_path / pz / str(kind)
+        )
+        pairs = [
+            SimpleNamespace(pa_key="PZ_2020-01-01_s__2020-02-01_s", pa_pz_name="PZ")
+        ]
         inv = TIOInversion(session, pairs, "t", tio_binaries_dir=tmp_path / "nowhere")
         assert inv.invers_pixel_omp_bin is None
         assert inv.lect_depl_cumule_lin_bin is None

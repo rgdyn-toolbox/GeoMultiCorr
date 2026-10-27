@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Shared fixtures for the pure pair-layout helpers (geometry + frame contract)."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -13,9 +14,16 @@ from geomulticorr.core.pzone import _strategy_pair_indices
 def dates_iso() -> list[str]:
     """Ten irregularly spaced acquisitions spanning three calendar years."""
     return [
-        "2020-03-15", "2020-06-02", "2020-09-21", "2020-12-30",
-        "2021-04-11", "2021-08-08", "2021-11-27",
-        "2022-02-14", "2022-07-19", "2022-10-05",
+        "2020-03-15",
+        "2020-06-02",
+        "2020-09-21",
+        "2020-12-30",
+        "2021-04-11",
+        "2021-08-08",
+        "2021-11-27",
+        "2022-02-14",
+        "2022-07-19",
+        "2022-10-05",
     ]
 
 

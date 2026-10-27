@@ -5,6 +5,7 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079419.svg)](https://doi.org/10.5281/zenodo.17079419)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE.md)
 [![Coverage Status](https://coveralls.io/repos/github/rgdyn-toolbox/GeoMultiCorr/badge.svg?branch=main)](https://coveralls.io/github/rgdyn-toolbox/GeoMultiCorr?branch=main)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
 # GeoMultiCorr
 

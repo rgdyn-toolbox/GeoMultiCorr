@@ -53,6 +53,7 @@ Public API:
 - :func:`sensor_colors` — one deterministic colour per sensor group, for both backends.
 - :func:`weights_stats` / :func:`format_weights_summary` — user-facing counts.
 """
+
 from __future__ import annotations
 
 from typing import Sequence
@@ -62,15 +63,15 @@ import pandas as pd
 
 #: Columns every weights frame carries, in order.
 WEIGHTS_FRAME_COLUMNS: tuple[str, ...] = (
-    "pa_key",          # pair key, the hover/debug identity
-    "dt_days",         # temporal baseline in whole days — the figure's x axis
-    "w_ew",            # EW weight in [0, 1]
-    "w_ns",            # NS weight in [0, 1]
-    "nmad_ew",         # EW NMAD (m) from the pair stats JSON, nan when missing
-    "nmad_ns",         # NS NMAD (m), nan when missing
-    "cc",              # cc_quality_gte_050, nan when missing
+    "pa_key",  # pair key, the hover/debug identity
+    "dt_days",  # temporal baseline in whole days — the figure's x axis
+    "w_ew",  # EW weight in [0, 1]
+    "w_ns",  # NS weight in [0, 1]
+    "nmad_ew",  # EW NMAD (m) from the pair stats JSON, nan when missing
+    "nmad_ns",  # NS NMAD (m), nan when missing
+    "cc",  # cc_quality_gte_050, nan when missing
     "corr_direction",  # the pair's correlation direction ("" when unknown)
-    "sensor",          # lower-case sensor of the pair ("" when unknown, "a+b" if mixed)
+    "sensor",  # lower-case sensor of the pair ("" when unknown, "a+b" if mixed)
 )
 
 _DTYPES: dict[str, str] = {
@@ -99,8 +100,16 @@ WEIGHT_DIRECTION_MARKERS: dict[str, tuple[str, str]] = {
 #: by :func:`sensor_colors` in **sorted** sensor order, so the same archive gets
 #: the same colours whatever order its pairs come in.
 SENSOR_PALETTE: tuple[str, ...] = (
-    "#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#8c564b",
-    "#e377c2", "#17becf", "#bcbd22", "#7f7f7f", "#ff7f0e",
+    "#1f77b4",
+    "#d62728",
+    "#2ca02c",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#17becf",
+    "#bcbd22",
+    "#7f7f7f",
+    "#ff7f0e",
 )
 
 
@@ -140,9 +149,13 @@ def parse_sensor_weights(text: str | None) -> dict[str, float] | None:
         try:
             factor = float(value)
         except ValueError:
-            raise ValueError(f"factor for {key!r} must be a number, got {value!r}") from None
+            raise ValueError(
+                f"factor for {key!r} must be a number, got {value!r}"
+            ) from None
         if not np.isfinite(factor) or factor < 0.0:
-            raise ValueError(f"factor for {key!r} must be finite and ≥ 0, got {value!r}")
+            raise ValueError(
+                f"factor for {key!r} must be finite and ≥ 0, got {value!r}"
+            )
         out[key] = factor
     return dict(sorted(out.items())) or None
 
@@ -152,6 +165,7 @@ def format_sensor_weights(sensor_weights: dict[str, float] | None) -> str:
     if not sensor_weights:
         return ""
     return ", ".join(f"{k}={float(v):g}" for k, v in sorted(sensor_weights.items()))
+
 
 #: Weighting parameters that actually affect each mode.
 #:
@@ -177,7 +191,8 @@ WEIGHT_MODE_KEYS: dict[str, set[str]] = {
 
 
 def relevant_weight_keys(
-    weight_mode: str, combine: str | None = None,
+    weight_mode: str,
+    combine: str | None = None,
     sensor_weights: dict[str, float] | None = None,
 ) -> set[str]:
     """Parameters that change the weights for *weight_mode*.
@@ -280,8 +295,9 @@ def weights_frame(
     return frame.astype(_DTYPES)[list(WEIGHTS_FRAME_COLUMNS)]
 
 
-def weights_stats(frame: pd.DataFrame, *, weight_mode: str = "",
-                  combine: str = "") -> dict:
+def weights_stats(
+    frame: pd.DataFrame, *, weight_mode: str = "", combine: str = ""
+) -> dict:
     """Counts and per-direction weight statistics for a user-facing summary.
 
     :returns: ``{"n_pairs", "weight_mode", "combine", "EW": {...}, "NS": {...}}``
@@ -294,9 +310,7 @@ def weights_stats(frame: pd.DataFrame, *, weight_mode: str = "",
         "combine": combine,
     }
     for direction, column in (("EW", "w_ew"), ("NS", "w_ns")):
-        out[direction] = weight_summary(
-            frame[column].to_numpy() if len(frame) else []
-        )
+        out[direction] = weight_summary(frame[column].to_numpy() if len(frame) else [])
     return out
 
 
@@ -309,8 +323,7 @@ def weight_summary(values) -> dict:
     arr = np.asarray(list(values), dtype="float64")
     finite = arr[np.isfinite(arr)]
     if finite.size == 0:
-        return {"n": int(arr.size), "min": None, "max": None,
-                "mean": None, "n_zero": 0}
+        return {"n": int(arr.size), "min": None, "max": None, "mean": None, "n_zero": 0}
     return {
         "n": int(arr.size),
         "min": float(round(float(finite.min()), 6)),
@@ -326,14 +339,18 @@ def format_weights_summary(stats: dict) -> str:
     if stats.get("combine") and label in ("quality", "quality_spatial"):
         label = f"{label}:{stats['combine']}"
 
-    parts = [f"<b>{stats.get('n_pairs', 0)}</b> pairs &middot; mode <code>{label}</code>"]
+    parts = [
+        f"<b>{stats.get('n_pairs', 0)}</b> pairs &middot; mode <code>{label}</code>"
+    ]
     for direction in ("EW", "NS"):
         block = stats.get(direction) or {}
         if block.get("mean") is None:
             parts.append(f"{direction}: n/a")
             continue
-        piece = (f"{direction}: mean <b>{block['mean']:.3f}</b> "
-                 f"[{block['min']:.3f}–{block['max']:.3f}]")
+        piece = (
+            f"{direction}: mean <b>{block['mean']:.3f}</b> "
+            f"[{block['min']:.3f}–{block['max']:.3f}]"
+        )
         if block.get("n_zero"):
             piece += f" &middot; {block['n_zero']} at zero"
         parts.append(piece)

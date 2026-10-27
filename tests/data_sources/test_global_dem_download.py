@@ -13,6 +13,7 @@
 # (https://www.gnu.org/licenses/agpl-3.0.txt), WITHOUT ANY WARRANTY.
 # ---------------------------------------------------------------------------- #
 """Global DEM download: tile naming, coverage, caching and HTTP error handling."""
+
 import io
 import urllib.error
 import zipfile
@@ -35,7 +36,12 @@ from geomulticorr.data_sources.global_dem_download import (
 class TestSRTMProvider:
     @pytest.mark.parametrize(
         "lon, lat, expected",
-        [(6, 45, "N45E006"), (-70, -33, "S33W070"), (0, 0, "N00E000"), (-1, -1, "S01W001")],
+        [
+            (6, 45, "N45E006"),
+            (-70, -33, "S33W070"),
+            (0, 0, "N00E000"),
+            (-1, -1, "S01W001"),
+        ],
     )
     def test_tile_id(self, lon, lat, expected):
         assert SRTMProvider().tile_id(lon, lat) == expected
@@ -45,7 +51,9 @@ class TestSRTMProvider:
         assert p.tile_url("N45E006") == f"{p.BASE_URL}/N45E006.SRTMGL1.hgt.zip"
         assert p.cached_raster(tmp_path, "N45E006") == tmp_path / "srtm" / "N45E006.hgt"
 
-    @pytest.mark.parametrize("lat, covered", [(59, True), (60, False), (-56, True), (-57, False)])
+    @pytest.mark.parametrize(
+        "lat, covered", [(59, True), (60, False), (-56, True), (-57, False)]
+    )
     def test_latitude_coverage_is_half_open(self, lat, covered):
         assert SRTMProvider().covers_latitude(lat) is covered
 
@@ -117,7 +125,9 @@ class TestTileIndices:
         assert len(list(CopernicusProvider().tile_indices(0, 59.5, 1, 61.5))) == 3
 
     def test_antimeridian_wraps(self):
-        lons = {lon for lon, _ in CopernicusProvider().tile_indices(179.5, 10, 181.0, 11)}
+        lons = {
+            lon for lon, _ in CopernicusProvider().tile_indices(179.5, 10, 181.0, 11)
+        }
         assert lons == {179, -180}
 
 
@@ -133,7 +143,9 @@ class TestDEMClient:
         cached.parent.mkdir(parents=True)
         cached.write_bytes(b"x")
         monkeypatch.setattr(
-            client, "_download_url", lambda *a, **k: pytest.fail("network used on cache hit")
+            client,
+            "_download_url",
+            lambda *a, **k: pytest.fail("network used on cache hit"),
         )
         assert client.download_tile("cop30", "T") == cached
 
@@ -236,7 +248,9 @@ class TestDEMFinder:
 
     @pytest.mark.parametrize("provider", ["srtm", "cop30"])
     def test_search_metadata_geometry_matches_the_tile(self, tmp_path, provider):
-        finder = DEMFinder(DEMClient(tmp_path), (5.5, 45.2, 6.5, 45.8), provider=provider)
+        finder = DEMFinder(
+            DEMClient(tmp_path), (5.5, 45.2, 6.5, 45.8), provider=provider
+        )
         gdf = finder.search_metadata()
         assert len(gdf) == 2
         assert str(gdf.crs) == "EPSG:4326"

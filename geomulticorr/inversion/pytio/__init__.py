@@ -56,14 +56,28 @@ Typical standalone use::
 """
 
 from . import io
-from .config import (IPONDER, IPONDER_LINE_INDEX, NODATA_OUT, TIOConfig,
-                     input_tio_text)
-from .inversion import (common_mask, invert_stack, image_equalization_weights,
-                        variance_weights)
+from .config import IPONDER, IPONDER_LINE_INDEX, NODATA_OUT, TIOConfig, input_tio_text
+from .inversion import (
+    common_mask,
+    invert_stack,
+    image_equalization_weights,
+    variance_weights,
+)
 from .operators import incidence_matrix, laplacian
 from .postprocess import fit_velocity
 
-__all__ = ["TIOConfig", "input_tio_text", "IPONDER", "IPONDER_LINE_INDEX",
-           "NODATA_OUT", "io", "invert_stack", "common_mask",
-           "variance_weights", "image_equalization_weights",
-           "incidence_matrix", "laplacian", "fit_velocity"]
+__all__ = [
+    "TIOConfig",
+    "input_tio_text",
+    "IPONDER",
+    "IPONDER_LINE_INDEX",
+    "NODATA_OUT",
+    "io",
+    "invert_stack",
+    "common_mask",
+    "variance_weights",
+    "image_equalization_weights",
+    "incidence_matrix",
+    "laplacian",
+    "fit_velocity",
+]

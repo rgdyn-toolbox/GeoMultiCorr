@@ -21,10 +21,12 @@ from geomulticorr.corrections.corrections import (
     AcrossTrackDestriping,
     make_corrections,
 )
+
 # Import geomulticorr utilities for testing
 from .conftest import MockRaster
 from geomulticorr.corrections.fit import rotate_coords
 from geomulticorr.corrections.masks import SlopeMask
+
 
 def _seam_mock_raster(angle_deg=-12.0, nr=80, nc=100, noise=0.3, seed=0):
     """MockRaster with a step seam whose normal is *angle_deg* (map space)."""
@@ -35,15 +37,19 @@ def _seam_mock_raster(angle_deg=-12.0, nr=80, nc=100, noise=0.3, seed=0):
     field = np.where(s > np.median(s), 2.0, -2.0) + rng.normal(0, noise, (nr, nc))
     return MockRaster(data=ma.array(field, mask=False))
 
+
 class TestBaseCorrection:
     """Tests for BaseCorrection abstract base and shared helpers."""
 
     def test_fit_raises_not_implemented(self):
         """BaseCorrection.fit() raises NotImplementedError."""
+
         class _NoImpl(BaseCorrection):
             pass
+
         corr = _NoImpl()
         from .conftest import MockRaster
+
         raster = MockRaster(data=ma.array(np.zeros((5, 5))))
         with pytest.raises(NotImplementedError, match="does not implement fit"):
             corr.fit(raster)
@@ -59,9 +65,7 @@ class TestBaseCorrection:
         corr = MedianCentering()
         corr.fit(offset_raster)
         result = corr.apply(offset_raster)
-        assert np.allclose(
-            result.data.data[~result.data.mask], 0.0, atol=1e-10
-        )
+        assert np.allclose(result.data.data[~result.data.mask], 0.0, atol=1e-10)
 
     def test_apply_preserves_existing_mask(self, partial_mask_raster):
         """Masked pixels stay masked after apply()."""
@@ -103,18 +107,27 @@ class TestBaseCorrection:
         stable_mask = np.zeros((10, 10), dtype=bool)
         stable_mask[:5, :5] = True
         result = BaseCorrection._resolve_stable_mask(
-            stable_mask, partial_mask_raster.data, (10, 10), partial_mask_raster.transform
+            stable_mask,
+            partial_mask_raster.data,
+            (10, 10),
+            partial_mask_raster.transform,
         )
         assert result.sum() <= 25
 
-    def test_resolve_stable_mask_dem_nan_excluded(self, partial_mask_raster, dem_raster):
+    def test_resolve_stable_mask_dem_nan_excluded(
+        self, partial_mask_raster, dem_raster
+    ):
         """DEM NaN pixels additionally excluded from fit."""
         dem_arr = ma.filled(dem_raster.data, np.nan).copy()
         dem_arr[2, 2] = np.nan
         dem_arr[3, 3] = np.nan
         dem_arr[4, 4] = np.nan
         result = BaseCorrection._resolve_stable_mask(
-            None, partial_mask_raster.data, (10, 10), partial_mask_raster.transform, dem_arr
+            None,
+            partial_mask_raster.data,
+            (10, 10),
+            partial_mask_raster.transform,
+            dem_arr,
         )
         assert result.sum() == 95  # 100 - 2 masked - 3 NaN
 
@@ -154,6 +167,7 @@ class TestCorrectionPipeline:
         """apply() without fit() raises RuntimeError."""
         p = MedianCentering() + RampCorrection()
         from .conftest import MockRaster
+
         raster = MockRaster(data=ma.array(np.zeros((5, 5))))
         with pytest.raises(RuntimeError, match="Call fit\\(\\) before apply"):
             p.apply(raster)
@@ -235,6 +249,7 @@ class TestMedianCentering:
     def test_stable_mask_restricts_fit(self):
         """Stable mask excludes outlier: shift = median(1,2,3) = 2.0."""
         from .conftest import MockRaster
+
         band_data = np.array([[1.0, 2.0], [3.0, 100.0]])
         band = ma.array(band_data, mask=False)
         raster = MockRaster(data=band)
@@ -346,7 +361,13 @@ class TestTopoCorrection:
         corr = TopoCorrection(order="linear")
         corr.fit(ramp_raster, dem=dem_off_grid)
         assert corr._fit_called
-        assert set(corr.meta) >= {"row_slope", "col_slope", "dem_slope", "intercept", "r2"}
+        assert set(corr.meta) >= {
+            "row_slope",
+            "col_slope",
+            "dem_slope",
+            "intercept",
+            "r2",
+        }
 
     def test_same_shape_misaligned_dem_is_regridded_and_warned(
         self, ramp_raster, dem_raster, caplog_gmc
@@ -422,7 +443,16 @@ class TestTopoCorrection:
         """Quadratic meta has 8 keys."""
         corr = TopoCorrection(order="quadratic")
         corr.fit(mixed_raster, dem=dem_raster)
-        expected_keys = {"c_bias", "c_row2", "c_col2", "c_rowcol", "c_row", "c_col", "c_dem", "r2"}
+        expected_keys = {
+            "c_bias",
+            "c_row2",
+            "c_col2",
+            "c_rowcol",
+            "c_row",
+            "c_col",
+            "c_dem",
+            "r2",
+        }
         assert set(corr.meta.keys()) == expected_keys
 
     def test_too_few_pixels_linear(self, ramp_raster, dem_raster):
@@ -453,6 +483,7 @@ class TestTopoCorrection:
         dem_data = ma.filled(dem_arr, np.nan).copy()
         dem_data[0, 0] = np.nan
         from .conftest import MockRaster
+
         dem_raster = MockRaster(data=ma.array(dem_data, mask=False))
         corr = TopoCorrection(order="linear")
         corr.fit(ramp_raster, dem=dem_raster)
@@ -479,6 +510,7 @@ class TestTopoRampCorrection:
     def test_linear_min_4_pixels_ok(self, dem_raster):
         """Exactly 4 pixels for linear order (min=4) → no error."""
         from .conftest import MockRaster
+
         band_data = np.array([[1.0, 2.0], [3.0, 4.0]])
         band = ma.array(band_data, mask=False)
         raster = MockRaster(data=band)
@@ -493,7 +525,9 @@ class TestTopoRampCorrection:
         stable_mask = np.zeros((10, 10), dtype=bool)
         stable_mask[0, 0] = stable_mask[0, 1] = stable_mask[0, 2] = True
         corr = TopoRampCorrection(order="linear")
-        with pytest.raises(ValueError, match="Too few valid pixels for TopoRampCorrection"):
+        with pytest.raises(
+            ValueError, match="Too few valid pixels for TopoRampCorrection"
+        ):
             corr.fit(ramp_raster, stable_mask=stable_mask, dem=dem_raster)
 
 
@@ -517,13 +551,23 @@ class TestSlopeRampCorrection:
         """Quadratic meta: 'c_slope' instead of 'c_dem'."""
         corr = SlopeRampCorrection(order="quadratic")
         corr.fit(ramp_raster, dem=slope_dem_raster)
-        expected_keys = {"c_bias", "c_row2", "c_col2", "c_rowcol", "c_row", "c_col", "c_slope", "r2"}
+        expected_keys = {
+            "c_bias",
+            "c_row2",
+            "c_col2",
+            "c_rowcol",
+            "c_row",
+            "c_col",
+            "c_slope",
+            "r2",
+        }
         assert set(corr.meta.keys()) == expected_keys
 
     def test_uses_slope_as_predictor(self):
         """Signal correlated with slope (not elevation)."""
         from .conftest import MockRaster
         from geomulticorr.corrections.fit import compute_slope
+
         # DEM with VARYING slopes: dem[i,j] = 0.1·i² + 0.05·j² (quadratic → varying slope)
         i, j = np.mgrid[:10, :10]
         dem_data = 0.1 * i**2 + 0.05 * j**2
@@ -546,10 +590,15 @@ class TestSlopeRampCorrection:
     def test_too_few_pixels_linear(self, ramp_raster, dem_raster):
         """4 pixels, order='linear' (needs≥5) → ValueError."""
         stable_mask = np.zeros((10, 10), dtype=bool)
-        stable_mask[0, 0] = stable_mask[0, 1] = stable_mask[0, 2] = stable_mask[0, 3] = True
+        stable_mask[0, 0] = stable_mask[0, 1] = stable_mask[0, 2] = stable_mask[
+            0, 3
+        ] = True
         corr = SlopeRampCorrection(order="linear")
-        with pytest.raises(ValueError, match="Too few valid pixels for SlopeRampCorrection"):
+        with pytest.raises(
+            ValueError, match="Too few valid pixels for SlopeRampCorrection"
+        ):
             corr.fit(ramp_raster, stable_mask=stable_mask, dem=dem_raster)
+
 
 class TestDirectionalBiasCorrection:
     """Tests for DirectionalBiasCorrection."""
@@ -570,6 +619,7 @@ class TestDirectionalBiasCorrection:
 
     def test_too_few_pixels_raises(self):
         from .conftest import MockRaster
+
         small = MockRaster(data=ma.array(np.zeros((5, 5)), mask=False))
         with pytest.raises(ValueError, match="Too few stable pixels"):
             DirectionalBiasCorrection(n_bins=50).fit(small)
@@ -592,8 +642,14 @@ class TestDirectionalBiasCorrection:
     def test_meta_contains_profile(self):
         raster = _seam_mock_raster()
         corr = DirectionalBiasCorrection(angle=0.0, n_bins=60).fit(raster)
-        for key in ("profile_centers", "profile_median", "profile_fitted",
-                    "std_before", "std_after", "angle_deg"):
+        for key in (
+            "profile_centers",
+            "profile_median",
+            "profile_fitted",
+            "std_before",
+            "std_after",
+            "angle_deg",
+        ):
             assert key in corr.meta
 
     def test_fixed_angle_used_verbatim(self):
@@ -606,6 +662,7 @@ class TestDirectionalBiasCorrection:
         pipeline = MedianCentering() + DirectionalBiasCorrection(angle=0.0, n_bins=60)
         assert isinstance(pipeline, CorrectionPipeline)
         assert len(pipeline.steps) == 2
+
 
 class TestDestripingConstruction:
     """Construction-time invariants for the destriping corrections."""
@@ -647,7 +704,9 @@ class TestMakeCorrections:
         x_stable = np.ones((10, 10), dtype=bool)
         y_stable = np.zeros((10, 10), dtype=bool)
         y_stable[:5, :5] = True
-        xc, yc = make_corrections(offset_raster, ramp_raster, pipeline, x_stable, y_stable)
+        xc, yc = make_corrections(
+            offset_raster, ramp_raster, pipeline, x_stable, y_stable
+        )
         # x should be centered to 0, y centered to median of top-left 5×5 of ramp
         assert np.allclose(xc.data.data, 0.0, atol=1e-10)
 
@@ -659,13 +718,18 @@ class TestMakeCorrections:
         assert hasattr(yc, "data")
 
 
-def _stripe_mock_raster(axis=0, wavelength_px=40, nr=120, nc=80, amp=0.8, noise=0.08, seed=0):
+def _stripe_mock_raster(
+    axis=0, wavelength_px=40, nr=120, nc=80, amp=0.8, noise=0.08, seed=0
+):
     """MockRaster with a sinusoidal stripe varying along *axis* (0=rows, 1=cols)."""
     from .conftest import MockRaster
+
     rng = np.random.default_rng(seed)
     row, col = np.mgrid[0:nr, 0:nc]
     coord = row if axis == 0 else col
-    field = amp * np.sin(2 * np.pi * coord / wavelength_px) + rng.normal(0, noise, (nr, nc))
+    field = amp * np.sin(2 * np.pi * coord / wavelength_px) + rng.normal(
+        0, noise, (nr, nc)
+    )
     return MockRaster(data=ma.array(field, mask=False))
 
 
@@ -715,8 +779,16 @@ class TestDestriping:
     def test_meta_contains_profile(self):
         raster = _stripe_mock_raster(axis=0)
         corr = AlongTrackDestriping(wavelength_min=200.0).fit(raster)
-        for key in ("profile_raw", "profile_model", "band", "std_before",
-                    "std_after", "freqs", "amp_raw", "amp_kept"):
+        for key in (
+            "profile_raw",
+            "profile_model",
+            "band",
+            "std_before",
+            "std_after",
+            "freqs",
+            "amp_raw",
+            "amp_kept",
+        ):
             assert key in corr.meta
 
     def test_composable_into_pipeline(self):
@@ -761,8 +833,11 @@ class TestCoverageGuards:
         path = tmp_path / "moving.gpkg"
         gdf.to_file(path, driver="GPKG")
         fit = BaseCorrection._resolve_stable_mask(
-            path, flat_raster.data, flat_raster.data.shape,
-            flat_raster.transform, crs="EPSG:32632",
+            path,
+            flat_raster.data,
+            flat_raster.data.shape,
+            flat_raster.transform,
+            crs="EPSG:32632",
         )
         assert not fit[:, :5].any()
         assert fit[:, 5:].all()
@@ -775,7 +850,9 @@ class TestCoverageGuards:
         out = MedianCentering() + pipe
         assert isinstance(out, CorrectionPipeline)
         assert [type(s).__name__ for s in out.steps] == [
-            "MedianCentering", "RampCorrection", "TopoCorrection",
+            "MedianCentering",
+            "RampCorrection",
+            "TopoCorrection",
         ]
 
     def test_pipeline_plus_pipeline_concatenates(self):

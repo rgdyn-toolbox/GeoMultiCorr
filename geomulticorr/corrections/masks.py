@@ -2,27 +2,27 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # masks.py
 # creation date: 2026-05-19.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -56,6 +56,7 @@ Typical workflow
 >>> corrections = MedianCentering() + RampCorrection()
 >>> xc, yc = make_corrections(xDisp, yDisp, corrections, x_stable, y_stable)
 """
+
 from __future__ import annotations
 
 from abc import abstractmethod
@@ -66,10 +67,10 @@ import numpy.ma as ma
 
 from geomulticorr.corrections.corrections import BaseCorrection
 
-
 # --------------------------------------------------------------------------- #
 # Private array helpers (no I/O, no gu.Raster)
 # --------------------------------------------------------------------------- #
+
 
 def _compute_slope_degrees(
     dem_ma: np.ma.MaskedArray,
@@ -83,7 +84,7 @@ def _compute_slope_degrees(
     """
     filled = ma.filled(dem_ma, np.nan)
     dz_dy, dz_dx = np.gradient(filled, res_y, res_x)
-    slope = np.degrees(np.arctan(np.sqrt(dz_dx ** 2 + dz_dy ** 2)))
+    slope = np.degrees(np.arctan(np.sqrt(dz_dx**2 + dz_dy**2)))
     return ma.array(slope, mask=np.ma.getmaskarray(dem_ma) | ~np.isfinite(slope))
 
 
@@ -109,6 +110,7 @@ def _compute_hillshade(
 # --------------------------------------------------------------------------- #
 # FilterPipeline
 # --------------------------------------------------------------------------- #
+
 
 class FilterPipeline:
     """Ordered combination of :class:`BaseMask` steps into a single boolean mask.
@@ -169,7 +171,9 @@ class FilterPipeline:
         new_x = ma.array(x_ma.data, mask=np.ma.getmaskarray(x_ma) | ~x_keep)
         new_y = ma.array(y_ma.data, mask=np.ma.getmaskarray(y_ma) | ~y_keep)
 
-        return BaseCorrection._copy_raster(xDisp, new_x), BaseCorrection._copy_raster(yDisp, new_y)
+        return BaseCorrection._copy_raster(xDisp, new_x), BaseCorrection._copy_raster(
+            yDisp, new_y
+        )
 
     def __repr__(self) -> str:
         names = " + ".join(type(m).__name__ for m in self.masks)
@@ -179,6 +183,7 @@ class FilterPipeline:
 # --------------------------------------------------------------------------- #
 # BaseMask
 # --------------------------------------------------------------------------- #
+
 
 class BaseMask(BaseCorrection):
     """Abstract base for all masking steps.
@@ -239,7 +244,9 @@ class BaseMask(BaseCorrection):
             "masked_fraction_y": float(n_new_y / y_keep.size),
         }
 
-        return BaseCorrection._copy_raster(xDisp, new_x), BaseCorrection._copy_raster(yDisp, new_y)
+        return BaseCorrection._copy_raster(xDisp, new_x), BaseCorrection._copy_raster(
+            yDisp, new_y
+        )
 
     def apply_single(self, raster: gu.Raster, **kwargs) -> gu.Raster:
         """Apply this mask to a single displacement raster."""
@@ -248,7 +255,9 @@ class BaseMask(BaseCorrection):
         new_ma = ma.array(old_ma.data, mask=np.ma.getmaskarray(old_ma) | ~keep)
         self.meta = {
             "newly_masked": int((~keep & ~np.ma.getmaskarray(old_ma)).sum()),
-            "masked_fraction": float((~keep & ~np.ma.getmaskarray(old_ma)).sum() / keep.size),
+            "masked_fraction": float(
+                (~keep & ~np.ma.getmaskarray(old_ma)).sum() / keep.size
+            ),
         }
         return BaseCorrection._copy_raster(raster, new_ma)
 
@@ -256,6 +265,7 @@ class BaseMask(BaseCorrection):
 # --------------------------------------------------------------------------- #
 # Implemented masks
 # --------------------------------------------------------------------------- #
+
 
 class SlopeMask(BaseMask):
     """Mask pixels located on terrain slopes outside *[min_slope, max_slope]*.

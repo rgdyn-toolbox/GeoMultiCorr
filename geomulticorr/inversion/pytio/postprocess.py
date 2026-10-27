@@ -69,7 +69,7 @@ def _linear_fit(cum, t, q):
         slope = cov / varx**2
         rho = cov / (varx * vary)
         cst = my - slope * mx
-        res2 = s((cum - slope[None] * tt - cst[None])**2, w2)
+        res2 = s((cum - slope[None] * tt - cst[None]) ** 2, w2)
         resm = np.sqrt(res2 / wei2)
         err = resm / varx / np.sqrt(n - 2.0)
     bad = n <= 2
@@ -78,8 +78,7 @@ def _linear_fit(cum, t, q):
     return slope, cst, rho, err
 
 
-def fit_velocity(cum, t=None, n_iter=1, ref_index=0, cum_smooth=None,
-                 aps_rows=None):
+def fit_velocity(cum, t=None, n_iter=1, ref_index=0, cum_smooth=None, aps_rows=None):
     """Fit u = slope*t + cst per pixel; iterate epoch re-weighting n_iter times.
 
     Parameters mirror `lect_depl_cumule_lin ncol nlign S niter iref`:
@@ -97,10 +96,11 @@ def fit_velocity(cum, t=None, n_iter=1, ref_index=0, cum_smooth=None,
     for _ in range(max(n_iter, 1)):
         slope, cst, rho, err = _linear_fit(arr, t, q)
         resid = arr - (slope[None] * t.reshape(-1, 1, 1) + cst[None])
-        sl = resid if aps_rows is None else resid[:, aps_rows[0]:aps_rows[1]]
+        sl = resid if aps_rows is None else resid[:, aps_rows[0] : aps_rows[1]]
         ok = np.isfinite(sl)
-        aps = np.sqrt(np.nansum(np.where(ok, sl**2, 0), axis=(1, 2))
-                      / ok.sum(axis=(1, 2)))
+        aps = np.sqrt(
+            np.nansum(np.where(ok, sl**2, 0), axis=(1, 2)) / ok.sum(axis=(1, 2))
+        )
         q = aps + aps.min()
 
     ref = cst + slope * t[ref_index]
@@ -123,6 +123,7 @@ def fit_velocity(cum, t=None, n_iter=1, ref_index=0, cum_smooth=None,
         dsdict["velocity_smooth"] = (("y", "x"), sl_l.astype(np.float32))
         dsdict["rho_smooth"] = (("y", "x"), rho_l.astype(np.float32))
         dsdict["DEF"] = (("date", "y", "x"), (smooth - ref[None]).astype(np.float32))
-    ds = xr.Dataset(dsdict, coords={**coords, "date": cum["date"].values,
-                                    "time": ("date", t)})
+    ds = xr.Dataset(
+        dsdict, coords={**coords, "date": cum["date"].values, "time": ("date", t)}
+    )
     return ds

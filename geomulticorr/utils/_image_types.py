@@ -32,6 +32,7 @@ The image type is carried by the **folder**, never by the filename, so the
 Lives under ``utils`` with no GMC imports because ``thumb`` and ``pair`` need it
 and cannot import ``session`` (which imports them). ``session`` re-exports it.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -52,7 +53,9 @@ def normalise_image_type(image_type: str | None) -> str:
     """Lower-case and validate *image_type*; ``None`` means optical."""
     t = IMAGE_TYPE_OPTICAL if image_type is None else str(image_type).strip().lower()
     if t not in IMAGE_TYPES:
-        raise ValueError(f"Unknown image_type {image_type!r}; expected one of {IMAGE_TYPES}")
+        raise ValueError(
+            f"Unknown image_type {image_type!r}; expected one of {IMAGE_TYPES}"
+        )
     return t
 
 

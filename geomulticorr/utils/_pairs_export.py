@@ -48,6 +48,7 @@ Public API:
 - :func:`pairs_figure_stem` — collision-free file stem encoding the pairing setup.
 - :func:`save_pairs_figure` — render and write one file per requested format.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -157,7 +158,9 @@ def _filter_kwargs(kwargs: dict, accepted: set[str], target: str) -> dict:
     kept = {k: v for k, v in kwargs.items() if k in accepted}
     dropped = sorted(set(kwargs) - set(kept))
     if dropped:
-        logger.info(f"save_pairs_figure: ignoring {dropped} — not accepted by {target}.")
+        logger.info(
+            f"save_pairs_figure: ignoring {dropped} — not accepted by {target}."
+        )
     return kept
 
 
@@ -224,8 +227,11 @@ def save_pairs_figure(
     view_kwargs = dict(view_kwargs or {})
 
     def _target(suffix: str) -> pathlib.Path:
-        return (out_dir / f"{stem}.{suffix}") if overwrite else _unique_path(
-            out_dir, stem, suffix)
+        return (
+            (out_dir / f"{stem}.{suffix}")
+            if overwrite
+            else _unique_path(out_dir, stem, suffix)
+        )
 
     written: dict[str, pathlib.Path] = {}
 
@@ -256,8 +262,10 @@ def save_pairs_figure(
         try:
             # plotly calls it `title`, matplotlib calls it `fig_name`
             fig, _ = builder(
-                frame, figsize=figsize or _DEFAULT_FIGSIZE[view],
-                fig_name=title or None, **kw,
+                frame,
+                figsize=figsize or _DEFAULT_FIGSIZE[view],
+                fig_name=title or None,
+                **kw,
             )
             for fmt in image_formats:
                 path = _target(fmt)

@@ -2,27 +2,27 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # __init__.py
 # creation date: 2026-05-12.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -74,8 +74,10 @@ from geomulticorr.utils._pairs_geometry import (
     year_tick_segments,
 )
 
-def outlier_filter(disp_array: np.array,
-                   disp_threshold: tuple[int, float] = (-10, 10)) -> np.array:
+
+def outlier_filter(
+    disp_array: np.array, disp_threshold: tuple[int, float] = (-10, 10)
+) -> np.array:
     """Filter array value based on min & max threshold.
 
     Args:
@@ -85,16 +87,21 @@ def outlier_filter(disp_array: np.array,
     Returns:
         np.array: Filtered array.
     """
-    #TODO: add condition for open since we provide a text or pathlib object.
-    diap_array_out = np.where(np.logical_or(disp_array <= disp_threshold[0],
-                                        disp_array >= disp_threshold[1]),
-                                        np.nan, disp_array)
+    # TODO: add condition for open since we provide a text or pathlib object.
+    diap_array_out = np.where(
+        np.logical_or(disp_array <= disp_threshold[0], disp_array >= disp_threshold[1]),
+        np.nan,
+        disp_array,
+    )
     return diap_array_out
-#END def
 
-def cc_threshold_fiter(disp_array: np.array,
-                       cc_array: np.array,
-                       cc_threshold: float = 0.5) -> np.array:
+
+# END def
+
+
+def cc_threshold_fiter(
+    disp_array: np.array, cc_array: np.array, cc_threshold: float = 0.5
+) -> np.array:
     """Filter array based on cross correlation (CC) threshold.
 
     Args:
@@ -108,10 +115,12 @@ def cc_threshold_fiter(disp_array: np.array,
     # Getting ncc map as boolean following threshold
     cc_arr_bool = np.where(cc_array >= cc_threshold, 1, 0)
 
-    #Filter displacements using CC values
+    # Filter displacements using CC values
     disp_array[cc_arr_bool == 0] = np.nan
     return disp_array
-#END def
+
+
+# END def
 # TO look at the end: this function is double.
 # def remove_outliers(disp_array: np.array,
 #                     cc_array: np.array,
@@ -131,20 +140,24 @@ def cc_threshold_fiter(disp_array: np.array,
 #     return disp_array_out
 # #END def
 
-def center_disp(disp_array: np.array,
-                stat: str = 'median') -> np.array:
+
+def center_disp(disp_array: np.array, stat: str = "median") -> np.array:
     # Center values using the median value
-    #TODO: add check function to check stat method.
-    if stat == 'median':
+    # TODO: add check function to check stat method.
+    if stat == "median":
         center_disp_array = disp_array - np.nanmedian(disp_array)
-    if stat == 'mean':
+    if stat == "mean":
         center_disp_array = disp_array - np.mean(disp_array)
     return center_disp_array
+
 
 def remove_deramping():
     # Very similar to ondulations?
     return
-#END def
+
+
+# END def
+
 
 def remove_destriping():
     # TODO:
@@ -152,17 +165,18 @@ def remove_destriping():
     # 1. rotate timage to put it vertical.
     # 2. get average/median of rows and columns
     # 3. where average/median value is far from 0, substract average/median vaue.
-    # 4. Ask again to pascal to be sure. 
+    # 4. Ask again to pascal to be sure.
     return
-#END def
+
+
+# END def
 
 ################################################################################
-#TODO: Functions to visualize and explore data
+# TODO: Functions to visualize and explore data
 ################################################################################
 
-def quick_view(array: np.array,
-               ax: str = None,
-               **plt_kwargs: any) -> None:
+
+def quick_view(array: np.array, ax: str = None, **plt_kwargs: any) -> None:
     """Quick view for 2D array. This function includes colorbar within the plot.
 
     Args:
@@ -174,52 +188,86 @@ def quick_view(array: np.array,
     """
     if ax is None:
         ax = plt.gca()
-    #END if
+    # END if
     im = ax.imshow(array, **plt_kwargs)
     plt.colorbar(im, ax=ax, fraction=0.049, pad=0.04)
-#END def
-    
-def quick_disp_plot(xDisp_array, yDisp_array, arr_freq=None, ax=None, **plt_kwargs):#arr_scale=50,
+
+
+# END def
+
+
+def quick_disp_plot(
+    xDisp_array, yDisp_array, arr_freq=None, ax=None, **plt_kwargs
+):  # arr_scale=50,
     if ax is None:
         ax = plt.gca()
-    #END if
-    magn_disp = np.sqrt((xDisp_array*xDisp_array) + (yDisp_array*yDisp_array))
+    # END if
+    magn_disp = np.sqrt((xDisp_array * xDisp_array) + (yDisp_array * yDisp_array))
     im = plt.imshow(magn_disp, **plt_kwargs)
     plt.colorbar(im, ax=ax, fraction=0.049, pad=0.04)
 
     nrows, ncols = xDisp_array.shape
     x, y = np.arange(0, ncols, 1), np.arange(0, nrows, 1)
-    xi, yi = np.meshgrid(x, y, indexing='xy')
+    xi, yi = np.meshgrid(x, y, indexing="xy")
     if arr_freq is None:
-        qver = plt.quiver(xi, yi, xDisp_array, yDisp_array,
-                       color='k', pivot='mid', units='inches', scale_units='inches')#, scale=arr_scale)
+        qver = plt.quiver(
+            xi,
+            yi,
+            xDisp_array,
+            yDisp_array,
+            color="k",
+            pivot="mid",
+            units="inches",
+            scale_units="inches",
+        )  # , scale=arr_scale)
     else:
-        arr_scale = arr_freq/2
-        qver = plt.quiver(xi[::arr_freq, ::arr_freq], yi[::arr_freq, ::arr_freq],
-                          xDisp_array[::arr_freq, ::arr_freq], yDisp_array[::arr_freq, ::arr_freq],
-                          color='k', pivot='mid', units='inches', scale_units='inches', scale=arr_scale)
-    #END if
-    qver_key = plt.quiverkey(qver, 0.79, 0.82, arr_scale, f'{arr_scale} m', coordinates='figure', labelpos='W')
-#END def
-    
+        arr_scale = arr_freq / 2
+        qver = plt.quiver(
+            xi[::arr_freq, ::arr_freq],
+            yi[::arr_freq, ::arr_freq],
+            xDisp_array[::arr_freq, ::arr_freq],
+            yDisp_array[::arr_freq, ::arr_freq],
+            color="k",
+            pivot="mid",
+            units="inches",
+            scale_units="inches",
+            scale=arr_scale,
+        )
+    # END if
+    qver_key = plt.quiverkey(
+        qver,
+        0.79,
+        0.82,
+        arr_scale,
+        f"{arr_scale} m",
+        coordinates="figure",
+        labelpos="W",
+    )
+
+
+# END def
+
+
 def _as_nan_ndarray(arr) -> np.ndarray:
     """Convert array-like (ndarray, masked array) to 1-D float64 with NaN for masked values."""
     if np.ma.is_masked(arr):
         return arr.filled(np.nan).astype(float).ravel()
     return np.asarray(arr, dtype=float).ravel()
 
+
 def compute_stats(arr: np.ndarray) -> dict:
     """Compute NMAD, median, mean, std on finite values of a 1-D float array."""
     finite = arr[np.isfinite(arr)]
     if finite.size == 0:
-        return {'nmad': np.nan, 'median': np.nan, 'mean': np.nan, 'std': np.nan}
+        return {"nmad": np.nan, "median": np.nan, "mean": np.nan, "std": np.nan}
     med = float(np.median(finite))
     return {
-        'nmad':   float(1.4826 * np.median(np.abs(finite - med))),
-        'median': med,
-        'mean':   float(np.mean(finite)),
-        'std':    float(np.std(finite)),
+        "nmad": float(1.4826 * np.median(np.abs(finite - med))),
+        "median": med,
+        "mean": float(np.mean(finite)),
+        "std": float(np.std(finite)),
     }
+
 
 def _draw_histogram_on_ax(
     ax,
@@ -240,9 +288,9 @@ def _draw_histogram_on_ax(
     Returns stats_list (one dict per input array).
     """
     if error_metrics is None:
-        error_metrics = ['nmad', 'median']
-    supported = ['nmad', 'median', 'mean', 'std']
-    em_valid = [m for m in error_metrics if m in supported] or ['nmad', 'median']
+        error_metrics = ["nmad", "median"]
+    supported = ["nmad", "median", "mean", "std"]
+    em_valid = [m for m in error_metrics if m in supported] or ["nmad", "median"]
 
     clean = [_as_nan_ndarray(a) for a in arrays]
     stats_list = [compute_stats(a) for a in clean]
@@ -252,8 +300,14 @@ def _draw_histogram_on_ax(
 
     for i, (arr, key) in enumerate(zip(clean, array_keys)):
         finite = arr[np.isfinite(arr)]
-        ax.hist(finite, bins=bins, edgecolor='none', alpha=alpha,
-                label=key, color=color_cycle[i])
+        ax.hist(
+            finite,
+            bins=bins,
+            edgecolor="none",
+            alpha=alpha,
+            label=key,
+            color=color_cycle[i],
+        )
 
     if xlim is not None:
         ax.set_xlim(*xlim)
@@ -282,18 +336,27 @@ def _draw_histogram_on_ax(
 
     # Annotation positioning: top-left for index 0, top-right for index 1
     ANCHORS = [
-        (0.02, 0.98, 'left',  'top'),
-        (0.98, 0.98, 'right', 'top'),
+        (0.02, 0.98, "left", "top"),
+        (0.98, 0.98, "right", "top"),
     ]
     for i, (key, stats) in enumerate(zip(array_keys, stats_list)):
         lines = [key] + [f"{m}: {stats[m]:.1f}" for m in em_valid]
         x, y, ha, va = ANCHORS[i]
-        ax.text(x, y, "\n".join(lines), transform=ax.transAxes,
-                va=va, ha=ha, fontsize=9, color=color_cycle[i],
-                bbox=dict(boxstyle="round,pad=0.2", fc='white', alpha=0.6,
-                          ec=color_cycle[i], lw=1))
+        ax.text(
+            x,
+            y,
+            "\n".join(lines),
+            transform=ax.transAxes,
+            va=va,
+            ha=ha,
+            fontsize=9,
+            color=color_cycle[i],
+            bbox=dict(
+                boxstyle="round,pad=0.2", fc="white", alpha=0.6, ec=color_cycle[i], lw=1
+            ),
+        )
 
-    ax.axvline(0, color='black', alpha=0.5, linestyle=':')
+    ax.axvline(0, color="black", alpha=0.5, linestyle=":")
     return stats_list
 
 
@@ -343,22 +406,31 @@ def plot_diff_histogram(
     if len(diff_arrays) != len(array_keys):
         raise ValueError("diff_arrays and array_keys must have the same length.")
     if error_metrics is None:
-        error_metrics = ['nmad', 'median']
+        error_metrics = ["nmad", "median"]
     fig, ax = plt.subplots(1, figsize=figsize)
     stats_list = _draw_histogram_on_ax(
-        ax, diff_arrays, array_keys, error_metrics, xlim, ylim, alpha, bins,
-        symmetric_xlim=True, cmap=cmap, cmaps=cmaps, colors=colors,
+        ax,
+        diff_arrays,
+        array_keys,
+        error_metrics,
+        xlim,
+        ylim,
+        alpha,
+        bins,
+        symmetric_xlim=True,
+        cmap=cmap,
+        cmaps=cmaps,
+        colors=colors,
     )
-    ax.set_xlabel('Displacement / difference (m)')
-    ax.set_ylabel('Count')
+    ax.set_xlabel("Displacement / difference (m)")
+    ax.set_ylabel("Count")
     fig.tight_layout()
     return fig, ax, stats_list
 
 
 def get_rounded_limits(
-        raster,
-        round_to: float | None = None,
-        symmetric: bool = True) -> float:
+    raster, round_to: float | None = None, symmetric: bool = True
+) -> float:
     """Return a display limit for a raster based on the 95th percentile of absolute values.
 
     Args:
@@ -442,9 +514,9 @@ def _preview_mask(keep, target_px: int | None = PLOT_PREVIEW_PX):
 # EW = orange family (matches PuOr), NS = green family (matches PiYG);
 # "before" is lighter/dashed, "after" is darker/solid.
 _EW_BEFORE = "#f0a860"
-_EW_AFTER  = "#b2560a"
+_EW_AFTER = "#b2560a"
 _NS_BEFORE = "#8fce6a"
-_NS_AFTER  = "#1a7a3a"
+_NS_AFTER = "#1a7a3a"
 
 
 def _bin_disp_by_predictor(
@@ -497,8 +569,14 @@ def _draw_disp_vs_predictor_component_on_ax(
     pred_finite = predictor[np.isfinite(predictor)]
     if pred_finite.size == 0:
         ax.axis("off")
-        ax.text(0.5, 0.5, "No predictor data available",
-                ha="center", va="center", transform=ax.transAxes)
+        ax.text(
+            0.5,
+            0.5,
+            "No predictor data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
         return
 
     lo, hi = np.percentile(pred_finite, [1, 99])
@@ -509,7 +587,7 @@ def _draw_disp_vs_predictor_component_on_ax(
 
     series = [
         (before, f"{label_prefix} before", c_before, "--"),
-        (after,  f"{label_prefix} after",  c_after,  "-"),
+        (after, f"{label_prefix} after", c_after, "-"),
     ]
     for disp, label, color, ls in series:
         centers, medians, nmads = _bin_disp_by_predictor(
@@ -517,16 +595,20 @@ def _draw_disp_vs_predictor_component_on_ax(
         )
         if centers.size == 0:
             continue
-        ax.plot(medians, centers, marker="o", ms=3, lw=1.8, ls=ls,
-                color=color, label=label)
+        ax.plot(
+            medians, centers, marker="o", ms=3, lw=1.8, ls=ls, color=color, label=label
+        )
         if show_nmad:
-            ax.fill_betweenx(centers, medians - nmads, medians + nmads,
-                             color=color, alpha=0.12)
+            ax.fill_betweenx(
+                centers, medians - nmads, medians + nmads, color=color, alpha=0.12
+            )
 
     ax.axvline(0, color="k", lw=0.8, ls="--", alpha=0.6)
     ax.set_xlabel("Displacement (m)")
     ax.set_ylabel(predictor_label)
-    ax.set_title(f"{label_prefix} displacement vs {predictor_label.split(' (')[0].lower()}")
+    ax.set_title(
+        f"{label_prefix} displacement vs {predictor_label.split(' (')[0].lower()}"
+    )
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
 
@@ -554,8 +636,14 @@ def _draw_disp_vs_predictor_on_ax(
     pred_finite = predictor[np.isfinite(predictor)]
     if pred_finite.size == 0:
         ax.axis("off")
-        ax.text(0.5, 0.5, "No predictor data available",
-                ha="center", va="center", transform=ax.transAxes)
+        ax.text(
+            0.5,
+            0.5,
+            "No predictor data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
         return
 
     lo, hi = np.percentile(pred_finite, [1, 99])
@@ -566,9 +654,9 @@ def _draw_disp_vs_predictor_on_ax(
 
     series = [
         (ew_before, "EW before", _EW_BEFORE, "--"),
-        (ew_after,  "EW after",  _EW_AFTER,  "-"),
+        (ew_after, "EW after", _EW_AFTER, "-"),
         (ns_before, "NS before", _NS_BEFORE, "--"),
-        (ns_after,  "NS after",  _NS_AFTER,  "-"),
+        (ns_after, "NS after", _NS_AFTER, "-"),
     ]
     for disp, label, color, ls in series:
         centers, medians, nmads = _bin_disp_by_predictor(
@@ -576,11 +664,13 @@ def _draw_disp_vs_predictor_on_ax(
         )
         if centers.size == 0:
             continue
-        ax.plot(medians, centers, marker="o", ms=3, lw=1.8, ls=ls,
-                color=color, label=label)
+        ax.plot(
+            medians, centers, marker="o", ms=3, lw=1.8, ls=ls, color=color, label=label
+        )
         if show_nmad:
-            ax.fill_betweenx(centers, medians - nmads, medians + nmads,
-                             color=color, alpha=0.12)
+            ax.fill_betweenx(
+                centers, medians - nmads, medians + nmads, color=color, alpha=0.12
+            )
 
     ax.axvline(0, color="k", lw=0.8, ls="--", alpha=0.6)
     ax.set_xlabel("Displacement (m)")
@@ -590,15 +680,17 @@ def _draw_disp_vs_predictor_on_ax(
 
 
 def plot_show_raw_results(
-    xDisp, yDisp, ncc,
+    xDisp,
+    yDisp,
+    ncc,
     figsize: tuple[float, float] = (12, 6),
-    cmap_ew: str = 'PuOr',
-    cmap_ns: str = 'PiYG',
-    cmap_cc: str = 'binary_r',
+    cmap_ew: str = "PuOr",
+    cmap_ns: str = "PiYG",
+    cmap_cc: str = "binary_r",
     fig_name=None,
     symmetric_limits: bool = True,
     hexbin_gridsize: int = 200,
-    hexbin_cmap: str = 'viridis',
+    hexbin_cmap: str = "viridis",
     hexbin_nmad_multiplier: float = 1.0,
     hexbin_log_scale: bool = True,
     preview_px: int | None = PLOT_PREVIEW_PX,
@@ -617,11 +709,10 @@ def plot_show_raw_results(
     """
     xDisp = _preview(xDisp, preview_px)
     yDisp = _preview(yDisp, preview_px)
-    ncc   = _preview(ncc, preview_px)
+    ncc = _preview(ncc, preview_px)
 
     fig, axs = plt.subplot_mosaic(
-        [['xDisp',       'yDisp',        'xyDisp_comp'],
-         ['ncc',        'xyDisp_hist',  'xyDisp_comp']],
+        [["xDisp", "yDisp", "xyDisp_comp"], ["ncc", "xyDisp_hist", "xyDisp_comp"]],
         width_ratios=[1, 1, 1.5],
         figsize=figsize,
     )
@@ -637,26 +728,42 @@ def plot_show_raw_results(
         vlim_x = vlim_y = vmax
 
     # Displacement rasters
-    xDisp.plot(ax=axs['xDisp'], cmap=cmap_ew, vmin=-vlim_x, vmax=vlim_x, title="Raw EW-Disp", cbar_title="Surf. disp (m)")
-    yDisp.plot(ax=axs['yDisp'], cmap=cmap_ns, vmin=-vlim_y, vmax=vlim_y, title="Raw NS-Disp", cbar_title="Surf. disp (m)")
+    xDisp.plot(
+        ax=axs["xDisp"],
+        cmap=cmap_ew,
+        vmin=-vlim_x,
+        vmax=vlim_x,
+        title="Raw EW-Disp",
+        cbar_title="Surf. disp (m)",
+    )
+    yDisp.plot(
+        ax=axs["yDisp"],
+        cmap=cmap_ns,
+        vmin=-vlim_y,
+        vmax=vlim_y,
+        title="Raw NS-Disp",
+        cbar_title="Surf. disp (m)",
+    )
 
     # NCC raster
     if ncc is not None:
-        ncc.plot(ax=axs['ncc'], cmap=cmap_cc, vmin=0, vmax=1, title="NCC", cbar_title="NCC")
+        ncc.plot(
+            ax=axs["ncc"], cmap=cmap_cc, vmin=0, vmax=1, title="NCC", cbar_title="NCC"
+        )
     else:
-        axs['ncc'].set_title("NCC (not available)")
-        axs['ncc'].axis('off')
+        axs["ncc"].set_title("NCC (not available)")
+        axs["ncc"].axis("off")
 
     # Combined EW/NS histogram
     _draw_histogram_on_ax(
-        axs['xyDisp_hist'],
+        axs["xyDisp_hist"],
         [xDisp.data, yDisp.data],
         ["xDisp", "yDisp"],
         cmaps=[cmap_ew, cmap_ns],
     )
-    axs['xyDisp_hist'].set_title("Displacement histograms")
-    axs['xyDisp_hist'].set_xlabel("Displacement (m)")
-    axs['xyDisp_hist'].set_ylabel("Pixel count")
+    axs["xyDisp_hist"].set_title("Displacement histograms")
+    axs["xyDisp_hist"].set_xlabel("Displacement (m)")
+    axs["xyDisp_hist"].set_ylabel("Pixel count")
 
     # Hexbin scatter plot of EW vs NS displacement
     x_flat = np.ma.filled(xDisp.data, np.nan).ravel()
@@ -667,25 +774,38 @@ def plot_show_raw_results(
     nmad_x = nmad(x_flat)
     nmad_y = nmad(y_flat)
 
-    hb = axs['xyDisp_comp'].hexbin(x_flat, y_flat, gridsize=hexbin_gridsize, cmap=hexbin_cmap,
-                                   mincnt=1, bins='log' if hexbin_log_scale else None)
-    ellipse = Ellipse((0, 0), width=hexbin_nmad_multiplier*nmad_x, height=hexbin_nmad_multiplier*nmad_y,
-                      edgecolor='white', facecolor='none', lw=1.5, label=f'± {hexbin_nmad_multiplier} NMAD')
-    axs['xyDisp_comp'].add_patch(ellipse)
-    axs['xyDisp_comp'].axhline(0, color='k', lw=0.5)
-    axs['xyDisp_comp'].axvline(0, color='k', lw=0.5)
-    axs['xyDisp_comp'].set_xlim(-vlim_x, vlim_x)
-    axs['xyDisp_comp'].set_ylim(-vlim_y, vlim_y)
-    axs['xyDisp_comp'].set_aspect('equal')
-    axs['xyDisp_comp'].set_xlabel("EW displacement (m)")
-    axs['xyDisp_comp'].set_ylabel("NS displacement (m)")
-    axs['xyDisp_comp'].set_title("Pixel-wise displacement density")
-    axs['xyDisp_comp'].legend(fontsize=8)
+    hb = axs["xyDisp_comp"].hexbin(
+        x_flat,
+        y_flat,
+        gridsize=hexbin_gridsize,
+        cmap=hexbin_cmap,
+        mincnt=1,
+        bins="log" if hexbin_log_scale else None,
+    )
+    ellipse = Ellipse(
+        (0, 0),
+        width=hexbin_nmad_multiplier * nmad_x,
+        height=hexbin_nmad_multiplier * nmad_y,
+        edgecolor="white",
+        facecolor="none",
+        lw=1.5,
+        label=f"± {hexbin_nmad_multiplier} NMAD",
+    )
+    axs["xyDisp_comp"].add_patch(ellipse)
+    axs["xyDisp_comp"].axhline(0, color="k", lw=0.5)
+    axs["xyDisp_comp"].axvline(0, color="k", lw=0.5)
+    axs["xyDisp_comp"].set_xlim(-vlim_x, vlim_x)
+    axs["xyDisp_comp"].set_ylim(-vlim_y, vlim_y)
+    axs["xyDisp_comp"].set_aspect("equal")
+    axs["xyDisp_comp"].set_xlabel("EW displacement (m)")
+    axs["xyDisp_comp"].set_ylabel("NS displacement (m)")
+    axs["xyDisp_comp"].set_title("Pixel-wise displacement density")
+    axs["xyDisp_comp"].legend(fontsize=8)
 
     # Colorbar for hexbin
-    divider = make_axes_locatable(axs['xyDisp_comp'])
+    divider = make_axes_locatable(axs["xyDisp_comp"])
     cax = divider.append_axes("right", size="5%", pad=0.1)
-    fig.colorbar(hb, cax=cax, label='pixel count')
+    fig.colorbar(hb, cax=cax, label="pixel count")
 
     fig.tight_layout(pad=1.0, w_pad=0.3, h_pad=0.4)
     return fig
@@ -696,23 +816,26 @@ def _apply_keep_mask(raster: gu.Raster, keep) -> gu.Raster:
     if keep is None:
         return raster
     import numpy.ma as ma
+
     base_mask = np.ma.getmaskarray(raster.data)
     new_mask = base_mask | ~np.asarray(keep, dtype=bool)
     return raster.copy(new_array=ma.array(raster.data.data, mask=new_mask))
 
 
 def plot_show_corrected_results(
-    xDisp, yDisp, ncc,
+    xDisp,
+    yDisp,
+    ncc,
     x_stable=None,
     y_stable=None,
     figsize: tuple[float, float] = (14, 12),
-    cmap_ew: str = 'PuOr',
-    cmap_ns: str = 'PiYG',
-    cmap_cc: str = 'binary_r',
+    cmap_ew: str = "PuOr",
+    cmap_ns: str = "PiYG",
+    cmap_cc: str = "binary_r",
     fig_name=None,
     symmetric_limits: bool = True,
     hexbin_gridsize: int = 200,
-    hexbin_cmap: str = 'viridis',
+    hexbin_cmap: str = "viridis",
     hexbin_nmad_multiplier: float = 1.0,
     hexbin_log_scale: bool = True,
     preview_px: int | None = PLOT_PREVIEW_PX,
@@ -738,14 +861,16 @@ def plot_show_corrected_results(
     """
     xDisp = _preview(xDisp, preview_px)
     yDisp = _preview(yDisp, preview_px)
-    ncc   = _preview(ncc, preview_px)
+    ncc = _preview(ncc, preview_px)
     x_stable = _preview_mask(x_stable, preview_px)
     y_stable = _preview_mask(y_stable, preview_px)
 
     fig, axs = plt.subplot_mosaic(
-        [['xDisp',    'yDisp',    'xyDisp_comp'],
-         ['xStable',  'yStable',  'xyDisp_comp'],
-         ['ncc',      'xyDisp_hist', '.']],
+        [
+            ["xDisp", "yDisp", "xyDisp_comp"],
+            ["xStable", "yStable", "xyDisp_comp"],
+            ["ncc", "xyDisp_hist", "."],
+        ],
         figsize=figsize,
     )
     if fig_name:
@@ -757,36 +882,60 @@ def plot_show_corrected_results(
         vlim_x = vlim_y = max(vlim_x, vlim_y)
 
     # Corrected displacement rasters
-    xDisp.plot(ax=axs['xDisp'], cmap=cmap_ew, vmin=-vlim_x, vmax=vlim_x,
-               title="Corrected EW-Disp", cbar_title="Surf. disp (m)")
-    yDisp.plot(ax=axs['yDisp'], cmap=cmap_ns, vmin=-vlim_y, vmax=vlim_y,
-               title="Corrected NS-Disp", cbar_title="Surf. disp (m)")
+    xDisp.plot(
+        ax=axs["xDisp"],
+        cmap=cmap_ew,
+        vmin=-vlim_x,
+        vmax=vlim_x,
+        title="Corrected EW-Disp",
+        cbar_title="Surf. disp (m)",
+    )
+    yDisp.plot(
+        ax=axs["yDisp"],
+        cmap=cmap_ns,
+        vmin=-vlim_y,
+        vmax=vlim_y,
+        title="Corrected NS-Disp",
+        cbar_title="Surf. disp (m)",
+    )
 
     # Stable-area-only displacement (non-stable pixels greyed out)
     _apply_keep_mask(xDisp, x_stable).plot(
-        ax=axs['xStable'], cmap=cmap_ew, vmin=-vlim_x, vmax=vlim_x,
-        title="EW (stable area)", cbar_title="Surf. disp (m)")
+        ax=axs["xStable"],
+        cmap=cmap_ew,
+        vmin=-vlim_x,
+        vmax=vlim_x,
+        title="EW (stable area)",
+        cbar_title="Surf. disp (m)",
+    )
     _apply_keep_mask(yDisp, y_stable).plot(
-        ax=axs['yStable'], cmap=cmap_ns, vmin=-vlim_y, vmax=vlim_y,
-        title="NS (stable area)", cbar_title="Surf. disp (m)")
+        ax=axs["yStable"],
+        cmap=cmap_ns,
+        vmin=-vlim_y,
+        vmax=vlim_y,
+        title="NS (stable area)",
+        cbar_title="Surf. disp (m)",
+    )
 
     # NCC raster
     if ncc is not None:
-        ncc.plot(ax=axs['ncc'], cmap=cmap_cc, vmin=0, vmax=1, title="NCC", cbar_title="NCC")
+        ncc.plot(
+            ax=axs["ncc"], cmap=cmap_cc, vmin=0, vmax=1, title="NCC", cbar_title="NCC"
+        )
     else:
-        axs['ncc'].set_title("NCC (not available)")
-        axs['ncc'].axis('off')
+        axs["ncc"].set_title("NCC (not available)")
+        axs["ncc"].axis("off")
 
     # Combined EW/NS histogram
     _draw_histogram_on_ax(
-        axs['xyDisp_hist'],
+        axs["xyDisp_hist"],
         [xDisp.data, yDisp.data],
         ["xDisp", "yDisp"],
         cmaps=[cmap_ew, cmap_ns],
     )
-    axs['xyDisp_hist'].set_title("Displacement histograms")
-    axs['xyDisp_hist'].set_xlabel("Displacement (m)")
-    axs['xyDisp_hist'].set_ylabel("Pixel count")
+    axs["xyDisp_hist"].set_title("Displacement histograms")
+    axs["xyDisp_hist"].set_xlabel("Displacement (m)")
+    axs["xyDisp_hist"].set_ylabel("Pixel count")
 
     # Hexbin scatter of EW vs NS displacement (spans rows 1–2)
     x_flat = np.ma.filled(xDisp.data, np.nan).ravel()
@@ -797,24 +946,37 @@ def plot_show_corrected_results(
     nmad_x = nmad(x_flat)
     nmad_y = nmad(y_flat)
 
-    hb = axs['xyDisp_comp'].hexbin(x_flat, y_flat, gridsize=hexbin_gridsize, cmap=hexbin_cmap,
-                                   mincnt=1, bins='log' if hexbin_log_scale else None)
-    ellipse = Ellipse((0, 0), width=hexbin_nmad_multiplier*nmad_x, height=hexbin_nmad_multiplier*nmad_y,
-                      edgecolor='white', facecolor='none', lw=1.5, label=f'± {hexbin_nmad_multiplier} NMAD')
-    axs['xyDisp_comp'].add_patch(ellipse)
-    axs['xyDisp_comp'].axhline(0, color='k', lw=0.5)
-    axs['xyDisp_comp'].axvline(0, color='k', lw=0.5)
-    axs['xyDisp_comp'].set_xlim(-vlim_x, vlim_x)
-    axs['xyDisp_comp'].set_ylim(-vlim_y, vlim_y)
-    axs['xyDisp_comp'].set_aspect('equal')
-    axs['xyDisp_comp'].set_xlabel("EW displacement (m)")
-    axs['xyDisp_comp'].set_ylabel("NS displacement (m)")
-    axs['xyDisp_comp'].set_title("Pixel-wise displacement density")
-    axs['xyDisp_comp'].legend(fontsize=8)
+    hb = axs["xyDisp_comp"].hexbin(
+        x_flat,
+        y_flat,
+        gridsize=hexbin_gridsize,
+        cmap=hexbin_cmap,
+        mincnt=1,
+        bins="log" if hexbin_log_scale else None,
+    )
+    ellipse = Ellipse(
+        (0, 0),
+        width=hexbin_nmad_multiplier * nmad_x,
+        height=hexbin_nmad_multiplier * nmad_y,
+        edgecolor="white",
+        facecolor="none",
+        lw=1.5,
+        label=f"± {hexbin_nmad_multiplier} NMAD",
+    )
+    axs["xyDisp_comp"].add_patch(ellipse)
+    axs["xyDisp_comp"].axhline(0, color="k", lw=0.5)
+    axs["xyDisp_comp"].axvline(0, color="k", lw=0.5)
+    axs["xyDisp_comp"].set_xlim(-vlim_x, vlim_x)
+    axs["xyDisp_comp"].set_ylim(-vlim_y, vlim_y)
+    axs["xyDisp_comp"].set_aspect("equal")
+    axs["xyDisp_comp"].set_xlabel("EW displacement (m)")
+    axs["xyDisp_comp"].set_ylabel("NS displacement (m)")
+    axs["xyDisp_comp"].set_title("Pixel-wise displacement density")
+    axs["xyDisp_comp"].legend(fontsize=8)
 
-    divider = make_axes_locatable(axs['xyDisp_comp'])
+    divider = make_axes_locatable(axs["xyDisp_comp"])
     cax = divider.append_axes("right", size="5%", pad=0.1)
-    fig.colorbar(hb, cax=cax, label='pixel count')
+    fig.colorbar(hb, cax=cax, label="pixel count")
 
     fig.tight_layout(pad=1.0, w_pad=0.3, h_pad=0.4)
     return fig
@@ -827,8 +989,8 @@ def plot_median_centering(
     yDisp_after: gu.Raster,
     fig_name: str | None = None,
     figsize: tuple[float, float] = (12, 7),
-    cmap_ew: str = 'PuOr',
-    cmap_ns: str = 'PiYG',
+    cmap_ew: str = "PuOr",
+    cmap_ns: str = "PiYG",
     preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
     """3-col × 2-row control figure for a MedianCentering correction step.
@@ -842,13 +1004,12 @@ def plot_median_centering(
     pass ``preview_px=None`` to render at full resolution.
     """
     xDisp_before = _preview(xDisp_before, preview_px)
-    xDisp_after  = _preview(xDisp_after, preview_px)
+    xDisp_after = _preview(xDisp_after, preview_px)
     yDisp_before = _preview(yDisp_before, preview_px)
-    yDisp_after  = _preview(yDisp_after, preview_px)
+    yDisp_after = _preview(yDisp_after, preview_px)
 
     fig, axs = plt.subplot_mosaic(
-        [['a)', 'b)', 'c)'],
-         ['d)', 'e)', 'f)']],
+        [["a)", "b)", "c)"], ["d)", "e)", "f)"]],
         figsize=figsize,
     )
     if fig_name:
@@ -857,24 +1018,43 @@ def plot_median_centering(
     vlim_x = get_rounded_limits(xDisp_before, round_to=1, symmetric=True)
     vlim_y = get_rounded_limits(yDisp_before, round_to=1, symmetric=True)
 
-    xDisp_before.plot(ax=axs['a)'], cmap=cmap_ew, vmin=-vlim_x, vmax=vlim_x, title="EW before")
-    xDisp_after.plot( ax=axs['b)'], cmap=cmap_ew, vmin=-vlim_x, vmax=vlim_x, title="EW after")
-    _draw_histogram_on_ax(axs['c)'], [xDisp_before.data, xDisp_after.data],
-                          ["EW before", "EW after"], symmetric_xlim=True, cmap=cmap_ew)
-    axs['c)'].set_title("EW histogram")
-    axs['c)'].set_xlabel("Displacement (m)")
-    axs['c)'].set_ylabel("Count")
+    xDisp_before.plot(
+        ax=axs["a)"], cmap=cmap_ew, vmin=-vlim_x, vmax=vlim_x, title="EW before"
+    )
+    xDisp_after.plot(
+        ax=axs["b)"], cmap=cmap_ew, vmin=-vlim_x, vmax=vlim_x, title="EW after"
+    )
+    _draw_histogram_on_ax(
+        axs["c)"],
+        [xDisp_before.data, xDisp_after.data],
+        ["EW before", "EW after"],
+        symmetric_xlim=True,
+        cmap=cmap_ew,
+    )
+    axs["c)"].set_title("EW histogram")
+    axs["c)"].set_xlabel("Displacement (m)")
+    axs["c)"].set_ylabel("Count")
 
-    yDisp_before.plot(ax=axs['d)'], cmap=cmap_ns, vmin=-vlim_y, vmax=vlim_y, title="NS before")
-    yDisp_after.plot( ax=axs['e)'], cmap=cmap_ns, vmin=-vlim_y, vmax=vlim_y, title="NS after")
-    _draw_histogram_on_ax(axs['f)'], [yDisp_before.data, yDisp_after.data],
-                          ["NS before", "NS after"], symmetric_xlim=True, cmap=cmap_ns)
-    axs['f)'].set_title("NS histogram")
-    axs['f)'].set_xlabel("Displacement (m)")
-    axs['f)'].set_ylabel("Count")
+    yDisp_before.plot(
+        ax=axs["d)"], cmap=cmap_ns, vmin=-vlim_y, vmax=vlim_y, title="NS before"
+    )
+    yDisp_after.plot(
+        ax=axs["e)"], cmap=cmap_ns, vmin=-vlim_y, vmax=vlim_y, title="NS after"
+    )
+    _draw_histogram_on_ax(
+        axs["f)"],
+        [yDisp_before.data, yDisp_after.data],
+        ["NS before", "NS after"],
+        symmetric_xlim=True,
+        cmap=cmap_ns,
+    )
+    axs["f)"].set_title("NS histogram")
+    axs["f)"].set_xlabel("Displacement (m)")
+    axs["f)"].set_ylabel("Count")
 
     fig.tight_layout()
     return fig
+
 
 def _finalize_diagnostic_panel(
     ax,
@@ -899,8 +1079,14 @@ def _finalize_diagnostic_panel(
         ax.grid(alpha=0.3)
     else:
         ax.axis("off")
-        ax.text(0.5, 0.5, "No profile metadata available",
-                ha="center", va="center", transform=ax.transAxes)
+        ax.text(
+            0.5,
+            0.5,
+            "No profile metadata available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
 
 
 def _draw_seam_profile_on_ax(ax, step, *, label_prefix, c_before, c_after) -> bool:
@@ -913,18 +1099,31 @@ def _draw_seam_profile_on_ax(ax, step, *, label_prefix, c_before, c_after) -> bo
     """
     meta = getattr(step, "meta", {}) or {}
     centers = meta.get("profile_centers")
-    median  = meta.get("profile_median")
-    fitted  = meta.get("profile_fitted")
+    median = meta.get("profile_median")
+    fitted = meta.get("profile_fitted")
     if centers is None or median is None:
         return False
     centers = np.asarray(centers, dtype=float)
-    median  = np.asarray(median, dtype=float)
-    ax.plot(centers, median, ls="--", lw=1.5, color=c_before, alpha=0.9,
-            label=f"{label_prefix} before")
+    median = np.asarray(median, dtype=float)
+    ax.plot(
+        centers,
+        median,
+        ls="--",
+        lw=1.5,
+        color=c_before,
+        alpha=0.9,
+        label=f"{label_prefix} before",
+    )
     if fitted is not None:
         fitted = np.asarray(fitted, dtype=float)
-        ax.plot(centers, median - fitted, ls="-", lw=1.8, color=c_after,
-                label=f"{label_prefix} after")
+        ax.plot(
+            centers,
+            median - fitted,
+            ls="-",
+            lw=1.8,
+            color=c_after,
+            label=f"{label_prefix} after",
+        )
     return True
 
 
@@ -937,9 +1136,9 @@ def plot_directional_bias_correction(
     yDisp_after: gu.Raster,
     fig_name: str | None = None,
     figsize: tuple[float, float] = (16, 13),
-    cmap_ew: str = 'PuOr',
-    cmap_ns: str = 'PiYG',
-    cmap_bias: str = 'RdBu_r',
+    cmap_ew: str = "PuOr",
+    cmap_ns: str = "PiYG",
+    cmap_bias: str = "RdBu_r",
     preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
     """Control figure for a DirectionalBiasCorrection step.
@@ -961,21 +1160,21 @@ def plot_directional_bias_correction(
     The 1-D seam profiles come from ``step.meta`` and are unaffected.
     """
     xDisp_before = _preview(xDisp_before, preview_px)
-    xDisp_after  = _preview(xDisp_after, preview_px)
+    xDisp_after = _preview(xDisp_after, preview_px)
     yDisp_before = _preview(yDisp_before, preview_px)
-    yDisp_after  = _preview(yDisp_after, preview_px)
+    yDisp_after = _preview(yDisp_after, preview_px)
 
     fig, axs = plt.subplot_mosaic(
-        [['a)', 'b)', 'c)', 'd)'],
-         ['e)', 'f)', 'g)', 'h)'],
-         ['i)', 'i)', 'j)', 'j)']],
+        [["a)", "b)", "c)", "d)"], ["e)", "f)", "g)", "h)"], ["i)", "i)", "j)", "j)"]],
         figsize=figsize,
     )
     angle_ew = step_ew.meta.get("angle_deg") if getattr(step_ew, "meta", None) else None
     angle_ns = step_ns.meta.get("angle_deg") if getattr(step_ns, "meta", None) else None
     title = "Directional bias correction"
-    angles = [f"EW {angle_ew:.2f}°" if angle_ew is not None else None,
-              f"NS {angle_ns:.2f}°" if angle_ns is not None else None]
+    angles = [
+        f"EW {angle_ew:.2f}°" if angle_ew is not None else None,
+        f"NS {angle_ns:.2f}°" if angle_ns is not None else None,
+    ]
     angles = [a for a in angles if a]
     if angles:
         title += " — angle: " + ", ".join(angles)
@@ -984,20 +1183,30 @@ def plot_directional_bias_correction(
     fig.suptitle(title)
 
     _draw_removed_surface_rows(
-        axs, _ROW_KEYS, xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-        cmap_ew=cmap_ew, cmap_ns=cmap_ns, cmap_removed=cmap_bias, removed_label="bias",
+        axs,
+        _ROW_KEYS,
+        xDisp_before,
+        xDisp_after,
+        yDisp_before,
+        yDisp_after,
+        cmap_ew=cmap_ew,
+        cmap_ns=cmap_ns,
+        cmap_removed=cmap_bias,
+        removed_label="bias",
     )
 
     # EW seam profile
-    drew_ew = _draw_seam_profile_on_ax(axs['i)'], step_ew, label_prefix="EW",
-                                       c_before=_EW_BEFORE, c_after=_EW_AFTER)
+    drew_ew = _draw_seam_profile_on_ax(
+        axs["i)"], step_ew, label_prefix="EW", c_before=_EW_BEFORE, c_after=_EW_AFTER
+    )
     m_ew = getattr(step_ew, "meta", {}) or {}
     sub_ew = []
     if m_ew.get("std_before") is not None and m_ew.get("std_after") is not None:
         sub_ew.append(f"std {m_ew['std_before']:.3f}→{m_ew['std_after']:.3f} m")
     title_ew = "EW seam profile" + (f"  ({'; '.join(sub_ew)})" if sub_ew else "")
     _finalize_diagnostic_panel(
-        axs['i)'], drew_ew,
+        axs["i)"],
+        drew_ew,
         title=title_ew,
         xlabel="Seam-normal coordinate s (m)",
         ylabel="Bias (m)",
@@ -1005,15 +1214,17 @@ def plot_directional_bias_correction(
     )
 
     # NS seam profile
-    drew_ns = _draw_seam_profile_on_ax(axs['j)'], step_ns, label_prefix="NS",
-                                       c_before=_NS_BEFORE, c_after=_NS_AFTER)
+    drew_ns = _draw_seam_profile_on_ax(
+        axs["j)"], step_ns, label_prefix="NS", c_before=_NS_BEFORE, c_after=_NS_AFTER
+    )
     m_ns = getattr(step_ns, "meta", {}) or {}
     sub_ns = []
     if m_ns.get("std_before") is not None and m_ns.get("std_after") is not None:
         sub_ns.append(f"std {m_ns['std_before']:.3f}→{m_ns['std_after']:.3f} m")
     title_ns = "NS seam profile" + (f"  ({'; '.join(sub_ns)})" if sub_ns else "")
     _finalize_diagnostic_panel(
-        axs['j)'], drew_ns,
+        axs["j)"],
+        drew_ns,
         title=title_ns,
         xlabel="Seam-normal coordinate s (m)",
         ylabel="Bias (m)",
@@ -1022,7 +1233,10 @@ def plot_directional_bias_correction(
 
     fig.tight_layout()
     return fig
-#END def
+
+
+# END def
+
 
 def _flat_disp(raster: gu.Raster) -> np.ndarray:
     """Displacement raster → 1-D float array with NaN for masked pixels."""
@@ -1077,28 +1291,74 @@ def _draw_removed_surface_rows(
     x_removed = xDisp_before.copy(new_array=x_removed_data)
     y_removed = yDisp_before.copy(new_array=y_removed_data)
 
-    vlim_x  = get_rounded_limits(xDisp_before, round_to=1, symmetric=True)
-    vlim_y  = get_rounded_limits(yDisp_before, round_to=1, symmetric=True)
-    vlim_rx = get_rounded_limits(x_removed,    round_to=1, symmetric=True)
-    vlim_ry = get_rounded_limits(y_removed,    round_to=1, symmetric=True)
+    vlim_x = get_rounded_limits(xDisp_before, round_to=1, symmetric=True)
+    vlim_y = get_rounded_limits(yDisp_before, round_to=1, symmetric=True)
+    vlim_rx = get_rounded_limits(x_removed, round_to=1, symmetric=True)
+    vlim_ry = get_rounded_limits(y_removed, round_to=1, symmetric=True)
 
-    xDisp_before.plot(ax=axs[keys['ew_before']],  cmap=cmap_ew,      vmin=-vlim_x,  vmax=vlim_x,  title="EW before")
-    x_removed.plot(   ax=axs[keys['ew_removed']], cmap=cmap_removed, vmin=-vlim_rx, vmax=vlim_rx, title=f"EW {removed_label}")
-    xDisp_after.plot( ax=axs[keys['ew_after']],   cmap=cmap_ew,      vmin=-vlim_x,  vmax=vlim_x,  title="EW after")
-    _draw_histogram_on_ax(axs[keys['ew_hist']], [xDisp_before.data, xDisp_after.data],
-                          ["EW before", "EW after"], symmetric_xlim=True, cmap=cmap_ew)
-    axs[keys['ew_hist']].set_title("EW histogram")
-    axs[keys['ew_hist']].set_xlabel("Displacement (m)")
-    axs[keys['ew_hist']].set_ylabel("Count")
+    xDisp_before.plot(
+        ax=axs[keys["ew_before"]],
+        cmap=cmap_ew,
+        vmin=-vlim_x,
+        vmax=vlim_x,
+        title="EW before",
+    )
+    x_removed.plot(
+        ax=axs[keys["ew_removed"]],
+        cmap=cmap_removed,
+        vmin=-vlim_rx,
+        vmax=vlim_rx,
+        title=f"EW {removed_label}",
+    )
+    xDisp_after.plot(
+        ax=axs[keys["ew_after"]],
+        cmap=cmap_ew,
+        vmin=-vlim_x,
+        vmax=vlim_x,
+        title="EW after",
+    )
+    _draw_histogram_on_ax(
+        axs[keys["ew_hist"]],
+        [xDisp_before.data, xDisp_after.data],
+        ["EW before", "EW after"],
+        symmetric_xlim=True,
+        cmap=cmap_ew,
+    )
+    axs[keys["ew_hist"]].set_title("EW histogram")
+    axs[keys["ew_hist"]].set_xlabel("Displacement (m)")
+    axs[keys["ew_hist"]].set_ylabel("Count")
 
-    yDisp_before.plot(ax=axs[keys['ns_before']],  cmap=cmap_ns,      vmin=-vlim_y,  vmax=vlim_y,  title="NS before")
-    y_removed.plot(   ax=axs[keys['ns_removed']], cmap=cmap_removed, vmin=-vlim_ry, vmax=vlim_ry, title=f"NS {removed_label}")
-    yDisp_after.plot( ax=axs[keys['ns_after']],   cmap=cmap_ns,      vmin=-vlim_y,  vmax=vlim_y,  title="NS after")
-    _draw_histogram_on_ax(axs[keys['ns_hist']], [yDisp_before.data, yDisp_after.data],
-                          ["NS before", "NS after"], symmetric_xlim=True, cmap=cmap_ns)
-    axs[keys['ns_hist']].set_title("NS histogram")
-    axs[keys['ns_hist']].set_xlabel("Displacement (m)")
-    axs[keys['ns_hist']].set_ylabel("Count")
+    yDisp_before.plot(
+        ax=axs[keys["ns_before"]],
+        cmap=cmap_ns,
+        vmin=-vlim_y,
+        vmax=vlim_y,
+        title="NS before",
+    )
+    y_removed.plot(
+        ax=axs[keys["ns_removed"]],
+        cmap=cmap_removed,
+        vmin=-vlim_ry,
+        vmax=vlim_ry,
+        title=f"NS {removed_label}",
+    )
+    yDisp_after.plot(
+        ax=axs[keys["ns_after"]],
+        cmap=cmap_ns,
+        vmin=-vlim_y,
+        vmax=vlim_y,
+        title="NS after",
+    )
+    _draw_histogram_on_ax(
+        axs[keys["ns_hist"]],
+        [yDisp_before.data, yDisp_after.data],
+        ["NS before", "NS after"],
+        symmetric_xlim=True,
+        cmap=cmap_ns,
+    )
+    axs[keys["ns_hist"]].set_title("NS histogram")
+    axs[keys["ns_hist"]].set_xlabel("Displacement (m)")
+    axs[keys["ns_hist"]].set_ylabel("Count")
 
     return x_removed, y_removed
 
@@ -1106,8 +1366,14 @@ def _draw_removed_surface_rows(
 # The 8-panel (before | removed | after | hist) × (EW, NS) key map used by the
 # ramp/topo/slope templates.
 _ROW_KEYS = dict(
-    ew_before='a)', ew_removed='b)', ew_after='c)', ew_hist='d)',
-    ns_before='e)', ns_removed='f)', ns_after='g)', ns_hist='h)',
+    ew_before="a)",
+    ew_removed="b)",
+    ew_after="c)",
+    ew_hist="d)",
+    ns_before="e)",
+    ns_removed="f)",
+    ns_after="g)",
+    ns_hist="h)",
 )
 
 
@@ -1118,9 +1384,9 @@ def plot_ramp_correction(
     yDisp_after: gu.Raster,
     fig_name: str | None = None,
     figsize: tuple[float, float] = (16, 7),
-    cmap_ew: str = 'PuOr',
-    cmap_ns: str = 'PiYG',
-    cmap_ramp: str = 'RdBu_r',
+    cmap_ew: str = "PuOr",
+    cmap_ns: str = "PiYG",
+    cmap_ramp: str = "RdBu_r",
     preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
     """4-col × 2-row control figure for a RampCorrection step.
@@ -1136,21 +1402,28 @@ def plot_ramp_correction(
     pass ``preview_px=None`` to render at full resolution.
     """
     xDisp_before = _preview(xDisp_before, preview_px)
-    xDisp_after  = _preview(xDisp_after, preview_px)
+    xDisp_after = _preview(xDisp_after, preview_px)
     yDisp_before = _preview(yDisp_before, preview_px)
-    yDisp_after  = _preview(yDisp_after, preview_px)
+    yDisp_after = _preview(yDisp_after, preview_px)
 
     fig, axs = plt.subplot_mosaic(
-        [['a)', 'b)', 'c)', 'd)'],
-         ['e)', 'f)', 'g)', 'h)']],
+        [["a)", "b)", "c)", "d)"], ["e)", "f)", "g)", "h)"]],
         figsize=figsize,
     )
     if fig_name:
         fig.suptitle(f"{fig_name} — Ramp correction")
 
     _draw_removed_surface_rows(
-        axs, _ROW_KEYS, xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-        cmap_ew=cmap_ew, cmap_ns=cmap_ns, cmap_removed=cmap_ramp, removed_label="ramp",
+        axs,
+        _ROW_KEYS,
+        xDisp_before,
+        xDisp_after,
+        yDisp_before,
+        yDisp_after,
+        cmap_ew=cmap_ew,
+        cmap_ns=cmap_ns,
+        cmap_removed=cmap_ramp,
+        removed_label="ramp",
     )
 
     fig.tight_layout()
@@ -1181,38 +1454,58 @@ def _plot_topo_like_correction(
     the preview grid rather than onto the full one.
     """
     fig, axs = plt.subplot_mosaic(
-        [['a)', 'b)', 'c)', 'd)'],
-         ['e)', 'f)', 'g)', 'h)'],
-         ['i)', 'i)', 'j)', 'j)']],
+        [["a)", "b)", "c)", "d)"], ["e)", "f)", "g)", "h)"], ["i)", "i)", "j)", "j)"]],
         figsize=figsize,
     )
     if fig_name:
         fig.suptitle(f"{fig_name} — {suptitle}")
 
     _draw_removed_surface_rows(
-        axs, _ROW_KEYS, xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-        cmap_ew=cmap_ew, cmap_ns=cmap_ns, cmap_removed=cmap_removed, removed_label=removed_label,
+        axs,
+        _ROW_KEYS,
+        xDisp_before,
+        xDisp_after,
+        yDisp_before,
+        yDisp_after,
+        cmap_ew=cmap_ew,
+        cmap_ns=cmap_ns,
+        cmap_removed=cmap_removed,
+        removed_label=removed_label,
     )
 
     if predictor is None:
-        for ax_key in ['i)', 'j)']:
+        for ax_key in ["i)", "j)"]:
             axs[ax_key].axis("off")
-            axs[ax_key].text(0.5, 0.5, "No DEM provided — predictor panel unavailable",
-                           ha="center", va="center", transform=axs[ax_key].transAxes)
+            axs[ax_key].text(
+                0.5,
+                0.5,
+                "No DEM provided — predictor panel unavailable",
+                ha="center",
+                va="center",
+                transform=axs[ax_key].transAxes,
+            )
     else:
         _draw_disp_vs_predictor_component_on_ax(
-            axs['i)'],
-            _flat_disp(xDisp_before), _flat_disp(xDisp_after),
+            axs["i)"],
+            _flat_disp(xDisp_before),
+            _flat_disp(xDisp_after),
             predictor.ravel(),
-            label_prefix="EW", c_before=_EW_BEFORE, c_after=_EW_AFTER,
-            bin_width=bin_width, predictor_label=predictor_label,
+            label_prefix="EW",
+            c_before=_EW_BEFORE,
+            c_after=_EW_AFTER,
+            bin_width=bin_width,
+            predictor_label=predictor_label,
         )
         _draw_disp_vs_predictor_component_on_ax(
-            axs['j)'],
-            _flat_disp(yDisp_before), _flat_disp(yDisp_after),
+            axs["j)"],
+            _flat_disp(yDisp_before),
+            _flat_disp(yDisp_after),
             predictor.ravel(),
-            label_prefix="NS", c_before=_NS_BEFORE, c_after=_NS_AFTER,
-            bin_width=bin_width, predictor_label=predictor_label,
+            label_prefix="NS",
+            c_before=_NS_BEFORE,
+            c_after=_NS_AFTER,
+            bin_width=bin_width,
+            predictor_label=predictor_label,
         )
 
     fig.tight_layout()
@@ -1230,9 +1523,9 @@ def plot_topo_correction(
     dem: gu.Raster | None = None,
     fig_name: str | None = None,
     figsize: tuple[float, float] = (16, 13),
-    cmap_ew: str = 'PuOr',
-    cmap_ns: str = 'PiYG',
-    cmap_removed: str = 'RdBu_r',
+    cmap_ew: str = "PuOr",
+    cmap_ns: str = "PiYG",
+    cmap_removed: str = "RdBu_r",
     elev_bin_width: float = 100.0,
     preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
@@ -1248,17 +1541,26 @@ def plot_topo_correction(
     render at full resolution.
     """
     xDisp_before = _preview(xDisp_before, preview_px)
-    xDisp_after  = _preview(xDisp_after, preview_px)
+    xDisp_after = _preview(xDisp_after, preview_px)
     yDisp_before = _preview(yDisp_before, preview_px)
-    yDisp_after  = _preview(yDisp_after, preview_px)
+    yDisp_after = _preview(yDisp_after, preview_px)
 
     predictor = _dem_on_grid(dem, xDisp_before) if dem is not None else None
     return _plot_topo_like_correction(
-        xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-        predictor=predictor, predictor_label="Elevation (m)", bin_width=elev_bin_width,
-        suptitle="Topographic correction", removed_label="trend",
-        fig_name=fig_name, figsize=figsize,
-        cmap_ew=cmap_ew, cmap_ns=cmap_ns, cmap_removed=cmap_removed,
+        xDisp_before,
+        xDisp_after,
+        yDisp_before,
+        yDisp_after,
+        predictor=predictor,
+        predictor_label="Elevation (m)",
+        bin_width=elev_bin_width,
+        suptitle="Topographic correction",
+        removed_label="trend",
+        fig_name=fig_name,
+        figsize=figsize,
+        cmap_ew=cmap_ew,
+        cmap_ns=cmap_ns,
+        cmap_removed=cmap_removed,
     )
 
 
@@ -1273,9 +1575,9 @@ def plot_slope_correction(
     dem: gu.Raster | None = None,
     fig_name: str | None = None,
     figsize: tuple[float, float] = (16, 13),
-    cmap_ew: str = 'PuOr',
-    cmap_ns: str = 'PiYG',
-    cmap_removed: str = 'RdBu_r',
+    cmap_ew: str = "PuOr",
+    cmap_ns: str = "PiYG",
+    cmap_removed: str = "RdBu_r",
     slope_bin_width: float = 2.0,
     preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
@@ -1293,20 +1595,29 @@ def plot_slope_correction(
     diagnostic view, not the surface the correction was fitted on.
     """
     xDisp_before = _preview(xDisp_before, preview_px)
-    xDisp_after  = _preview(xDisp_after, preview_px)
+    xDisp_after = _preview(xDisp_after, preview_px)
     yDisp_before = _preview(yDisp_before, preview_px)
-    yDisp_after  = _preview(yDisp_after, preview_px)
+    yDisp_after = _preview(yDisp_after, preview_px)
 
     predictor = None
     if dem is not None:
         dem_arr = _dem_on_grid(dem, xDisp_before)
         predictor = compute_slope(dem_arr, xDisp_before.transform)
     return _plot_topo_like_correction(
-        xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-        predictor=predictor, predictor_label="Terrain slope (°)", bin_width=slope_bin_width,
-        suptitle="Slope-ramp correction", removed_label="trend",
-        fig_name=fig_name, figsize=figsize,
-        cmap_ew=cmap_ew, cmap_ns=cmap_ns, cmap_removed=cmap_removed,
+        xDisp_before,
+        xDisp_after,
+        yDisp_before,
+        yDisp_after,
+        predictor=predictor,
+        predictor_label="Terrain slope (°)",
+        bin_width=slope_bin_width,
+        suptitle="Slope-ramp correction",
+        removed_label="trend",
+        fig_name=fig_name,
+        figsize=figsize,
+        cmap_ew=cmap_ew,
+        cmap_ns=cmap_ns,
+        cmap_removed=cmap_removed,
     )
 
 
@@ -1325,14 +1636,34 @@ def _draw_stripe_profile_on_ax(ax, step, *, label_prefix, c_before, c_after) -> 
     profile_model = meta.get("profile_model")
     spacing = meta.get("spacing", 1.0)
     coord = np.arange(len(profile_raw)) * spacing
-    ax.plot(coord, profile_raw, ls="--", lw=1.0, color=c_before, alpha=0.9,
-            label=f"{label_prefix} before")
+    ax.plot(
+        coord,
+        profile_raw,
+        ls="--",
+        lw=1.0,
+        color=c_before,
+        alpha=0.9,
+        label=f"{label_prefix} before",
+    )
     if profile_model is not None:
         profile_model = np.asarray(profile_model, dtype=float)
-        ax.plot(coord, profile_model, ls=":", lw=1.4, color=c_after, alpha=0.7,
-                label=f"{label_prefix} model")
-        ax.plot(coord, profile_raw - profile_model, ls="-", lw=1.6, color=c_after,
-                label=f"{label_prefix} after")
+        ax.plot(
+            coord,
+            profile_model,
+            ls=":",
+            lw=1.4,
+            color=c_after,
+            alpha=0.7,
+            label=f"{label_prefix} model",
+        )
+        ax.plot(
+            coord,
+            profile_raw - profile_model,
+            ls="-",
+            lw=1.6,
+            color=c_after,
+            label=f"{label_prefix} after",
+        )
     return True
 
 
@@ -1353,9 +1684,9 @@ def plot_destriping_correction(
     yDisp_after: gu.Raster,
     fig_name: str | None = None,
     figsize: tuple[float, float] = (16, 13),
-    cmap_ew: str = 'PuOr',
-    cmap_ns: str = 'PiYG',
-    cmap_bias: str = 'RdBu_r',
+    cmap_ew: str = "PuOr",
+    cmap_ns: str = "PiYG",
+    cmap_bias: str = "RdBu_r",
     preview_px: int | None = PLOT_PREVIEW_PX,
 ) -> plt.Figure:
     """Control figure for an Along-/Across-track destriping step.
@@ -1376,14 +1707,12 @@ def plot_destriping_correction(
     The 1-D stripe profiles come from ``step.meta`` and are unaffected.
     """
     xDisp_before = _preview(xDisp_before, preview_px)
-    xDisp_after  = _preview(xDisp_after, preview_px)
+    xDisp_after = _preview(xDisp_after, preview_px)
     yDisp_before = _preview(yDisp_before, preview_px)
-    yDisp_after  = _preview(yDisp_after, preview_px)
+    yDisp_after = _preview(yDisp_after, preview_px)
 
     fig, axs = plt.subplot_mosaic(
-        [['a)', 'b)', 'c)', 'd)'],
-         ['e)', 'f)', 'g)', 'h)'],
-         ['i)', 'i)', 'j)', 'j)']],
+        [["a)", "b)", "c)", "d)"], ["e)", "f)", "g)", "h)"], ["i)", "i)", "j)", "j)"]],
         figsize=figsize,
     )
     band_ew = _fmt_band((getattr(step_ew, "meta", {}) or {}).get("band"))
@@ -1398,20 +1727,30 @@ def plot_destriping_correction(
     fig.suptitle(title)
 
     _draw_removed_surface_rows(
-        axs, _ROW_KEYS, xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-        cmap_ew=cmap_ew, cmap_ns=cmap_ns, cmap_removed=cmap_bias, removed_label="undulation",
+        axs,
+        _ROW_KEYS,
+        xDisp_before,
+        xDisp_after,
+        yDisp_before,
+        yDisp_after,
+        cmap_ew=cmap_ew,
+        cmap_ns=cmap_ns,
+        cmap_removed=cmap_bias,
+        removed_label="undulation",
     )
 
     # EW stripe profile
-    drew_ew = _draw_stripe_profile_on_ax(axs['i)'], step_ew, label_prefix="EW",
-                                         c_before=_EW_BEFORE, c_after=_EW_AFTER)
+    drew_ew = _draw_stripe_profile_on_ax(
+        axs["i)"], step_ew, label_prefix="EW", c_before=_EW_BEFORE, c_after=_EW_AFTER
+    )
     m_ew = getattr(step_ew, "meta", {}) or {}
     sub_ew = []
     if m_ew.get("std_before") is not None and m_ew.get("std_after") is not None:
         sub_ew.append(f"std {m_ew['std_before']:.3f}→{m_ew['std_after']:.3f} m")
     title_ew = "EW stripe profile" + (f"  ({'; '.join(sub_ew)})" if sub_ew else "")
     _finalize_diagnostic_panel(
-        axs['i)'], drew_ew,
+        axs["i)"],
+        drew_ew,
         title=title_ew,
         xlabel="Profile-axis coordinate (m)",
         ylabel="Displacement (m)",
@@ -1419,15 +1758,17 @@ def plot_destriping_correction(
     )
 
     # NS stripe profile
-    drew_ns = _draw_stripe_profile_on_ax(axs['j)'], step_ns, label_prefix="NS",
-                                         c_before=_NS_BEFORE, c_after=_NS_AFTER)
+    drew_ns = _draw_stripe_profile_on_ax(
+        axs["j)"], step_ns, label_prefix="NS", c_before=_NS_BEFORE, c_after=_NS_AFTER
+    )
     m_ns = getattr(step_ns, "meta", {}) or {}
     sub_ns = []
     if m_ns.get("std_before") is not None and m_ns.get("std_after") is not None:
         sub_ns.append(f"std {m_ns['std_before']:.3f}→{m_ns['std_after']:.3f} m")
     title_ns = "NS stripe profile" + (f"  ({'; '.join(sub_ns)})" if sub_ns else "")
     _finalize_diagnostic_panel(
-        axs['j)'], drew_ns,
+        axs["j)"],
+        drew_ns,
         title=title_ns,
         xlabel="Profile-axis coordinate (m)",
         ylabel="Displacement (m)",
@@ -1465,29 +1806,67 @@ def plot_correction_result(
     """
     if isinstance(step_ew, DirectionalBiasCorrection):
         return plot_directional_bias_correction(
-            step_ew, step_ns, xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-            fig_name=fig_name, preview_px=preview_px,
+            step_ew,
+            step_ns,
+            xDisp_before,
+            xDisp_after,
+            yDisp_before,
+            yDisp_after,
+            fig_name=fig_name,
+            preview_px=preview_px,
         )
     if isinstance(step_ew, (AlongTrackDestriping, AcrossTrackDestriping)):
         return plot_destriping_correction(
-            step_ew, step_ns, xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-            fig_name=fig_name, preview_px=preview_px,
+            step_ew,
+            step_ns,
+            xDisp_before,
+            xDisp_after,
+            yDisp_before,
+            yDisp_after,
+            fig_name=fig_name,
+            preview_px=preview_px,
         )
     if isinstance(step_ew, SlopeRampCorrection):
         return plot_slope_correction(
-            step_ew, step_ns, xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-            dem=dem, fig_name=fig_name, preview_px=preview_px,
+            step_ew,
+            step_ns,
+            xDisp_before,
+            xDisp_after,
+            yDisp_before,
+            yDisp_after,
+            dem=dem,
+            fig_name=fig_name,
+            preview_px=preview_px,
         )
     if isinstance(step_ew, (TopoCorrection, TopoRampCorrection)):
         return plot_topo_correction(
-            step_ew, step_ns, xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-            dem=dem, fig_name=fig_name, preview_px=preview_px,
+            step_ew,
+            step_ns,
+            xDisp_before,
+            xDisp_after,
+            yDisp_before,
+            yDisp_after,
+            dem=dem,
+            fig_name=fig_name,
+            preview_px=preview_px,
         )
     if isinstance(step_ew, RampCorrection):
-        return plot_ramp_correction(xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-                                    fig_name=fig_name, preview_px=preview_px)
-    return plot_median_centering(xDisp_before, xDisp_after, yDisp_before, yDisp_after,
-                                 fig_name=fig_name, preview_px=preview_px)
+        return plot_ramp_correction(
+            xDisp_before,
+            xDisp_after,
+            yDisp_before,
+            yDisp_after,
+            fig_name=fig_name,
+            preview_px=preview_px,
+        )
+    return plot_median_centering(
+        xDisp_before,
+        xDisp_after,
+        yDisp_before,
+        yDisp_after,
+        fig_name=fig_name,
+        preview_px=preview_px,
+    )
 
 
 def plot_disp_vs_elev_raw(
@@ -1521,11 +1900,15 @@ def plot_disp_vs_elev_raw(
     if fig_name:
         ax.set_title(fig_name)
 
-    ax.scatter(disp_vals, elev_vals, s=0.5, alpha=0.3, color="steelblue", label="pixels")
+    ax.scatter(
+        disp_vals, elev_vals, s=0.5, alpha=0.3, color="steelblue", label="pixels"
+    )
     x_line = np.linspace(disp_vals.min(), disp_vals.max(), 200)
     ax.plot(
-        x_line, slope * x_line + intercept,
-        color="crimson", lw=2,
+        x_line,
+        slope * x_line + intercept,
+        color="crimson",
+        lw=2,
         label=f"slope={slope:.4f}, R²={r**2:.3f}, p={p:.2e}",
     )
     ax.axhline(np.median(elev_vals), color="gray", lw=0.8, ls=":", alpha=0.7)
@@ -1589,7 +1972,9 @@ def plot_disp_vs_elev_bins(
         bin_centers,
         medians - nmads,
         medians + nmads,
-        alpha=0.25, color=color, label="± NMAD",
+        alpha=0.25,
+        color=color,
+        label="± NMAD",
     )
     ax.axvline(0, color="k", lw=0.8, ls="--", alpha=0.6)
     ax.set_xlabel(xlabel)
@@ -1641,7 +2026,8 @@ def plot_disp_vs_elev_hexbin(
         ax.set_title(fig_name)
 
     hb = ax.hexbin(
-        disp_vals, elev_vals,
+        disp_vals,
+        elev_vals,
         gridsize=gridsize,
         cmap=cmap,
         mincnt=mincnt,
@@ -1657,9 +2043,11 @@ def plot_disp_vs_elev_hexbin(
     return fig, ax
 
 
-def sample_raster(points_fn: gpd.GeoDataFrame | str | pathlib.Path,
-                  raster_fn: rasterio.io.DatasetReader | str | pathlib.Path,
-                  with_buffer: int | float = None) -> gpd.GeoDataFrame:
+def sample_raster(
+    points_fn: gpd.GeoDataFrame | str | pathlib.Path,
+    raster_fn: rasterio.io.DatasetReader | str | pathlib.Path,
+    with_buffer: int | float = None,
+) -> gpd.GeoDataFrame:
     """Tool for sampling raster file.
 
     Args:
@@ -1676,58 +2064,69 @@ def sample_raster(points_fn: gpd.GeoDataFrame | str | pathlib.Path,
         points_df = gpd.open(points_fn)
     else:
         points_df = points_fn
-    #END if
+    # END if
     if isinstance(raster_fn, rasterio.io.DatasetReader) == False:
         raster_ds = rasterio.open(raster_fn)
     else:
         raster_ds = raster_fn
-    #END if
+    # END if
     # Check if epsg codes are coherent
     if raster_ds.crs.to_epsg() != points_df.crs.to_epsg():
-        print(f"Different spatial reference found. Projecting {points_fn} into raster_ds.crs.to_epsg()")
-        #TODO: project
+        print(
+            f"Different spatial reference found. Projecting {points_fn} into raster_ds.crs.to_epsg()"
+        )
+        # TODO: project
     else:
         pass
-    #END if
+    # END if
     if with_buffer is not None:
         buffer = points_df.buffer(with_buffer)
-        gdf_buffer = gpd.GeoDataFrame({'index':buffer.index.tolist(),
-                                       'geometry':buffer.geometry}).set_index('index')
+        gdf_buffer = gpd.GeoDataFrame(
+            {"index": buffer.index.tolist(), "geometry": buffer.geometry}
+        ).set_index("index")
         # Reading raster
         raster_data = raster_ds.read(1)
         # Get column name from filename and filling with nan
-        col_name = raster_fn.name.split('.')[0]
+        col_name = raster_fn.name.split(".")[0]
         # Creating new column based on new `col_name`
         points_df[col_name] = np.nan
         # Iterate though each column (i.e. feature)
-        ras_stats = rasterstats.zonal_stats(gdf_buffer, raster_data,
-                                   affine=raster_ds.transform, stats=['mean'],
-                                   geojson_out = True)
+        ras_stats = rasterstats.zonal_stats(
+            gdf_buffer,
+            raster_data,
+            affine=raster_ds.transform,
+            stats=["mean"],
+            geojson_out=True,
+        )
         for i in range(len(ras_stats)):
-            points_df[col_name].loc[int(ras_stats[i]['id'])] = ras_stats[i]['properties']['mean']
+            points_df[col_name].loc[int(ras_stats[i]["id"])] = ras_stats[i][
+                "properties"
+            ]["mean"]
     else:
         # Reading raster
         raster_data = raster_ds.read(1)
         # Get column name from filename and filling with nan
-        col_name = raster_fn.name.split('.')[0]
+        col_name = raster_fn.name.split(".")[0]
         # Creating new column based on new `col_name`
         points_df[col_name] = np.nan
         # Iterate though each column (i.e. feature)
         for index, row in points_df.iterrows():
-            point_name = row['point_id']
-            x = row['geometry'].x
-            y = row['geometry'].y
+            point_name = row["point_id"]
+            x = row["geometry"].x
+            y = row["geometry"].y
             # getting row and col index to sample value
-            rowIndex, colIndex = raster_ds.index(x,y)
+            rowIndex, colIndex = raster_ds.index(x, y)
             # Filling dataframe with sampled values based on index values
             points_df[col_name].loc[index] = raster_data[rowIndex, colIndex]
-        #END for
+        # END for
         # Closing raster to free memory
         raster_ds.close()
-        #END for
-    #END if
+        # END for
+    # END if
     return points_df
-#END def
+
+
+# END def
 
 # ══════════════════════════════════════════════════════════════════════════════ #
 #                          Pair-network figures                                  #
@@ -1836,8 +2235,9 @@ def _draw_pairs_network_on_ax(
     x1 = frame["dec_i"].to_numpy()
     x2 = frame["dec_j"].to_numpy()
     backward = (frame["direction"] == "backward").to_numpy()
-    height = arc_heights(frame["dt_years"].to_numpy(), backward=backward,
-                         mirror=mirror_direction)
+    height = arc_heights(
+        frame["dt_years"].to_numpy(), backward=backward, mirror=mirror_direction
+    )
     curves = timeline_arc_polylines(x1, x2, height, n_points=n_bezier_points)
 
     mappable = None
@@ -1848,7 +2248,9 @@ def _draw_pairs_network_on_ax(
         # One artist, continuous colour — matplotlib can do here what plotly cannot.
         dt_vals = frame["dt_years"].to_numpy()
         norm = mcolors.Normalize(vmin=dt_vals.min(), vmax=dt_vals.max())
-        lc = LineCollection(curves, cmap=cmap_dt, norm=norm, linewidths=linewidth, alpha=alpha)
+        lc = LineCollection(
+            curves, cmap=cmap_dt, norm=norm, linewidths=linewidth, alpha=alpha
+        )
         lc.set_array(dt_vals)
         ax.add_collection(lc)
         mappable = lc
@@ -1865,7 +2267,10 @@ def _draw_pairs_network_on_ax(
     # --- timeline and date nodes -------------------------------------------------
     ax.axhline(0, color="black", lw=0.8, zorder=1)
     node_dec = np.array(
-        [d.year + (d - pd.Timestamp(d.year, 1, 1)) / pd.Timedelta(days=365.25) for d in dates]
+        [
+            d.year + (d - pd.Timestamp(d.year, 1, 1)) / pd.Timedelta(days=365.25)
+            for d in dates
+        ]
     )
     if color_by == "sensor" and node_color:
         summary = date_summary(frame)
@@ -1873,8 +2278,15 @@ def _draw_pairs_network_on_ax(
         node_c = [sensor_colors.get(s, "grey") for s in summary["sensor"]]
     else:
         node_c = "black"
-    ax.scatter(node_dec, np.zeros_like(node_dec), c=node_c, s=node_size, zorder=3,
-               edgecolors="black", linewidths=0.5)
+    ax.scatter(
+        node_dec,
+        np.zeros_like(node_dec),
+        c=node_c,
+        s=node_size,
+        zorder=3,
+        edgecolors="black",
+        linewidths=0.5,
+    )
 
     # --- axes formatting ---------------------------------------------------------
     x_pad = (node_dec.max() - node_dec.min()) * 0.03 if len(node_dec) > 1 else 0.1
@@ -1882,8 +2294,9 @@ def _draw_pairs_network_on_ax(
     ax.set_ylim(*arc_ylim(height))
     stride = max(1, int(np.ceil(len(node_dec) / max(max_xticks, 1))))
     ax.set_xticks(node_dec[::stride])
-    ax.set_xticklabels(dates.strftime("%Y-%m-%d")[::stride], rotation=45, ha="right",
-                       fontsize=8)
+    ax.set_xticklabels(
+        dates.strftime("%Y-%m-%d")[::stride], rotation=45, ha="right", fontsize=8
+    )
     # No y ticks: arc height is a non-linear proxy for Δt (a cubic with both
     # control points at h peaks at 0.75 h), so a numeric axis would misinform.
     ax.set_yticks([])
@@ -1893,13 +2306,27 @@ def _draw_pairs_network_on_ax(
 
     if mirror_direction:
         if (~backward).any():
-            ax.text(0.004, 0.985, "▲ above: forward (i → j)", transform=ax.transAxes,
-                    ha="left", va="top", fontsize=8,
-                    color=_DIRECTION_COLORS["forward"])
+            ax.text(
+                0.004,
+                0.985,
+                "▲ above: forward (i → j)",
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=8,
+                color=_DIRECTION_COLORS["forward"],
+            )
         if backward.any():
-            ax.text(0.004, 0.015, "▼ below: backward (j → i)", transform=ax.transAxes,
-                    ha="left", va="bottom", fontsize=8,
-                    color=_DIRECTION_COLORS["backward"])
+            ax.text(
+                0.004,
+                0.015,
+                "▼ below: backward (j → i)",
+                transform=ax.transAxes,
+                ha="left",
+                va="bottom",
+                fontsize=8,
+                color=_DIRECTION_COLORS["backward"],
+            )
 
     return {
         "n_pairs": len(frame),
@@ -1941,16 +2368,27 @@ def plot_pairs_network(
     ax.set_title(
         fig_name
         or f"Pair network — {n_pairs} pair{'s' if n_pairs != 1 else ''} "
-           f"({n_dates} acquisition dates)",
+        f"({n_dates} acquisition dates)",
         fontsize=10,
     )
 
     if info["mappable"] is not None:
-        fig.colorbar(info["mappable"], ax=ax, orientation="vertical",
-                     label=info["legend_title"], fraction=0.03, pad=0.02)
+        fig.colorbar(
+            info["mappable"],
+            ax=ax,
+            orientation="vertical",
+            label=info["legend_title"],
+            fraction=0.03,
+            pad=0.02,
+        )
     elif info["legend_handles"]:
-        ax.legend(handles=info["legend_handles"], title=info["legend_title"],
-                  loc="upper left", fontsize=8, title_fontsize=9)
+        ax.legend(
+            handles=info["legend_handles"],
+            title=info["legend_title"],
+            loc="upper left",
+            fontsize=8,
+            title_fontsize=9,
+        )
 
     fig.tight_layout()
     return fig, ax
@@ -2035,7 +2473,9 @@ def _draw_pairs_chord_on_ax(
 
     dates = unique_dates(frame)
     if len(frame) == 0 or len(dates) < 2:
-        raise ValueError("A chord diagram needs at least two distinct acquisition dates.")
+        raise ValueError(
+            "A chord diagram needs at least two distinct acquisition dates."
+        )
 
     scale = CircularTimeScale.from_dates(dates)
     inner_radius = outer_radius - ring_width
@@ -2049,57 +2489,115 @@ def _draw_pairs_chord_on_ax(
     ring_x, ring_y, ring_frac = color_ring_mesh(
         n_color_segments, outer_radius=outer_radius, ring_width=ring_width
     )
-    mesh = ax.pcolormesh(ring_x, ring_y, ring_frac[None, :], cmap=cmap,
-                         shading="flat", zorder=0, rasterized=True)
+    mesh = ax.pcolormesh(
+        ring_x,
+        ring_y,
+        ring_frac[None, :],
+        cmap=cmap,
+        shading="flat",
+        zorder=0,
+        rasterized=True,
+    )
 
     for radius in (outer_radius, inner_radius):
-        ax.add_patch(Circle((0, 0), radius, fill=False, edgecolor=border_color,
-                            linewidth=border_linewidth, zorder=4))
+        ax.add_patch(
+            Circle(
+                (0, 0),
+                radius,
+                fill=False,
+                edgecolor=border_color,
+                linewidth=border_linewidth,
+                zorder=4,
+            )
+        )
 
     # --- chords: ONE artist ------------------------------------------------------
     theta_i = scale.angle(frame["t_i"])
     theta_j = scale.angle(frame["t_j"])
-    curves = chord_polylines(theta_i, theta_j, link_radius=link_radius,
-                             curvature=link_curvature, n_points=n_bezier_points)
+    curves = chord_polylines(
+        theta_i,
+        theta_j,
+        link_radius=link_radius,
+        curvature=link_curvature,
+        n_points=n_bezier_points,
+    )
     ax.add_collection(
-        LineCollection(curves, colors=[link_color], linewidths=link_linewidth,
-                       alpha=link_alpha, zorder=1)
+        LineCollection(
+            curves,
+            colors=[link_color],
+            linewidths=link_linewidth,
+            alpha=link_alpha,
+            zorder=1,
+        )
     )
 
     # --- arrowheads: ONE artist (quiver takes per-point directions natively) ----
     if show_arrows:
         tips, tangents = polyline_point_and_tangent(curves, position=arrow_position)
         ax.quiver(
-            tips[:, 0], tips[:, 1], tangents[:, 0], tangents[:, 1],
-            angles="xy", scale_units="xy", scale=1.0 / arrow_size,
-            width=arrow_width, headwidth=4.0, headlength=5.0, headaxislength=5.0,
-            pivot="mid", color=arrow_color or link_color,
+            tips[:, 0],
+            tips[:, 1],
+            tangents[:, 0],
+            tangents[:, 1],
+            angles="xy",
+            scale_units="xy",
+            scale=1.0 / arrow_size,
+            width=arrow_width,
+            headwidth=4.0,
+            headlength=5.0,
+            headaxislength=5.0,
+            pivot="mid",
+            color=arrow_color or link_color,
             alpha=arrow_alpha if arrow_alpha is not None else min(link_alpha * 2, 1.0),
             zorder=2,
         )
 
     if show_date_nodes:
         node_x, node_y = polar_to_xy(link_radius, scale.angle(dates))
-        ax.scatter(node_x, node_y, s=node_size, c=scale.fraction(dates), cmap=cmap,
-                   vmin=0, vmax=1, edgecolors="black", linewidths=0.4, zorder=5)
+        ax.scatter(
+            node_x,
+            node_y,
+            s=node_size,
+            c=scale.fraction(dates),
+            cmap=cmap,
+            vmin=0,
+            vmax=1,
+            edgecolors="black",
+            linewidths=0.4,
+            zorder=5,
+        )
 
     # --- year ticks: ONE artist --------------------------------------------------
     if show_year_ticks:
         ax.add_collection(
             LineCollection(
-                year_tick_segments(scale, outer_radius=outer_radius,
-                                   ring_width=ring_width, tick_length=year_tick_length),
-                colors=[year_tick_color], linewidths=year_tick_linewidth,
-                capstyle="butt", zorder=5,
+                year_tick_segments(
+                    scale,
+                    outer_radius=outer_radius,
+                    ring_width=ring_width,
+                    tick_length=year_tick_length,
+                ),
+                colors=[year_tick_color],
+                linewidths=year_tick_linewidth,
+                capstyle="butt",
+                zorder=5,
             )
         )
 
     if show_year_labels:
         lx, ly, rot, ha = year_label_placement(scale, label_radius=label_radius)
         for x, y, r, a, year in zip(lx, ly, rot, ha, scale.years):
-            ax.text(x, y, str(int(year)), rotation=r, rotation_mode="anchor",
-                    ha=a, va="center", fontsize=year_label_fontsize,
-                    color=year_label_color)
+            ax.text(
+                x,
+                y,
+                str(int(year)),
+                rotation=r,
+                rotation_mode="anchor",
+                ha=a,
+                va="center",
+                fontsize=year_label_fontsize,
+                color=year_label_color,
+            )
 
     ax.set_xlim(-xylim, xylim)
     ax.set_ylim(-xylim, xylim)
@@ -2142,8 +2640,9 @@ def plot_pairs_chord(
     ax.set_title(
         fig_name
         or f"Pair network (chord diagram) — {n_pairs} pair{'s' if n_pairs != 1 else ''} "
-           f"({n_dates} acquisition dates)",
-        fontsize=11, pad=20,
+        f"({n_dates} acquisition dates)",
+        fontsize=11,
+        pad=20,
     )
 
     fig.tight_layout()
@@ -2185,9 +2684,16 @@ def _draw_pairs_baseline_on_ax(
     legend_title = color_by.capitalize()
 
     if color_by == "dt":
-        sc = ax.scatter(frame["mid_dec"], frame["dt_days"], c=frame["dt_years"],
-                        cmap=cmap_dt, s=marker_size, alpha=alpha,
-                        edgecolors="black", linewidths=0.3)
+        sc = ax.scatter(
+            frame["mid_dec"],
+            frame["dt_days"],
+            c=frame["dt_years"],
+            cmap=cmap_dt,
+            s=marker_size,
+            alpha=alpha,
+            edgecolors="black",
+            linewidths=0.3,
+        )
         mappable = sc
         legend_title = "Time delta (years)"
     elif color_by == "direction":
@@ -2198,9 +2704,17 @@ def _draw_pairs_baseline_on_ax(
             sub = frame[frame["direction"] == name]
             if len(sub) == 0:
                 continue
-            ax.scatter(sub["mid_dec"], sub["dt_days"], marker=marker,
-                       color=_DIRECTION_COLORS[name], s=marker_size * scale,
-                       alpha=alpha, edgecolors="black", linewidths=0.3, label=name)
+            ax.scatter(
+                sub["mid_dec"],
+                sub["dt_days"],
+                marker=marker,
+                color=_DIRECTION_COLORS[name],
+                s=marker_size * scale,
+                alpha=alpha,
+                edgecolors="black",
+                linewidths=0.3,
+                label=name,
+            )
             legend_handles.append(
                 mpl_patches.Patch(color=_DIRECTION_COLORS[name], label=name)
             )
@@ -2211,8 +2725,16 @@ def _draw_pairs_baseline_on_ax(
             sub = frame.loc[mask]
             if len(sub) == 0:
                 continue
-            ax.scatter(sub["mid_dec"], sub["dt_days"], color=color, s=marker_size,
-                       alpha=alpha, edgecolors="black", linewidths=0.3, label=label)
+            ax.scatter(
+                sub["mid_dec"],
+                sub["dt_days"],
+                color=color,
+                s=marker_size,
+                alpha=alpha,
+                edgecolors="black",
+                linewidths=0.3,
+                label=label,
+            )
             legend_handles.append(mpl_patches.Patch(color=color, label=label))
 
     ax.set_xlabel("Pair midpoint date (decimal year)")
@@ -2258,15 +2780,26 @@ def plot_pairs_baseline(
     ax.set_title(
         fig_name
         or f"Temporal baselines — {n_pairs} pair{'s' if n_pairs != 1 else ''} "
-           f"({n_dates} acquisition dates)",
+        f"({n_dates} acquisition dates)",
         fontsize=10,
     )
     if info["mappable"] is not None:
-        fig.colorbar(info["mappable"], ax=ax, orientation="vertical",
-                     label=info["legend_title"], fraction=0.03, pad=0.02)
+        fig.colorbar(
+            info["mappable"],
+            ax=ax,
+            orientation="vertical",
+            label=info["legend_title"],
+            fraction=0.03,
+            pad=0.02,
+        )
     elif info["legend_handles"]:
-        ax.legend(handles=info["legend_handles"], title=info["legend_title"],
-                  loc="upper left", fontsize=8, title_fontsize=9)
+        ax.legend(
+            handles=info["legend_handles"],
+            title=info["legend_title"],
+            loc="upper left",
+            fontsize=8,
+            title_fontsize=9,
+        )
 
     fig.tight_layout()
     return fig, ax
@@ -2305,10 +2838,11 @@ def _draw_pairs_dt_hist_on_ax(
     bins = np.histogram_bin_edges(dt, bins=nbins)
     legend_handles: list = []
 
-    present = [
-        name for name in ("forward", "backward")
-        if (frame["direction"] == name).any()
-    ] if split_direction else []
+    present = (
+        [name for name in ("forward", "backward") if (frame["direction"] == name).any()]
+        if split_direction
+        else []
+    )
 
     if len(present) > 1:
         # Grouped, not overlaid: matplotlib draws successive hist() calls opaquely
@@ -2316,15 +2850,22 @@ def _draw_pairs_dt_hist_on_ax(
         # are identical by construction — so an overlay would hide one entirely.
         ax.hist(
             [dt[(frame["direction"] == name).to_numpy()] for name in present],
-            bins=bins, color=[_DIRECTION_COLORS[n] for n in present],
-            alpha=alpha, label=present,
+            bins=bins,
+            color=[_DIRECTION_COLORS[n] for n in present],
+            alpha=alpha,
+            label=present,
         )
         legend_handles = [
             mpl_patches.Patch(color=_DIRECTION_COLORS[n], label=n) for n in present
         ]
     elif present:
-        ax.hist(dt, bins=bins, color=_DIRECTION_COLORS[present[0]], alpha=alpha,
-                label=present[0])
+        ax.hist(
+            dt,
+            bins=bins,
+            color=_DIRECTION_COLORS[present[0]],
+            alpha=alpha,
+            label=present[0],
+        )
         legend_handles = [
             mpl_patches.Patch(color=_DIRECTION_COLORS[present[0]], label=present[0])
         ]
@@ -2335,9 +2876,16 @@ def _draw_pairs_dt_hist_on_ax(
         stats = ((np.median(dt), "median", "--", 0.99), (dt.mean(), "mean", ":", 0.91))
         for value, label, ls, y in stats:
             ax.axvline(value, color="black", lw=1.2, linestyle=ls)
-            ax.annotate(f"{label} {value:.0f} d", xy=(value, y),
-                        xycoords=("data", "axes fraction"), xytext=(3, 0),
-                        textcoords="offset points", ha="left", va="top", fontsize=8)
+            ax.annotate(
+                f"{label} {value:.0f} d",
+                xy=(value, y),
+                xycoords=("data", "axes fraction"),
+                xytext=(3, 0),
+                textcoords="offset points",
+                ha="left",
+                va="top",
+                fontsize=8,
+            )
 
     ax.set_xlabel("Temporal baseline Δt (days)")
     ax.set_ylabel("Number of pairs")
@@ -2381,12 +2929,17 @@ def plot_pairs_dt_hist(
     ax.set_title(
         fig_name
         or f"Temporal baseline distribution — {n_pairs} pair{'s' if n_pairs != 1 else ''} "
-           f"({n_dates} acquisition dates)",
+        f"({n_dates} acquisition dates)",
         fontsize=10,
     )
     if info["legend_handles"]:
-        ax.legend(handles=info["legend_handles"], title=info["legend_title"],
-                  loc="upper right", fontsize=8, title_fontsize=9)
+        ax.legend(
+            handles=info["legend_handles"],
+            title=info["legend_title"],
+            loc="upper right",
+            fontsize=8,
+            title_fontsize=9,
+        )
 
     fig.tight_layout()
     return fig, ax
@@ -2406,6 +2959,7 @@ PAIRS_MPL_BUILDERS: dict = {
 # ─────────────────────────────────────────────────────────────────────────────
 # TIO inversion weights — the matplotlib twin of _weights_plotly.figure_weights
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _draw_inversion_weights_on_ax(
     ax,
@@ -2434,8 +2988,11 @@ def _draw_inversion_weights_on_ax(
 
     # Same grouping rule as the plotly twin: one artist per direction, or one
     # per (direction, sensor) when the frame mixes sensors — still batched.
-    sensors = (frame["sensor"].fillna("").astype(str).to_numpy()
-               if "sensor" in frame.columns else np.array([""] * len(frame)))
+    sensors = (
+        frame["sensor"].fillna("").astype(str).to_numpy()
+        if "sensor" in frame.columns
+        else np.array([""] * len(frame))
+    )
     groups = sorted(set(sensors.tolist()))
     by_sensor = len(groups) > 1
     palette = sensor_colors(groups) if by_sensor else {}
@@ -2450,12 +3007,20 @@ def _draw_inversion_weights_on_ax(
             sel = slice(None) if group is None else (sensors == group)
             handles.append(
                 ax.scatter(
-                    dts[sel], frame[column].to_numpy()[sel],
-                    s=markersize, marker=marker, alpha=alpha,
-                    color=(WEIGHT_DIRECTION_COLORS[direction] if group is None
-                           else palette[group]),
+                    dts[sel],
+                    frame[column].to_numpy()[sel],
+                    s=markersize,
+                    marker=marker,
+                    alpha=alpha,
+                    color=(
+                        WEIGHT_DIRECTION_COLORS[direction]
+                        if group is None
+                        else palette[group]
+                    ),
                     edgecolors="none",
-                    label=direction if group is None else f"{direction} · {group or '?'}",
+                    label=(
+                        direction if group is None else f"{direction} · {group or '?'}"
+                    ),
                 )
             )
 
@@ -2508,13 +3073,17 @@ def plot_inversion_weights(
 
     n_pairs = info["n_pairs"]
     ax.set_title(
-        fig_name
-        or f"TIO pair weights — {n_pairs} pair{'s' if n_pairs != 1 else ''}",
+        fig_name or f"TIO pair weights — {n_pairs} pair{'s' if n_pairs != 1 else ''}",
         fontsize=10,
     )
     if info["legend_handles"]:
-        ax.legend(handles=info["legend_handles"], title=info["legend_title"],
-                  loc="best", fontsize=8, title_fontsize=9)
+        ax.legend(
+            handles=info["legend_handles"],
+            title=info["legend_title"],
+            loc="best",
+            fontsize=8,
+            title_fontsize=9,
+        )
 
     fig.tight_layout()
     return fig, ax
@@ -2526,7 +3095,13 @@ def plot_inversion_weights(
 
 #: Default series colours, by label position (a label may override via ``colors=``).
 _SERIES_PALETTE: tuple[str, ...] = (
-    "#000000", "#d62728", "#1f77b4", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b",
+    "#000000",
+    "#d62728",
+    "#1f77b4",
+    "#2ca02c",
+    "#9467bd",
+    "#ff7f0e",
+    "#8c564b",
 )
 
 _COMPONENT_LABELS: dict[str, str] = {
@@ -2569,14 +3144,16 @@ def _draw_cumulative_series_on_ax(
         t = pd.to_datetime(sub["date"])
         y = sub[stat].to_numpy(dtype="float64")
         color = colors.get(label, _SERIES_PALETTE[i % len(_SERIES_PALETTE)])
-        (line,) = ax.plot(t, y, "-o", color=color, markersize=markersize,
-                          linewidth=1.5, label=label)
+        (line,) = ax.plot(
+            t, y, "-o", color=color, markersize=markersize, linewidth=1.5, label=label
+        )
         handles.append(line)
         if band and band in sub.columns:
             s = sub[band].to_numpy(dtype="float64")
             if np.isfinite(s).any():
-                ax.fill_between(t, y - s, y + s, color=color, alpha=alpha_band,
-                                linewidth=0)
+                ax.fill_between(
+                    t, y - s, y + s, color=color, alpha=alpha_band, linewidth=0
+                )
     ax.axhline(0.0, color="#888", linewidth=0.8, linestyle="--")
     ax.grid(True, alpha=0.25, linestyle=":")
     ax.set_axisbelow(True)
@@ -2640,12 +3217,20 @@ def plot_cumulative_time_series(
     if ax is None:
         if figsize is None:
             figsize = (max(4.0, 3.2 * n_cols), max(3.0, 2.6 * n_rows))
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, squeeze=False,
-                                 sharex="col" if sharex else False, sharey="row")
+        fig, axes = plt.subplots(
+            n_rows,
+            n_cols,
+            figsize=figsize,
+            squeeze=False,
+            sharex="col" if sharex else False,
+            sharey="row",
+        )
     else:
         axes = np.asarray(ax)
         if axes.shape != (n_rows, n_cols):
-            raise ValueError(f"ax must be a ({n_rows}, {n_cols}) array of Axes, got {axes.shape}")
+            raise ValueError(
+                f"ax must be a ({n_rows}, {n_cols}) array of Axes, got {axes.shape}"
+            )
         fig = axes[0, 0].get_figure()
 
     legend_handles = None
@@ -2653,12 +3238,25 @@ def plot_cumulative_time_series(
         for c, pid in enumerate(point_ids):
             a = axes[r, c]
             info = _draw_cumulative_series_on_ax(
-                a, frames, point_id=pid, component=comp, stat=stat, band=band,
-                colors=colors, markersize=markersize, alpha_band=alpha_band)
+                a,
+                frames,
+                point_id=pid,
+                component=comp,
+                stat=stat,
+                band=band,
+                colors=colors,
+                markersize=markersize,
+                alpha_band=alpha_band,
+            )
             if info["missing"]:
-                a.annotate("n/a: " + ", ".join(map(str, info["missing"])),
-                           xy=(0.02, 0.95), xycoords="axes fraction", fontsize=7,
-                           color="#999", va="top")
+                a.annotate(
+                    "n/a: " + ", ".join(map(str, info["missing"])),
+                    xy=(0.02, 0.95),
+                    xycoords="axes fraction",
+                    fontsize=7,
+                    color="#999",
+                    va="top",
+                )
             if r == 0:
                 a.set_title(f"Point {pid}", fontsize=10, fontweight="bold")
             if c == 0:
@@ -2679,6 +3277,7 @@ def plot_cumulative_time_series(
 # ─────────────────────────────────────────────────────────────────────────────
 # Correlation parameters — the matplotlib twins of _corrparams_plotly
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _draw_correlation_design_map_on_ax(
     ax,
@@ -2711,31 +3310,61 @@ def _draw_correlation_design_map_on_ax(
     grid = _dt_grid(frame)
     handles = []
     if grid.size:
-        resolution = float(np.nanmedian(frame["resolution_m"].to_numpy(dtype="float64")))
+        resolution = float(
+            np.nanmedian(frame["resolution_m"].to_numpy(dtype="float64"))
+        )
         # None when every pair is on ASP's automatic range: there is then no
         # search reach, and a line from a fabricated default would describe a
         # constraint that does not exist.
         search = _explicit_search_px(frame)
         bounds = feasibility_bounds(
-            grid, resolution, c_px, search if search is not None else 0.0,
-            k=k, coreg_px=coreg_px, margin_px=margin_px,
+            grid,
+            resolution,
+            c_px,
+            search if search is not None else 0.0,
+            k=k,
+            coreg_px=coreg_px,
+            margin_px=margin_px,
         )
         if search is not None:
-            ax.fill_between(grid, bounds["v_min"], bounds["v_max"],
-                            color="#27ae60", alpha=0.10, label="measurable")
+            ax.fill_between(
+                grid,
+                bounds["v_min"],
+                bounds["v_max"],
+                color="#27ae60",
+                alpha=0.10,
+                label="measurable",
+            )
         handles.append(
-            ax.plot(grid, bounds["v_min"], color=DESIGN_COLORS["floor"], lw=2,
-                    label=f"detection floor (k={k:g})")[0]
+            ax.plot(
+                grid,
+                bounds["v_min"],
+                color=DESIGN_COLORS["floor"],
+                lw=2,
+                label=f"detection floor (k={k:g})",
+            )[0]
         )
         if search is not None:
             handles.append(
-                ax.plot(grid, bounds["v_max"], color=DESIGN_COLORS["ceiling"], lw=2,
-                        ls="--", label=f"search reach (S={search:.0f} px)")[0]
+                ax.plot(
+                    grid,
+                    bounds["v_max"],
+                    color=DESIGN_COLORS["ceiling"],
+                    lw=2,
+                    ls="--",
+                    label=f"search reach (S={search:.0f} px)",
+                )[0]
             )
         else:
             handles.append(
-                ax.plot([], [], color=DESIGN_COLORS["limit"], lw=2, ls="--",
-                        label="search reach: ASP auto")[0]
+                ax.plot(
+                    [],
+                    [],
+                    color=DESIGN_COLORS["limit"],
+                    lw=2,
+                    ls="--",
+                    label="search reach: ASP auto",
+                )[0]
             )
 
     if tau_days:
@@ -2751,7 +3380,8 @@ def _draw_correlation_design_map_on_ax(
         below = sub["snr"].to_numpy(dtype="float64") < float(k)
         color = (
             GROUP_PALETTE[keys.index(key) % len(GROUP_PALETTE)]
-            if column is not None else DESIGN_COLORS["pairs"]
+            if column is not None
+            else DESIGN_COLORS["pairs"]
         )
         # Two scatters rather than one per pair: the below-floor pairs need a
         # different marker, and that is the only split worth making.  Only the
@@ -2767,16 +3397,26 @@ def _draw_correlation_design_map_on_ax(
                 ax.scatter(
                     sub["dt_days"].to_numpy()[mask],
                     sub["velocity_m_yr"].to_numpy()[mask],
-                    s=markersize, marker=marker, color=color,
-                    edgecolors="white", linewidths=0.6, label=label,
+                    s=markersize,
+                    marker=marker,
+                    color=color,
+                    edgecolors="white",
+                    linewidths=0.6,
+                    label=label,
                 )
             )
         n_below += int(below.sum())
 
     # One proxy entry explains every X on the plot, whatever its group colour.
     if n_below:
-        ax.scatter([], [], s=markersize, marker="X", color=DESIGN_COLORS["limit"],
-                   label=f"below floor ({n_below})")
+        ax.scatter(
+            [],
+            [],
+            s=markersize,
+            marker="X",
+            color=DESIGN_COLORS["limit"],
+            label=f"below floor ({n_below})",
+        )
 
     ax.set_xscale("log")
     ax.set_yscale("log")
@@ -2785,9 +3425,13 @@ def _draw_correlation_design_map_on_ax(
     ax.grid(True, alpha=0.25, linestyle=":", which="both")
     ax.set_axisbelow(True)
 
-    return {"n_pairs": len(frame), "legend_handles": handles,
-            "n_below": n_below, "n_groups": len(keys),
-            "legend_title": "Design map"}
+    return {
+        "n_pairs": len(frame),
+        "legend_handles": handles,
+        "n_below": n_below,
+        "n_groups": len(keys),
+        "legend_title": "Design map",
+    }
 
 
 def plot_correlation_design_map(
@@ -2818,14 +3462,20 @@ def plot_correlation_design_map(
 
     info = _draw_correlation_design_map_on_ax(ax, frame, **style)
     n = info["n_pairs"]
-    ax.set_title(fig_name or f"Correlation design map — {n} pair{'s' if n != 1 else ''}",
-                 fontsize=10)
+    ax.set_title(
+        fig_name or f"Correlation design map — {n} pair{'s' if n != 1 else ''}",
+        fontsize=10,
+    )
     handles, _labels = ax.get_legend_handles_labels()
     if handles:
         # A ten-group archive would otherwise bury the plot under its own key.
         many = info.get("n_groups", 0) > 5
-        ax.legend(loc="best", fontsize=7 if many else 8, ncol=2 if many else 1,
-                  framealpha=0.85)
+        ax.legend(
+            loc="best",
+            fontsize=7 if many else 8,
+            ncol=2 if many else 1,
+            framealpha=0.85,
+        )
     fig.tight_layout()
     return fig, ax
 
@@ -2849,21 +3499,45 @@ def _draw_correlation_kernel_search_on_ax(
     )
 
     dts = frame["dt_days"].to_numpy()
-    ax.scatter(dts, frame["kernel_px"].to_numpy(), s=markersize, marker="o",
-               color=GROUP_PALETTE[0], edgecolors="none", label="kernel (px)")
-    ax.scatter(dts, frame["search_px"].to_numpy(), s=markersize, marker="D",
-               color=GROUP_PALETTE[1], edgecolors="none",
-               label="search half-width (px)")
+    ax.scatter(
+        dts,
+        frame["kernel_px"].to_numpy(),
+        s=markersize,
+        marker="o",
+        color=GROUP_PALETTE[0],
+        edgecolors="none",
+        label="kernel (px)",
+    )
+    ax.scatter(
+        dts,
+        frame["search_px"].to_numpy(),
+        s=markersize,
+        marker="D",
+        color=GROUP_PALETTE[1],
+        edgecolors="none",
+        label="search half-width (px)",
+    )
 
-    ax.axhline(TEXTURE_FLOOR_PX, color=DESIGN_COLORS["limit"], lw=1.5, ls=":",
-               label=f"texture floor ({TEXTURE_FLOOR_PX} px)")
+    ax.axhline(
+        TEXTURE_FLOOR_PX,
+        color=DESIGN_COLORS["limit"],
+        lw=1.5,
+        ls=":",
+        label=f"texture floor ({TEXTURE_FLOOR_PX} px)",
+    )
 
     if strain_rate_per_yr:
         grid = _dt_grid(frame)
         if grid.size:
             limit = [strain_kernel_limit_px(strain_rate_per_yr, d) for d in grid]
-            ax.plot(grid, limit, color=DESIGN_COLORS["floor"], lw=2, ls="--",
-                    label="strain ceiling")
+            ax.plot(
+                grid,
+                limit,
+                color=DESIGN_COLORS["floor"],
+                lw=2,
+                ls="--",
+                label="strain ceiling",
+            )
 
     ax.set_xscale("log")
     # Log y, because the strain ceiling reaches hundreds of pixels at short
@@ -2922,11 +3596,17 @@ def _draw_correlation_snr_on_ax(
         (below, "X", DESIGN_COLORS["flagged"], "below floor"),
     ):
         if mask.any():
-            ax.scatter(dts[mask], snr_values[mask], s=markersize, marker=marker,
-                       color=color, edgecolors="none", label=label)
+            ax.scatter(
+                dts[mask],
+                snr_values[mask],
+                s=markersize,
+                marker=marker,
+                color=color,
+                edgecolors="none",
+                label=label,
+            )
 
-    ax.axhline(float(k), color=DESIGN_COLORS["floor"], lw=2,
-               label=f"threshold k={k:g}")
+    ax.axhline(float(k), color=DESIGN_COLORS["floor"], lw=2, label=f"threshold k={k:g}")
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("Temporal baseline Δt (days)")
@@ -2984,13 +3664,17 @@ def _draw_correlation_cost_on_ax(ax, frame: pd.DataFrame, **_ignored) -> dict:
     groups = list(grouped.groups.keys())
     totals = grouped["cost_index"].sum().to_numpy()
 
-    ax.bar(range(len(groups)), totals,
-           color=[GROUP_PALETTE[i % len(GROUP_PALETTE)] for i in range(len(groups))])
+    ax.bar(
+        range(len(groups)),
+        totals,
+        color=[GROUP_PALETTE[i % len(GROUP_PALETTE)] for i in range(len(groups))],
+    )
     ax.set_xticks(range(len(groups)))
     # Readable spans on the axis; the group KEY stays the canonical days form,
     # because it is also a plan-JSON name and a filename fragment.
-    ax.set_xticklabels([_pretty_group(frame, g) for g in groups],
-                       rotation=30, ha="right", fontsize=8)
+    ax.set_xticklabels(
+        [_pretty_group(frame, g) for g in groups], rotation=30, ha="right", fontsize=8
+    )
     ax.set_xlabel("parameter group")
     ax.set_ylabel("relative cost (1.0 = ASP defaults)")
     ax.grid(True, alpha=0.25, linestyle=":", axis="y")
@@ -3020,7 +3704,9 @@ def plot_correlation_cost(
         fig = ax.get_figure()
 
     info = _draw_correlation_cost_on_ax(ax, frame, **style)
-    ax.set_title(fig_name or f"Correlation cost — {info['total']:.0f}× total", fontsize=10)
+    ax.set_title(
+        fig_name or f"Correlation cost — {info['total']:.0f}× total", fontsize=10
+    )
     fig.tight_layout()
     return fig, ax
 

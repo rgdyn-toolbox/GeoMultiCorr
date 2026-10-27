@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Unit tests for the correlation-parameters frame contract."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -30,8 +31,12 @@ RES = [3.0, 3.0, 3.0]
 
 def _frame(**kwargs):
     params = dict(
-        pa_keys=KEYS, dt_days=DTS, resolution_m=RES,
-        pz="PZ", sensor_i=["ps"] * 3, sensor_j=["ps"] * 3,
+        pa_keys=KEYS,
+        dt_days=DTS,
+        resolution_m=RES,
+        pz="PZ",
+        sensor_i=["ps"] * 3,
+        sensor_j=["ps"] * 3,
         velocity_m_yr=2.0,
     )
     params.update(kwargs)
@@ -85,7 +90,11 @@ class TestDerivation:
 
     def test_snr_grows_with_baseline(self):
         frame = _frame().set_index("pa_key")
-        assert frame.loc["p_long", "snr"] > frame.loc["p_mid", "snr"] > frame.loc["p_short", "snr"]
+        assert (
+            frame.loc["p_long", "snr"]
+            > frame.loc["p_mid", "snr"]
+            > frame.loc["p_short", "snr"]
+        )
 
     def test_footprint_is_kernel_times_resolution(self):
         frame = _frame()
@@ -102,8 +111,12 @@ class TestDerivation:
     def test_matched_footprint_gives_different_kernels_per_sensor(self):
         """The multi-sensor point: same metres, different pixel counts."""
         frame = corrparams_frame_from_pairs(
-            ["spot", "planet"], [400.0, 400.0], [1.5, 3.0],
-            sensor_i=["spot", "ps"], footprint_m=60.0, velocity_m_yr=2.0,
+            ["spot", "planet"],
+            [400.0, 400.0],
+            [1.5, 3.0],
+            sensor_i=["spot", "ps"],
+            footprint_m=60.0,
+            velocity_m_yr=2.0,
         ).set_index("pa_key")
         assert frame.loc["spot", "kernel_px"] == 41
         assert frame.loc["planet", "kernel_px"] == 21
@@ -111,7 +124,9 @@ class TestDerivation:
 
     def test_sensor_and_baseline_both_split_groups(self):
         frame = corrparams_frame_from_pairs(
-            ["a", "b", "c"], [400.0, 400.0, 2000.0], [1.5, 3.0, 3.0],
+            ["a", "b", "c"],
+            [400.0, 400.0, 2000.0],
+            [1.5, 3.0, 3.0],
             sensor_i=["spot", "ps", "ps"],
         )
         assert frame["group"].nunique() == 3
@@ -128,7 +143,9 @@ class TestPrecedence:
     def test_group_params_win_over_the_derivation(self):
         frame = _frame()
         group = frame.set_index("pa_key").loc["p_mid", "group"]
-        patched = _frame(group_params={group: {"corr_kernel": (9, 9)}}).set_index("pa_key")
+        patched = _frame(group_params={group: {"corr_kernel": (9, 9)}}).set_index(
+            "pa_key"
+        )
         assert patched.loc["p_mid", "kernel_px"] == 9
         assert patched.loc["p_mid", "source"] == "group"
         assert patched.loc["p_long", "source"] == "auto"
@@ -158,11 +175,18 @@ class TestPlanRoundTrip:
         """The contract that makes a plan a trace, not a summary."""
         derived = _frame()
         plan = build_correlation_plan(
-            name="t", pzone="PZ",
+            name="t",
+            pzone="PZ",
             assumptions={"velocity_m_yr": 2.0},
             pairs=[
-                {"pa_key": k, "dt_days": d, "resolution_m": r,
-                 "pz": "PZ", "sensor_i": "ps", "sensor_j": "ps"}
+                {
+                    "pa_key": k,
+                    "dt_days": d,
+                    "resolution_m": r,
+                    "pz": "PZ",
+                    "sensor_i": "ps",
+                    "sensor_j": "ps",
+                }
                 for k, d, r in zip(KEYS, DTS, RES)
             ],
         )
@@ -174,12 +198,19 @@ class TestPlanRoundTrip:
         group = derived.set_index("pa_key").loc["p_mid", "group"]
         derived = _frame(group_params={group: {"corr_kernel": (9, 9)}})
         plan = build_correlation_plan(
-            name="t", pzone="PZ",
+            name="t",
+            pzone="PZ",
             assumptions={"velocity_m_yr": 2.0},
             groups={group: {"params": {"corr_kernel": (9, 9)}}},
             pairs=[
-                {"pa_key": k, "dt_days": d, "resolution_m": r,
-                 "pz": "PZ", "sensor_i": "ps", "sensor_j": "ps"}
+                {
+                    "pa_key": k,
+                    "dt_days": d,
+                    "resolution_m": r,
+                    "pz": "PZ",
+                    "sensor_i": "ps",
+                    "sensor_j": "ps",
+                }
                 for k, d, r in zip(KEYS, DTS, RES)
             ],
         )
@@ -208,8 +239,12 @@ class TestGroupTable:
     def test_group_takes_the_widest_reaching_pair(self):
         """A box sized for the median would rail on the longest baseline."""
         frame = corrparams_frame_from_pairs(
-            ["a", "b"], [400.0, 700.0], [3.0, 3.0],
-            sensor_i=["ps", "ps"], velocity_m_yr=5.0, dt_bin_ratio=10.0,
+            ["a", "b"],
+            [400.0, 700.0],
+            [3.0, 3.0],
+            sensor_i=["ps", "ps"],
+            velocity_m_yr=5.0,
+            dt_bin_ratio=10.0,
         )
         assert frame["group"].nunique() == 1
         table = group_table(frame)
@@ -268,7 +303,9 @@ class TestRelevantKeys:
         assert "strain_rate_per_yr" not in keys
 
     def test_optional_refinements_kept_when_set(self):
-        keys = relevant_corr_keys("asp_bm", flow_azimuth_deg=90.0, strain_rate_per_yr=0.02)
+        keys = relevant_corr_keys(
+            "asp_bm", flow_azimuth_deg=90.0, strain_rate_per_yr=0.02
+        )
         assert {"flow_azimuth_deg", "strain_rate_per_yr"} <= keys
 
     def test_returns_a_new_set_callers_may_mutate(self):
@@ -287,25 +324,37 @@ class TestPatchedRowsStayConsistent:
 
     def test_cost_follows_a_patched_kernel(self):
         base = _frame().set_index("pa_key").loc["p_mid", "cost_index"]
-        patched = _frame(
-            params_by_pair={"p_mid": {"corr_kernel": (61, 61)}}
-        ).set_index("pa_key").loc["p_mid", "cost_index"]
+        patched = (
+            _frame(params_by_pair={"p_mid": {"corr_kernel": (61, 61)}})
+            .set_index("pa_key")
+            .loc["p_mid", "cost_index"]
+        )
         assert patched > base * 5
 
     def test_cost_follows_a_patched_search_box(self):
         base = _frame().set_index("pa_key").loc["p_mid", "cost_index"]
-        patched = _frame(
-            params_by_pair={"p_mid": {"corr_search": (-80, -80, 80, 80)}}
-        ).set_index("pa_key").loc["p_mid", "cost_index"]
+        patched = (
+            _frame(params_by_pair={"p_mid": {"corr_search": (-80, -80, 80, 80)}})
+            .set_index("pa_key")
+            .loc["p_mid", "cost_index"]
+        )
         assert patched > base * 5
 
     def test_cost_matches_the_reported_kernel_and_search(self):
         from geomulticorr.correlation.corr_params import cost_index
 
-        row = _frame(
-            params_by_pair={"p_mid": {"corr_kernel": (41, 41),
-                                      "corr_search": (-20, -20, 20, 20)}}
-        ).set_index("pa_key").loc["p_mid"]
+        row = (
+            _frame(
+                params_by_pair={
+                    "p_mid": {
+                        "corr_kernel": (41, 41),
+                        "corr_search": (-20, -20, 20, 20),
+                    }
+                }
+            )
+            .set_index("pa_key")
+            .loc["p_mid"]
+        )
         assert row["cost_index"] == pytest.approx(
             cost_index((41, 41), (-20, -20, 20, 20), "asp_bm")
         )
@@ -327,9 +376,13 @@ class TestGroupExtremesGoOppositeWays:
         # One bin, two baselines: the longer one has a tighter strain ceiling
         # and needs a longer reach.
         return corrparams_frame_from_pairs(
-            ["short", "long"], [300.0, 900.0], [3.0, 3.0],
-            sensor_i=["ps", "ps"], velocity_m_yr=5.0,
-            strain_rate_per_yr=0.05, dt_bin_ratio=10.0,
+            ["short", "long"],
+            [300.0, 900.0],
+            [3.0, 3.0],
+            sensor_i=["ps", "ps"],
+            velocity_m_yr=5.0,
+            strain_rate_per_yr=0.05,
+            dt_bin_ratio=10.0,
         )
 
     def test_the_two_pairs_really_share_a_group(self):
@@ -377,7 +430,9 @@ class TestPatchShapes:
     def test_flat_shape_is_applied(self):
         frame = _frame()
         group = frame.set_index("pa_key").loc["p_mid", "group"]
-        patched = _frame(group_params={group: {"corr_kernel": (9, 9)}}).set_index("pa_key")
+        patched = _frame(group_params={group: {"corr_kernel": (9, 9)}}).set_index(
+            "pa_key"
+        )
         assert patched.loc["p_mid", "kernel_px"] == 9
 
     def test_both_shapes_agree(self):
@@ -394,6 +449,7 @@ class TestPatchShapes:
         patched = _frame(
             group_params={group: {"params": {"corr_kernel": (9, 9)}}}
         ).set_index("pa_key")
-        assert patched.loc["p_mid", "kernel_px"] != _frame().set_index(
-            "pa_key"
-        ).loc["p_mid", "kernel_px"]
+        assert (
+            patched.loc["p_mid", "kernel_px"]
+            != _frame().set_index("pa_key").loc["p_mid", "kernel_px"]
+        )

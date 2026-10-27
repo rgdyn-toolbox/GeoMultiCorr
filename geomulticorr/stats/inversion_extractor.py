@@ -39,6 +39,7 @@ Typical usage
 >>> gdf = extractor.extract("/path/to/points.gpkg", buffer_m=5.0)
 >>> gdf_wide = extractor.extract("/path/to/points.gpkg", output_format="wide")
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -110,8 +111,7 @@ def discover_tot_rasters(
         found = sorted(subdir.glob("TOT_*.tif"))
         if found:
             result[comp] = {
-                p.stem.removeprefix("TOT_").removesuffix(f"_{comp}"): p
-                for p in found
+                p.stem.removeprefix("TOT_").removesuffix(f"_{comp}"): p for p in found
             }
     return result
 
@@ -149,7 +149,9 @@ class InversionExtractor:
     ) -> None:
         self.inversion = inversion
         self.inversion_dir: Path = resolve_inversion_dir(inversion)
-        self.tif_paths: dict[str, dict[str, Path]] = self._discover_tif_paths(components)
+        self.tif_paths: dict[str, dict[str, Path]] = self._discover_tif_paths(
+            components
+        )
         if not self.tif_paths:
             raise FileNotFoundError(
                 f"No TOT_*.tif files found under '{self.inversion_dir}'. "
@@ -219,11 +221,13 @@ class InversionExtractor:
                 if stats is None:
                     logger.warning(f"Could not read stats for {path.name}, skipping.")
                     continue
-                records.append({
-                    "date": _fmt_date(date_str),
-                    "component": comp,
-                    **stats,
-                })
+                records.append(
+                    {
+                        "date": _fmt_date(date_str),
+                        "component": comp,
+                        **stats,
+                    }
+                )
         df = pd.DataFrame(records)
         if not df.empty:
             df["date"] = pd.to_datetime(df["date"])
@@ -285,7 +289,9 @@ class InversionExtractor:
         # Reproject to raster CRS
         raster_crs = self._raster_crs()
         if gdf.crs is None:
-            logger.warning("Input GeoPackage has no CRS — assuming it matches raster CRS.")
+            logger.warning(
+                "Input GeoPackage has no CRS — assuming it matches raster CRS."
+            )
         elif gdf.crs != raster_crs:
             gdf = gdf.to_crs(raster_crs)
 
@@ -336,6 +342,7 @@ class InversionExtractor:
 
 # ── module-level helpers (not exported) ────────────────────────────────────────
 
+
 def _fmt_date(date_str: str) -> str:
     """Convert 'YYYYMMDD' string to 'YYYY-MM-DD'."""
     return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
@@ -365,18 +372,20 @@ def _extract_zonal(
     )
     rows = []
     for i, stat in enumerate(zs):
-        rows.append({
-            "point_id":  point_ids[i],
-            "date":      date_fmt,
-            "component": comp,
-            "mean":      stat.get("mean"),
-            "median":    stat.get("median"),
-            "min":       stat.get("min"),
-            "max":       stat.get("max"),
-            "std":       stat.get("std"),
-            "count":     stat.get("count"),
-            "geometry":  gdf.geometry.iloc[i],
-        })
+        rows.append(
+            {
+                "point_id": point_ids[i],
+                "date": date_fmt,
+                "component": comp,
+                "mean": stat.get("mean"),
+                "median": stat.get("median"),
+                "min": stat.get("min"),
+                "max": stat.get("max"),
+                "std": stat.get("std"),
+                "count": stat.get("count"),
+                "geometry": gdf.geometry.iloc[i],
+            }
+        )
     return rows
 
 
@@ -397,18 +406,20 @@ def _extract_points(
     for i, val in enumerate(values):
         v = float(val) if val is not None else np.nan
         is_finite = np.isfinite(v)
-        rows.append({
-            "point_id":  point_ids[i],
-            "date":      date_fmt,
-            "component": comp,
-            "mean":      v,
-            "median":    v,
-            "min":       v,
-            "max":       v,
-            "std":       0.0 if is_finite else np.nan,
-            "count":     1 if is_finite else 0,
-            "geometry":  gdf.geometry.iloc[i],
-        })
+        rows.append(
+            {
+                "point_id": point_ids[i],
+                "date": date_fmt,
+                "component": comp,
+                "mean": v,
+                "median": v,
+                "min": v,
+                "max": v,
+                "std": 0.0 if is_finite else np.nan,
+                "count": 1 if is_finite else 0,
+                "geometry": gdf.geometry.iloc[i],
+            }
+        )
     return rows
 
 
@@ -419,10 +430,9 @@ def _to_wide(long_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     ``{component}_{YYYY-MM-DD}_{stat}`` for each (component, date, stat)
     combination, sorted by component → date → stat.
     """
-    geometry_map = (
-        long_gdf.drop_duplicates("point_id")
-        .set_index("point_id")["geometry"]
-    )
+    geometry_map = long_gdf.drop_duplicates("point_id").set_index("point_id")[
+        "geometry"
+    ]
 
     # Build a plain DataFrame from the long-format records
     df = pd.DataFrame(long_gdf.drop(columns="geometry"))

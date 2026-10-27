@@ -13,6 +13,7 @@
 # (https://www.gnu.org/licenses/agpl-3.0.txt), WITHOUT ANY WARRANTY.
 # ---------------------------------------------------------------------------- #
 """Microsoft Planetary Computer: catalog, archive routing, search and asset download."""
+
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -31,7 +32,9 @@ from geomulticorr.data_sources.mpc_image_search_download import (
 AOI = box(6.0, 45.0, 6.1, 45.1)
 
 
-def _item(item_id="LC08_L2SP_232083_20230301", month=3, cloud=5.0, assets=None, props=None):
+def _item(
+    item_id="LC08_L2SP_232083_20230301", month=3, cloud=5.0, assets=None, props=None
+):
     return pystac.Item(
         id=item_id,
         geometry=mapping(box(5.9, 44.9, 6.2, 45.2)),
@@ -45,12 +48,18 @@ def _item(item_id="LC08_L2SP_232083_20230301", month=3, cloud=5.0, assets=None, 
 class TestCatalog:
     def test_default_keys(self):
         assert ImageCollectionCatalog.default().keys() == [
-            "L9_SR", "L8_SR", "L7_SR", "L5_SR", "S2_SR"
+            "L9_SR",
+            "L8_SR",
+            "L7_SR",
+            "L5_SR",
+            "S2_SR",
         ]
 
     def test_landsat_entries_share_a_collection_split_by_platform(self):
         cat = ImageCollectionCatalog.default()
-        assert {cat.get(k).stac_collection for k in ("L9_SR", "L8_SR")} == {"landsat-c2-l2"}
+        assert {cat.get(k).stac_collection for k in ("L9_SR", "L8_SR")} == {
+            "landsat-c2-l2"
+        }
         assert cat.get("L9_SR").platform != cat.get("L8_SR").platform
         assert cat.get("S2_SR").platform is None
 
@@ -96,7 +105,12 @@ class _FakeStac:
 
     def search(self, collections, intersects=None, datetime=None, query=None, ids=None):
         self.queries.append(
-            {"collections": collections, "datetime": datetime, "query": query, "ids": ids}
+            {
+                "collections": collections,
+                "datetime": datetime,
+                "query": query,
+                "ids": ids,
+            }
         )
         found = self.items_by_collection[collections[0]]
         if ids is not None:
@@ -108,12 +122,21 @@ class _FakeStac:
 def finder(monkeypatch):
     stac = _FakeStac(
         {
-            "landsat-c2-l2": [_item("a", month=3), _item("b", month=7), _item("c", month=7, cloud=1.0)],
+            "landsat-c2-l2": [
+                _item("a", month=3),
+                _item("b", month=7),
+                _item("c", month=7, cloud=1.0),
+            ],
             "sentinel-2-l2a": [_item("far", month=7)],
         }
     )
     monkeypatch.setattr(mod.pystac_client.Client, "open", lambda *a, **k: stac)
-    f = ImageFinder(ImageCollectionCatalog.default(), aoi=AOI, year_range=(2023, 2023), month_range=(6, 8))
+    f = ImageFinder(
+        ImageCollectionCatalog.default(),
+        aoi=AOI,
+        year_range=(2023, 2023),
+        month_range=(6, 8),
+    )
     f._fake = stac
     return f
 
@@ -134,7 +157,10 @@ class TestImageFinder:
         finder.search_metadata(["L8_SR"])
         q = finder._fake.queries[0]
         assert q["datetime"] == "2023-01-01/2023-12-31"
-        assert q["query"] == {"eo:cloud_cover": {"lt": 30}, "platform": {"eq": "landsat-8"}}
+        assert q["query"] == {
+            "eo:cloud_cover": {"lt": 30},
+            "platform": {"eq": "landsat-8"},
+        }
 
     def test_items_are_cached_for_download(self, finder):
         finder.search_metadata(["L8_SR"])
@@ -171,7 +197,9 @@ class TestAssetDownload:
         return _item(assets={"nir08": pystac.Asset(href=href)})
 
     def test_keeps_original_name_and_strips_sas_token(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(mod.requests, "get", lambda *a, **k: self._Resp([b"ab", b"cd"]))
+        monkeypatch.setattr(
+            mod.requests, "get", lambda *a, **k: self._Resp([b"ab", b"cd"])
+        )
         item = self._item_with_asset("https://x/y/B8.TIF?sv=2020&sig=SECRET")
         out = ImageFinder._download_asset_file(item, "nir08", tmp_path, overwrite=False)
         assert out.name == "B8.TIF" and out.read_bytes() == b"abcd"
@@ -181,20 +209,31 @@ class TestAssetDownload:
         monkeypatch.setattr(mod.requests, "get", lambda *a, **k: self._Resp([b"x"]))
         item = self._item_with_asset("https://x/B8.TIF?sig=s")
         out = ImageFinder._download_asset_file(
-            item, "nir08", tmp_path, overwrite=False, rename_prefix="pz_2023-03-01_landsat8"
+            item,
+            "nir08",
+            tmp_path,
+            overwrite=False,
+            rename_prefix="pz_2023-03-01_landsat8",
         )
         assert out.name == "pz_2023-03-01_landsat8_B8.TIF"
 
     def test_existing_file_is_skipped_unless_overwrite(self, tmp_path, monkeypatch):
         (tmp_path / "B8.TIF").write_bytes(b"old")
-        monkeypatch.setattr(mod.requests, "get", lambda *a, **k: pytest.fail("re-downloaded"))
+        monkeypatch.setattr(
+            mod.requests, "get", lambda *a, **k: pytest.fail("re-downloaded")
+        )
         item = self._item_with_asset("https://x/B8.TIF?sig=s")
-        assert ImageFinder._download_asset_file(item, "nir08", tmp_path, overwrite=False) is None
+        assert (
+            ImageFinder._download_asset_file(item, "nir08", tmp_path, overwrite=False)
+            is None
+        )
         assert (tmp_path / "B8.TIF").read_bytes() == b"old"
 
     def test_missing_asset_key(self, tmp_path):
         with pytest.raises(KeyError, match="nir08"):
-            ImageFinder._download_asset_file(_item(), "nir08", tmp_path, overwrite=False)
+            ImageFinder._download_asset_file(
+                _item(), "nir08", tmp_path, overwrite=False
+            )
 
 
 class TestAoiCoercion:
@@ -226,7 +265,12 @@ L8_ID_C = "LC08_L2SP_232084_20230701_20230707_02_T1"
 def _make_finder(monkeypatch, items_by_collection):
     stac = _FakeStac(items_by_collection)
     monkeypatch.setattr(mod.pystac_client.Client, "open", lambda *a, **k: stac)
-    f = ImageFinder(ImageCollectionCatalog.default(), aoi=AOI, year_range=(2023, 2023), month_range=(6, 8))
+    f = ImageFinder(
+        ImageCollectionCatalog.default(),
+        aoi=AOI,
+        year_range=(2023, 2023),
+        month_range=(6, 8),
+    )
     f._fake = stac
     return f
 
@@ -271,7 +315,9 @@ class TestSearchEdges:
 class TestResolveItem:
     def test_cache_hit_is_re_signed(self, finder, monkeypatch):
         signed = []
-        monkeypatch.setattr(mod.planetary_computer, "sign", lambda it: signed.append(it.id) or it)
+        monkeypatch.setattr(
+            mod.planetary_computer, "sign", lambda it: signed.append(it.id) or it
+        )
         finder.search_metadata(["L8_SR"])
         assert finder._resolve_item("L8_SR", "b").id == "b"
         assert signed == ["b"]
@@ -294,11 +340,15 @@ class TestBulkValidation:
 
     def test_bad_organize_by(self, bulk):
         with pytest.raises(ValueError, match="organize_by"):
-            bulk.bulk_download(bulk._gdf, output_dir=bulk._out, mode="full", organize_by="nope")
+            bulk.bulk_download(
+                bulk._gdf, output_dir=bulk._out, mode="full", organize_by="nope"
+            )
 
     def test_missing_columns(self, bulk):
         with pytest.raises(ValueError, match="missing required columns"):
-            bulk.bulk_download(bulk._gdf.drop(columns=["image_id"]), output_dir=bulk._out)
+            bulk.bulk_download(
+                bulk._gdf.drop(columns=["image_id"]), output_dir=bulk._out
+            )
 
 
 class TestBulkDownload:
@@ -332,14 +382,19 @@ class TestBulkDownload:
 
     def test_no_metadata_and_max_images_and_bands_override(self, bulk):
         out = bulk.bulk_download(
-            bulk._gdf, output_dir=bulk._out, download_metadata=False,
-            max_images=1, bands_override=["red"],
+            bulk._gdf,
+            output_dir=bulk._out,
+            download_metadata=False,
+            max_images=1,
+            bands_override=["red"],
         )
         assert len(out) == 1 and self.assets == []
         assert self.crops[0][1] == ["red"]
 
     def test_full_mode_default_layout(self, bulk):
-        bulk.bulk_download(bulk._gdf, output_dir=bulk._out, mode="full", download_metadata=False)
+        bulk.bulk_download(
+            bulk._gdf, output_dir=bulk._out, mode="full", download_metadata=False
+        )
         dirs = {a[2] for a in self.assets}
         assert dirs == {bulk._out / "L8_SR" / L8_ID_B, bulk._out / "L8_SR" / L8_ID_C}
         assert all(d.is_dir() for d in dirs)
@@ -348,13 +403,17 @@ class TestBulkDownload:
         bulk.bulk_download(
             bulk._gdf, output_dir=bulk._out, mode="full", organize_by="sensor_pathrow"
         )
-        assert bulk._out / "LANDSAT8" / "232_083" / L8_ID_B in {a[2] for a in self.assets}
+        assert bulk._out / "LANDSAT8" / "232_083" / L8_ID_B in {
+            a[2] for a in self.assets
+        }
         assert any(a[1] == "mtl.xml" and a[3] is None for a in self.assets)
 
     def test_organize_by_ignored_in_crop_mode(self, bulk, caplog):
         with caplog.at_level(logging.WARNING, logger="mpc_image_search_download"):
             bulk.bulk_download(
-                bulk._gdf, output_dir=bulk._out, organize_by="sensor_pathrow",
+                bulk._gdf,
+                output_dir=bulk._out,
+                organize_by="sensor_pathrow",
                 download_metadata=False,
             )
         assert "ignored in crop mode" in caplog.text
@@ -368,7 +427,9 @@ class TestBulkDownload:
         assert "not found on item" in caplog.text and len(out) == 2
 
     def test_throttle_sleeps_between_scenes(self, bulk):
-        bulk.bulk_download(bulk._gdf, output_dir=bulk._out, throttle_s=0.25, download_metadata=False)
+        bulk.bulk_download(
+            bulk._gdf, output_dir=bulk._out, throttle_s=0.25, download_metadata=False
+        )
         assert bulk._sleeps == [0.25, 0.25]
 
     def test_retry_then_success_uses_exponential_backoff(self, bulk, monkeypatch):
@@ -382,7 +443,10 @@ class TestBulkDownload:
 
         monkeypatch.setattr(ImageFinder, "_download_crop", flaky)
         bulk.bulk_download(
-            bulk._gdf, output_dir=bulk._out, max_images=1, download_metadata=False,
+            bulk._gdf,
+            output_dir=bulk._out,
+            max_images=1,
+            download_metadata=False,
             retry_backoff_s=0.5,
         )
         assert bulk._sleeps == [0.5, 1.0]
@@ -394,7 +458,10 @@ class TestBulkDownload:
         monkeypatch.setattr(ImageFinder, "_download_crop", boom)
         with pytest.raises(RuntimeError, match="Last error: down"):
             bulk.bulk_download(
-                bulk._gdf, output_dir=bulk._out, max_retries=1, retry_backoff_s=0.5,
+                bulk._gdf,
+                output_dir=bulk._out,
+                max_retries=1,
+                retry_backoff_s=0.5,
                 download_metadata=False,
             )
         assert bulk._sleeps == [0.5]
@@ -405,8 +472,16 @@ class TestDownloadCrop:
     def _write(path, west, north, res, size, value=1):
         data = np.full((size, size), value, dtype="uint16")
         with rasterio.open(
-            path, "w", driver="GTiff", width=size, height=size, count=1, dtype="uint16",
-            crs="EPSG:4326", transform=from_origin(west, north, res, res), nodata=0,
+            path,
+            "w",
+            driver="GTiff",
+            width=size,
+            height=size,
+            count=1,
+            dtype="uint16",
+            crs="EPSG:4326",
+            transform=from_origin(west, north, res, res),
+            nodata=0,
         ) as dst:
             dst.write(data, 1)
         return str(path)
@@ -422,7 +497,9 @@ class TestDownloadCrop:
         a = self._write(tmp_path / "a.tif", 5.95, 45.15, 0.002, 100, value=7)
         b = self._write(tmp_path / "b.tif", 5.95, 45.15, 0.002, 100, value=9)
         out = tmp_path / "crop.tif"
-        got = finder_._download_crop(self._item_for(red=a, green=b), ["red", "green"], out, overwrite=False)
+        got = finder_._download_crop(
+            self._item_for(red=a, green=b), ["red", "green"], out, overwrite=False
+        )
         assert got == out
         with rasterio.open(out) as src:
             assert src.count == 2 and src.descriptions == ("red", "green")
@@ -446,18 +523,25 @@ class TestDownloadCrop:
 
     def test_missing_asset_key(self, finder_, tmp_path):
         with pytest.raises(KeyError, match="nir08"):
-            finder_._download_crop(_item(), ["nir08"], tmp_path / "x.tif", overwrite=False)
+            finder_._download_crop(
+                _item(), ["nir08"], tmp_path / "x.tif", overwrite=False
+            )
 
     def test_aoi_outside_raster(self, finder_, tmp_path):
         a = self._write(tmp_path / "far.tif", 20.0, 30.1, 0.002, 100)
         # rasterio raises WindowError before the module's own "does not intersect" guard
         with pytest.raises(rasterio.errors.WindowError):
-            finder_._download_crop(self._item_for(red=a), ["red"], tmp_path / "x.tif", overwrite=False)
+            finder_._download_crop(
+                self._item_for(red=a), ["red"], tmp_path / "x.tif", overwrite=False
+            )
 
     def test_bands_on_different_grids_raise(self, finder_, tmp_path):
         a = self._write(tmp_path / "a.tif", 5.95, 45.15, 0.002, 100)
         b = self._write(tmp_path / "b.tif", 5.95, 45.15, 0.004, 50)
         with pytest.raises(RuntimeError, match="grid differs"):
             finder_._download_crop(
-                self._item_for(red=a, green=b), ["red", "green"], tmp_path / "x.tif", overwrite=False
+                self._item_for(red=a, green=b),
+                ["red", "green"],
+                tmp_path / "x.tif",
+                overwrite=False,
             )

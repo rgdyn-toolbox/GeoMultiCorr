@@ -54,6 +54,7 @@ Public API:
 - :func:`unique_dates`, :func:`unique_couples`, :func:`date_summary` — views.
 - :func:`pairs_stats` / :func:`format_pairs_summary` — unambiguous counts.
 """
+
 from __future__ import annotations
 
 from typing import Sequence
@@ -65,28 +66,36 @@ from geomulticorr.utils._pairs_geometry import DAYS_PER_YEAR, to_decimal_year
 
 #: Columns every pairs frame carries, in order.
 PAIRS_FRAME_COLUMNS: tuple[str, ...] = (
-    "pz",          # pzone name ("" when unknown)
-    "date_i",      # ISO date of the left/first acquisition
-    "date_j",      # ISO date of the right/second acquisition
-    "t_i",         # datetime64 of date_i
-    "t_j",         # datetime64 of date_j
-    "dec_i",       # decimal year of date_i
-    "dec_j",       # decimal year of date_j
-    "dt_days",     # |t_j - t_i| in whole days
-    "dt_years",    # dt_days / 365.25, rounded to 4 (matches Pair.pa_dt_years)
-    "mid_dec",     # decimal year of the pair midpoint
-    "direction",   # "forward" when t_i <= t_j, else "backward"
-    "sensor_i",    # sensor of date_i ("" when unknown)
-    "sensor_j",    # sensor of date_j ("" when unknown)
-    "label",       # "<pz>_<date_i>_<date_j>" — hover/debug key
+    "pz",  # pzone name ("" when unknown)
+    "date_i",  # ISO date of the left/first acquisition
+    "date_j",  # ISO date of the right/second acquisition
+    "t_i",  # datetime64 of date_i
+    "t_j",  # datetime64 of date_j
+    "dec_i",  # decimal year of date_i
+    "dec_j",  # decimal year of date_j
+    "dt_days",  # |t_j - t_i| in whole days
+    "dt_years",  # dt_days / 365.25, rounded to 4 (matches Pair.pa_dt_years)
+    "mid_dec",  # decimal year of the pair midpoint
+    "direction",  # "forward" when t_i <= t_j, else "backward"
+    "sensor_i",  # sensor of date_i ("" when unknown)
+    "sensor_j",  # sensor of date_j ("" when unknown)
+    "label",  # "<pz>_<date_i>_<date_j>" — hover/debug key
 )
 
 _DTYPES: dict[str, str] = {
-    "pz": "object", "date_i": "object", "date_j": "object",
-    "t_i": "datetime64[ns]", "t_j": "datetime64[ns]",
-    "dec_i": "float64", "dec_j": "float64",
-    "dt_days": "int64", "dt_years": "float64", "mid_dec": "float64",
-    "direction": "object", "sensor_i": "object", "sensor_j": "object",
+    "pz": "object",
+    "date_i": "object",
+    "date_j": "object",
+    "t_i": "datetime64[ns]",
+    "t_j": "datetime64[ns]",
+    "dec_i": "float64",
+    "dec_j": "float64",
+    "dt_days": "int64",
+    "dt_years": "float64",
+    "mid_dec": "float64",
+    "direction": "object",
+    "sensor_i": "object",
+    "sensor_j": "object",
     "label": "object",
 }
 
@@ -126,7 +135,9 @@ def _assemble(
             "dt_days": dt_days,
             "dt_years": np.round(dt_days / DAYS_PER_YEAR, 4),
             "mid_dec": to_decimal_year(pd.DatetimeIndex(mid)),
-            "direction": np.where(t_i.to_numpy() <= t_j.to_numpy(), "forward", "backward"),
+            "direction": np.where(
+                t_i.to_numpy() <= t_j.to_numpy(), "forward", "backward"
+            ),
             "sensor_i": np.asarray(sensor_i, dtype=object),
             "sensor_j": np.asarray(sensor_j, dtype=object),
             "label": [f"{p}_{a}_{b}" for p, a, b in zip(pz_arr, date_i, date_j)],
@@ -197,7 +208,9 @@ def pairs_frame_from_overview(
 
     missing = {"pa_left_date", "pa_right_date"} - set(pairs_gdf.columns)
     if missing:
-        raise ValueError(f"pairs overview is missing required column(s): {sorted(missing)}.")
+        raise ValueError(
+            f"pairs overview is missing required column(s): {sorted(missing)}."
+        )
 
     left = pairs_gdf["pa_left_date"].astype(str)
     right = pairs_gdf["pa_right_date"].astype(str)
@@ -225,6 +238,7 @@ def pairs_frame_from_overview(
 
 
 # ── derived views ───────────────────────────────────────────────────────────────
+
 
 def unique_dates(frame: pd.DataFrame) -> pd.DatetimeIndex:
     """Sorted unique acquisition dates appearing on either side of any pair."""
@@ -381,7 +395,9 @@ def date_summary(frame: pd.DataFrame) -> pd.DataFrame:
         {
             "date": pd.concat([frame["date_i"], frame["date_j"]], ignore_index=True),
             "t": pd.concat([frame["t_i"], frame["t_j"]], ignore_index=True),
-            "sensor": pd.concat([frame["sensor_i"], frame["sensor_j"]], ignore_index=True),
+            "sensor": pd.concat(
+                [frame["sensor_i"], frame["sensor_j"]], ignore_index=True
+            ),
         }
     )
     grouped = (

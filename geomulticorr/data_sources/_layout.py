@@ -90,7 +90,9 @@ _CD_EXTENDED_RE = re.compile(
     r"filename\*\s*=\s*(?:[\w.-]+)?'[^']*'([^;]+)", re.IGNORECASE
 )
 # Plain form: filename="LC08_..._B8.TIF" or filename=LC08_..._B8.TIF
-_CD_PLAIN_RE = re.compile(r'filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)', re.IGNORECASE)
+_CD_PLAIN_RE = re.compile(
+    r'filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)', re.IGNORECASE
+)
 
 
 def landsat_dirs(display_id: str) -> Tuple[str, str]:
@@ -117,7 +119,9 @@ def landsat_dirs(display_id: str) -> Tuple[str, str]:
     ('LANDSAT', 'unknown')
     """
     parts = str(display_id).split("_")
-    sensor = LANDSAT_SENSOR_DIRS.get(parts[0].upper(), "LANDSAT") if parts else "LANDSAT"
+    sensor = (
+        LANDSAT_SENSOR_DIRS.get(parts[0].upper(), "LANDSAT") if parts else "LANDSAT"
+    )
 
     grid = _UNKNOWN_GRID
     if len(parts) >= 3:

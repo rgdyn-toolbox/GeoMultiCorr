@@ -5,6 +5,7 @@
 Structural checks only (axes count, one line per label, band on/off, no
 figure leak); the rendered PNG was looked at when the function was written.
 """
+
 from __future__ import annotations
 
 import matplotlib
@@ -26,21 +27,37 @@ def _frame(points=(0, 1, 2), components=("EW", "NS", "magn"), slope=1.0, std=0.3
         for comp in components:
             for k, date in enumerate(DATES):
                 v = slope * k * (1 + 0.1 * pid) * (1 if comp != "NS" else -1)
-                rows.append({"point_id": pid, "date": date, "component": comp,
-                             "mean": v, "median": v, "min": v - 1, "max": v + 1,
-                             "std": std, "count": 9})
+                rows.append(
+                    {
+                        "point_id": pid,
+                        "date": date,
+                        "component": comp,
+                        "mean": v,
+                        "median": v,
+                        "min": v - 1,
+                        "max": v + 1,
+                        "std": std,
+                        "count": 9,
+                    }
+                )
     return pd.DataFrame(rows)
 
 
 class TestLayout:
     def test_grid_and_lines(self):
-        frames = {"SPOT": _frame(), "PlanetScope": _frame(slope=0.9), "Fused": _frame(slope=1.05)}
-        fig = plot_cumulative_time_series(frames, fig_name="Cumulative displacement — test")
+        frames = {
+            "SPOT": _frame(),
+            "PlanetScope": _frame(slope=0.9),
+            "Fused": _frame(slope=1.05),
+        }
+        fig = plot_cumulative_time_series(
+            frames, fig_name="Cumulative displacement — test"
+        )
         try:
             assert len(fig.axes) == 3 * 3
             for a in fig.axes:
-                assert len(a.lines) == 3 + 1                  # three series + the zero line
-                assert len(a.collections) == 3                # one band per series
+                assert len(a.lines) == 3 + 1  # three series + the zero line
+                assert len(a.collections) == 3  # one band per series
             assert fig._suptitle.get_text() == "Cumulative displacement — test"
             assert fig.axes[0].get_title() == "Point 0"
             assert fig.axes[0].get_ylabel() == "EW displacement (m)"
@@ -57,7 +74,9 @@ class TestLayout:
             plt.close(fig)
 
     def test_point_ids_and_components_select_the_grid(self):
-        fig = plot_cumulative_time_series({"a": _frame()}, components=("EW",), point_ids=[2, 0])
+        fig = plot_cumulative_time_series(
+            {"a": _frame()}, components=("EW",), point_ids=[2, 0]
+        )
         try:
             assert len(fig.axes) == 2
             assert fig.axes[0].get_title() == "Point 2"
@@ -70,14 +89,15 @@ class TestLayout:
         try:
             magn_axes = fig.axes[6:]
             for a in magn_axes:
-                assert len(a.lines) == 1 + 1                  # SPOT only + zero line
+                assert len(a.lines) == 1 + 1  # SPOT only + zero line
                 assert any("n/a: PS" in t.get_text() for t in a.texts)
         finally:
             plt.close(fig)
 
     def test_median_stat_and_colour_override(self):
-        fig = plot_cumulative_time_series({"x": _frame()}, stat="median",
-                                          colors={"x": "#123456"})
+        fig = plot_cumulative_time_series(
+            {"x": _frame()}, stat="median", colors={"x": "#123456"}
+        )
         try:
             assert fig.axes[0].lines[0].get_color() == "#123456"
         finally:
@@ -86,7 +106,9 @@ class TestLayout:
     def test_existing_axes_are_used(self):
         fig, axes = plt.subplots(2, 3)
         try:
-            out = plot_cumulative_time_series({"x": _frame()}, components=("EW", "NS"), ax=axes)
+            out = plot_cumulative_time_series(
+                {"x": _frame()}, components=("EW", "NS"), ax=axes
+            )
             assert out is fig
             assert len(axes[0, 0].lines) == 2
         finally:

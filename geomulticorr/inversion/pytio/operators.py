@@ -111,8 +111,12 @@ def _degenerate_row(t, s, pond_liss):
     return row
 
 
-def laplacian(t: np.ndarray, scheme: str = "5pt", pond_liss: int = 2,
-              first_deriv_zero: bool = False) -> np.ndarray:
+def laplacian(
+    t: np.ndarray,
+    scheme: str = "5pt",
+    pond_liss: int = 2,
+    first_deriv_zero: bool = False,
+) -> np.ndarray:
     """Second-derivative operator D2 (S, S) on the irregular grid t.
 
     Transcribes the `matd` construction of `matrice_px` (both iliss schemes,
@@ -171,13 +175,17 @@ def laplacian(t: np.ndarray, scheme: str = "5pt", pond_liss: int = 2,
             dxm2, dxm1 = t[s_avt2] - t[s], t[s_avt] - t[s]
             dx1, dx2 = t[s + 1] - t[s], t[s_apr2] - t[s]
             adt = -(dxm1 * dx1 + dxm1 * dx2 + dx1 * dx2) / (
-                dxm2 * (dx2 - dxm2) * (dx1 - dxm2) * (dxm1 - dxm2))
+                dxm2 * (dx2 - dxm2) * (dx1 - dxm2) * (dxm1 - dxm2)
+            )
             bdt = -(dxm2 * dx1 + dxm2 * dx2 + dx1 * dx2) / (
-                dxm1 * (dx2 - dxm1) * (dx1 - dxm1) * (dxm2 - dxm1))
+                dxm1 * (dx2 - dxm1) * (dx1 - dxm1) * (dxm2 - dxm1)
+            )
             cdt = -(dxm2 * dxm1 + dxm2 * dx2 + dxm1 * dx2) / (
-                dx1 * (dx2 - dx1) * (dxm1 - dx1) * (dxm2 - dx1))
+                dx1 * (dx2 - dx1) * (dxm1 - dx1) * (dxm2 - dx1)
+            )
             ddt = -(dxm2 * dxm1 + dxm2 * dx1 + dxm1 * dx1) / (
-                dx2 * (dx1 - dx2) * (dxm1 - dx2) * (dxm2 - dx2))
+                dx2 * (dx1 - dx2) * (dxm1 - dx2) * (dxm2 - dx2)
+            )
             row = np.zeros(S)
             row[s_avt2], row[s_avt] = adt, bdt
             row[s] = -(adt + bdt) - (cdt + ddt)

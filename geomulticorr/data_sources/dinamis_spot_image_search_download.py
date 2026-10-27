@@ -109,6 +109,7 @@ from shapely.geometry.base import BaseGeometry as _BaseGeometry
 # Optional progress bar
 try:
     from tqdm import tqdm as _tqdm
+
     _HAS_TQDM = True
 except Exception:
     _HAS_TQDM = False
@@ -236,7 +237,10 @@ def _name_fields(item: dict, asset_key: str) -> Dict[str, str]:
         LOGGER.warning(
             "could not parse an acquisition stamp from asset %r of item %s "
             "(basename %r); falling back to the STAC datetime %r",
-            asset_key, item.get("id", "?"), basename, stamp,
+            asset_key,
+            item.get("id", "?"),
+            basename,
+            stamp,
         )
 
     return {
@@ -291,7 +295,7 @@ def _sign_href(href: str) -> str:
 
 
 def _coerce_to_wgs84_geometry(
-    aoi: Union[gpd.GeoDataFrame, _BaseGeometry, Mapping, Sequence[float]]
+    aoi: Union[gpd.GeoDataFrame, _BaseGeometry, Mapping, Sequence[float]],
 ) -> _BaseGeometry:
     """Coerce AOI input (GeoDataFrame / shapely / GeoJSON-like / bbox) to a WGS84 shapely geometry."""
     if isinstance(aoi, gpd.GeoDataFrame):
@@ -476,7 +480,9 @@ class DinamisImageFinder:
         for it in items:
             props = it["properties"]
             dt = pd.to_datetime(props.get("datetime"))
-            if dt is None or not (self.month_range[0] <= dt.month <= self.month_range[1]):
+            if dt is None or not (
+                self.month_range[0] <= dt.month <= self.month_range[1]
+            ):
                 continue
             cloud = props.get("eo:cloud_cover")
             if cloud is not None and cloud > self.cloud_max:
@@ -495,8 +501,16 @@ class DinamisImageFinder:
 
         if not rows:
             return gpd.GeoDataFrame(
-                columns=["image_id", "acquisition_date", "platform", "cloud_percent", "assets", "geometry"],
-                geometry="geometry", crs="EPSG:4326",
+                columns=[
+                    "image_id",
+                    "acquisition_date",
+                    "platform",
+                    "cloud_percent",
+                    "assets",
+                    "geometry",
+                ],
+                geometry="geometry",
+                crs="EPSG:4326",
             )
 
         gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326")
@@ -557,7 +571,9 @@ class DinamisImageFinder:
         if max_images is not None:
             rows = rows[: int(max_images)]
         iterator = (
-            _tqdm(rows, desc="Scenes", unit="scene") if (_HAS_TQDM and show_progress) else rows
+            _tqdm(rows, desc="Scenes", unit="scene")
+            if (_HAS_TQDM and show_progress)
+            else rows
         )
 
         asset_keys = list(assets)
@@ -634,7 +650,9 @@ class DinamisImageFinder:
         if max_images is not None:
             rows = rows[: int(max_images)]
         iterator = (
-            _tqdm(rows, desc="COG clips", unit="scene") if (_HAS_TQDM and show_progress) else rows
+            _tqdm(rows, desc="COG clips", unit="scene")
+            if (_HAS_TQDM and show_progress)
+            else rows
         )
 
         written: List[Path] = []
@@ -667,7 +685,9 @@ class DinamisImageFinder:
                         # are Lambert-93 (EPSG:2154), so an unprojected AOI
                         # lands far off-grid — reproject per scene rather than
                         # assuming a single target CRS for the whole archive.
-                        aoi_geom = [_transform_geom("EPSG:4326", src.crs, aoi_geom_wgs84)]
+                        aoi_geom = [
+                            _transform_geom("EPSG:4326", src.crs, aoi_geom_wgs84)
+                        ]
                         try:
                             clipped, transform = _rio_mask(src, aoi_geom, crop=True)
                         except ValueError as exc:
@@ -676,16 +696,19 @@ class DinamisImageFinder:
                             # instead of aborting the whole batch.
                             LOGGER.warning(
                                 "scene %s does not overlap the AOI, skipping (%s)",
-                                image_id, exc,
+                                image_id,
+                                exc,
                             )
                             continue
                         profile = src.profile.copy()
-                        profile.update({
-                            "height": clipped.shape[1],
-                            "width": clipped.shape[2],
-                            "transform": transform,
-                            "driver": "GTiff",
-                        })
+                        profile.update(
+                            {
+                                "height": clipped.shape[1],
+                                "width": clipped.shape[2],
+                                "transform": transform,
+                                "driver": "GTiff",
+                            }
+                        )
                         with rasterio.open(out_path, "w", **profile) as dst:
                             dst.write(clipped)
                 LOGGER.info("wrote %s", out_path)
@@ -702,7 +725,9 @@ class DinamisImageFinder:
         search = self.client.stac.search(collections=[self.collection], ids=[image_id])
         items = list(search.items_as_dicts())
         if not items:
-            raise RuntimeError(f"Item {image_id!r} not found in collection {self.collection!r}.")
+            raise RuntimeError(
+                f"Item {image_id!r} not found in collection {self.collection!r}."
+            )
         self._item_cache[image_id] = items[0]
         return items[0]
 
@@ -752,9 +777,7 @@ class DinamisImageFinder:
                 )
         return pd.DataFrame(out, columns=["image_id", "asset", "filename"])
 
-    def _clean_filename(
-        self, item: dict, asset_key: str, **overrides: str
-    ) -> str:
+    def _clean_filename(self, item: dict, asset_key: str, **overrides: str) -> str:
         """Render ``filename_template`` against this asset's metadata fields.
 
         The default template reproduces the historical convention

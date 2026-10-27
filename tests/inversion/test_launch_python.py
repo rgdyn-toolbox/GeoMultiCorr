@@ -8,6 +8,7 @@ A minimal inversion folder is assembled by hand (the files
 GeoTIFFs the backend writes can be checked against it. No Fortran binaries,
 no project, no session.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -40,9 +41,16 @@ def _truth(component):
 
 
 def _write_ref_tif(path: Path) -> None:
-    profile = {"driver": "GTiff", "dtype": "float32", "count": 1, "width": W,
-               "height": H, "crs": "EPSG:32632",
-               "transform": from_origin(500000, 4649000, 3.0, 3.0), "nodata": np.nan}
+    profile = {
+        "driver": "GTiff",
+        "dtype": "float32",
+        "count": 1,
+        "width": W,
+        "height": H,
+        "crs": "EPSG:32632",
+        "transform": from_origin(500000, 4649000, 3.0, 3.0),
+        "nodata": np.nan,
+    }
     with rasterio.open(str(path), "w", **profile) as dst:
         dst.write(np.zeros((H, W), np.float32), 1)
 
@@ -55,11 +63,16 @@ def inv(tmp_path):
         (inversion_dir / f"inverse_{d}").mkdir()
         u = _truth(d)
         for i, j in PAIRS:
-            tio_io.write_r4(u[j] - u[i], str(inversion_dir / "binary" / f"{DATES[i]}_{DATES[j]}_{d}"))
+            tio_io.write_r4(
+                u[j] - u[i],
+                str(inversion_dir / "binary" / f"{DATES[i]}_{DATES[j]}_{d}"),
+            )
         (inversion_dir / f"inverse_{d}" / "liste_image_inv").write_text(
-            "".join(f"{date} {t:.4f} {t - T[0]:.4f} 0\n" for date, t in zip(DATES, T)))
+            "".join(f"{date} {t:.4f} {t - T[0]:.4f} 0\n" for date, t in zip(DATES, T))
+        )
         (inversion_dir / f"inverse_{d}" / "liste_couple").write_text(
-            "".join(f"{DATES[i]} {DATES[j]} 1.000000\n" for i, j in PAIRS))
+            "".join(f"{DATES[i]} {DATES[j]} 1.000000\n" for i, j in PAIRS)
+        )
 
     ref = tmp_path / "ref_EW.tif"
     _write_ref_tif(ref)
@@ -92,7 +105,7 @@ class TestPythonLaunch:
                 path = inv.inversion_dir / f"inverse_{d}" / f"TOT_{date}_{d}.tif"
                 assert path.exists(), path
                 data, crs, transform = _read(path)
-                assert data.shape == (H, W)               # full height, not H-1
+                assert data.shape == (H, W)  # full height, not H-1
                 assert crs.to_epsg() == 32632
                 assert transform == from_origin(500000, 4649000, 3.0, 3.0)
                 np.testing.assert_allclose(data, truth[k], atol=1e-4)
@@ -100,8 +113,15 @@ class TestPythonLaunch:
     def test_diagnostics_and_magnitude(self, inv):
         inv.launch(mode="python")
         diag = inv.inversion_dir / "inverse_EW" / "diagnostics"
-        for stem in ("rms", "rank_defect", "n_pairs", "n_images",
-                     "velocity", "velocity_error", "rho"):
+        for stem in (
+            "rms",
+            "rank_defect",
+            "n_pairs",
+            "n_images",
+            "velocity",
+            "velocity_error",
+            "rho",
+        ):
             assert (diag / f"{stem}.tif").exists(), stem
         rms, *_ = _read(diag / "rms.tif")
         assert np.nanmax(rms) < 1e-4
@@ -126,7 +146,7 @@ class TestPythonLaunch:
         assert ds.residual.dims == ("pair_out", "y", "x")
         assert ds.residual.sizes["pair_out"] == len(PAIRS)
         assert np.abs(ds.residual.values).max() < 1e-4
-        assert ds["time"].values[0] == pytest.approx(T[0])     # decimal years kept
+        assert ds["time"].values[0] == pytest.approx(T[0])  # decimal years kept
         assert inv._last_launch["backend"] == "python"
         assert inv._last_launch["directions"] == ["EW", "NS"]
         assert inv._last_launch["seconds"] >= 0
@@ -139,7 +159,9 @@ class TestPythonLaunch:
 
     def test_residual_rasters_on_request(self, inv):
         inv.launch(direction="EW", mode="python", write_residuals=True)
-        files = sorted((inv.inversion_dir / "inverse_EW" / "diagnostics").glob("residual_*.tif"))
+        files = sorted(
+            (inv.inversion_dir / "inverse_EW" / "diagnostics").glob("residual_*.tif")
+        )
         assert len(files) == len(PAIRS)
         assert files[0].name == f"residual_{DATES[0]}_{DATES[1]}.tif"
 
@@ -149,15 +171,22 @@ class TestPythonLaunch:
         u = _truth(d)
         k = 3
         i, j = PAIRS[k]
-        tio_io.write_r4(u[j] - u[i] + 4.0, str(inv.inversion_dir / "binary" / f"{DATES[i]}_{DATES[j]}_{d}"))
-        lines = [f"{DATES[a]} {DATES[b]} {'0.000000' if n == k else '1.000000'}\n"
-                 for n, (a, b) in enumerate(PAIRS)]
+        tio_io.write_r4(
+            u[j] - u[i] + 4.0,
+            str(inv.inversion_dir / "binary" / f"{DATES[i]}_{DATES[j]}_{d}"),
+        )
+        lines = [
+            f"{DATES[a]} {DATES[b]} {'0.000000' if n == k else '1.000000'}\n"
+            for n, (a, b) in enumerate(PAIRS)
+        ]
         (inv.inversion_dir / "inverse_EW" / "liste_couple").write_text("".join(lines))
 
         good = inv.launch(direction="EW", mode="python")["EW"]
         np.testing.assert_allclose(good.TOT.values, u, atol=1e-4)
 
-        inv.solver = TIOConfig(weight_mode="none")       # column 3 not read: the 0 is ignored
+        inv.solver = TIOConfig(
+            weight_mode="none"
+        )  # column 3 not read: the 0 is ignored
         unweighted = inv.launch(direction="EW", mode="python")["EW"]
         assert np.abs(unweighted.TOT.values - u).max() > 0.1
 
@@ -166,7 +195,9 @@ class TestPythonLaunch:
         with pytest.raises(ValueError, match="variance"):
             inv.launch(direction="EW", mode="python")
 
-    def test_post_process_after_a_python_run_only_derives_magnitude(self, inv, caplog_gmc):
+    def test_post_process_after_a_python_run_only_derives_magnitude(
+        self, inv, caplog_gmc
+    ):
         inv.launch(mode="python")
         magn = inv.inversion_dir / "inverse_magn" / f"TOT_{DATES[0]}_magn.tif"
         magn.unlink()
@@ -176,5 +207,5 @@ class TestPythonLaunch:
         assert "no TOT_* files found" not in caplog_gmc.text
 
     def test_python_mode_needs_no_cluster_validation(self, inv):
-        inv.cluster = "isterre"                          # scripts written for a cluster …
-        inv.launch(direction="EW", mode="python")        # … is irrelevant in-process
+        inv.cluster = "isterre"  # scripts written for a cluster …
+        inv.launch(direction="EW", mode="python")  # … is irrelevant in-process

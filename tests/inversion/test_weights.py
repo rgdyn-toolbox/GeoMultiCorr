@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Unit tests for TIO pair-weighting math and compute_pair_weights."""
+
 from __future__ import annotations
 
 import math
@@ -84,12 +85,15 @@ class TestCombineWeights:
 
     def test_wmean_renormalises(self):
         # weights (2,0,0) -> only nmad term counts
-        assert combine_weights(0.4, 0.9, 0.9, method="wmean",
-                               alpha=2, beta=0, gamma=0) == pytest.approx(0.4)
+        assert combine_weights(
+            0.4, 0.9, 0.9, method="wmean", alpha=2, beta=0, gamma=0
+        ) == pytest.approx(0.4)
 
     def test_nan_component_is_neutral(self):
         # missing cc -> treated as 1.0
-        assert combine_weights(0.5, float("nan"), 0.5, method="product") == pytest.approx(0.25)
+        assert combine_weights(
+            0.5, float("nan"), 0.5, method="product"
+        ) == pytest.approx(0.25)
 
     def test_result_clamped_unit(self):
         for m in ("geomean", "wmean", "product"):
@@ -110,19 +114,24 @@ class TestCombineWeightsSpatial:
         )
 
     def test_product(self):
-        assert combine_weights_spatial(0.8, 0.6, method="product") == pytest.approx(0.48)
+        assert combine_weights_spatial(0.8, 0.6, method="product") == pytest.approx(
+            0.48
+        )
 
     def test_wmean_equal_weights(self):
         assert combine_weights_spatial(0.8, 0.6, method="wmean") == pytest.approx(0.7)
 
     def test_wmean_renormalises(self):
         # weights (2,0) -> only nmad term counts
-        assert combine_weights_spatial(0.4, 0.9, method="wmean",
-                                       alpha=2, beta=0) == pytest.approx(0.4)
+        assert combine_weights_spatial(
+            0.4, 0.9, method="wmean", alpha=2, beta=0
+        ) == pytest.approx(0.4)
 
     def test_nan_component_is_neutral(self):
         # missing cc -> treated as 1.0
-        assert combine_weights_spatial(0.5, float("nan"), method="product") == pytest.approx(0.5)
+        assert combine_weights_spatial(
+            0.5, float("nan"), method="product"
+        ) == pytest.approx(0.5)
 
     def test_result_clamped_unit(self):
         for m in ("geomean", "wmean", "product"):
@@ -160,7 +169,9 @@ class TestComputePairWeights:
     """Tests for TIOInversion.compute_pair_weights (built via __new__, no binaries)."""
 
     def _inv(self, pairs):
-        inv = TIOInversion.__new__(TIOInversion)  # bypass __init__ (no session/binaries)
+        inv = TIOInversion.__new__(
+            TIOInversion
+        )  # bypass __init__ (no session/binaries)
         inv.pairs = pairs
         return inv
 
@@ -221,8 +232,8 @@ class TestComputePairWeights:
         """Quality_spatial gives equal weight to pairs with identical NMAD/CC but different Δt."""
         # Two pairs: identical NMAD and CC, but very different temporal baselines.
         # quality mode should suppress the long-Δt pair; quality_spatial should treat them equally.
-        short_dt = _make_pair("short", 30)     # short baseline
-        long_dt = _make_pair("long", 300)      # long baseline
+        short_dt = _make_pair("short", 30)  # short baseline
+        long_dt = _make_pair("long", 300)  # long baseline
         table = {
             "short": _stats2(0.2, 0.2, 0.8),  # identical NMAD/CC
             "long": _stats2(0.2, 0.2, 0.8),
@@ -236,15 +247,19 @@ class TestComputePairWeights:
 
         # quality_spatial mode: identical NMAD/CC → equal weights
         w_spatial = inv.compute_pair_weights("quality_spatial", combine="geomean")
-        assert w_spatial[0] == pytest.approx(w_spatial[1], rel=1e-6), \
-            "quality_spatial should give equal weight despite different Δt"
+        assert w_spatial[0] == pytest.approx(
+            w_spatial[1], rel=1e-6
+        ), "quality_spatial should give equal weight despite different Δt"
 
     def test_recorded_mode_resolution(self, monkeypatch, tmp_path):
         """The label passed to the DB sync reflects what produced the weights."""
         pairs = [
-            SimpleNamespace(pa_key="p1", pa_dt_days=30,
-                            pa_left=SimpleNamespace(th_date="2022-01-01"),
-                            pa_right=SimpleNamespace(th_date="2022-02-01")),
+            SimpleNamespace(
+                pa_key="p1",
+                pa_dt_days=30,
+                pa_left=SimpleNamespace(th_date="2022-01-01"),
+                pa_right=SimpleNamespace(th_date="2022-02-01"),
+            ),
         ]
         monkeypatch.setattr(tio, "load_pair_stats", lambda p: _stats(0.3, 0.6))
         inv = self._inv(pairs)
@@ -256,8 +271,11 @@ class TestComputePairWeights:
 
         captured = {}
         monkeypatch.setattr(
-            inv, "_sync_pair_weights",
-            lambda w_ew, w_ns, mode, combine: captured.update(mode=mode, combine=combine),
+            inv,
+            "_sync_pair_weights",
+            lambda w_ew, w_ns, mode, combine: captured.update(
+                mode=mode, combine=combine
+            ),
         )
 
         # (a) explicit weight_mode wins
@@ -282,9 +300,7 @@ class TestComputePairWeights:
         # (b3) numpy payloads must not raise. A bare `==` on a dict of ndarrays
         # returns an array, and `if <array>` raises "truth value of an array is
         # ambiguous" — aborting a write that works today.
-        inv.write_liste_couple(
-            weights={"EW": np.array([0.5]), "NS": np.array([0.5])}
-        )
+        inv.write_liste_couple(weights={"EW": np.array([0.5]), "NS": np.array([0.5])})
         assert captured == {"mode": "quality", "combine": "wmean"}
 
         # (c) unknown external weights → honest "explicit" (not "uniform")
@@ -319,20 +335,35 @@ class TestComputePairWeights:
 
     def test_all_modes_in_unit_range(self, monkeypatch):
         pairs = [
-            SimpleNamespace(pa_key="p1", pa_dt_days=30,
-                            pa_left=SimpleNamespace(th_date="2022-01-01"),
-                            pa_right=SimpleNamespace(th_date="2022-02-01")),
-            SimpleNamespace(pa_key="p2", pa_dt_days=200,
-                            pa_left=SimpleNamespace(th_date="2022-01-01"),
-                            pa_right=SimpleNamespace(th_date="2022-07-20")),
+            SimpleNamespace(
+                pa_key="p1",
+                pa_dt_days=30,
+                pa_left=SimpleNamespace(th_date="2022-01-01"),
+                pa_right=SimpleNamespace(th_date="2022-02-01"),
+            ),
+            SimpleNamespace(
+                pa_key="p2",
+                pa_dt_days=200,
+                pa_left=SimpleNamespace(th_date="2022-01-01"),
+                pa_right=SimpleNamespace(th_date="2022-07-20"),
+            ),
         ]
         monkeypatch.setattr(tio, "load_pair_stats", lambda p: _stats(0.3, 0.6))
         inv = self._inv(pairs)
-        for mode in ("uniform", "temporal", "relative_temporal", "sigmoid",
-                     "parametric", "quality", "quality_spatial"):
+        for mode in (
+            "uniform",
+            "temporal",
+            "relative_temporal",
+            "sigmoid",
+            "parametric",
+            "quality",
+            "quality_spatial",
+        ):
             w = inv.compute_pair_weights(mode)
             assert len(w) == 2
-            assert all(0.0 <= x <= 1.0 for x in w), f"{mode} produced out-of-range weight"
+            assert all(
+                0.0 <= x <= 1.0 for x in w
+            ), f"{mode} produced out-of-range weight"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -348,10 +379,12 @@ from geomulticorr.inversion.tio_inversion import (  # noqa: E402
 
 def _sensor_pair(key, dt_days, left, right=None):
     from datetime import date, timedelta
+
     right = left if right is None else right
     d2 = (date(2022, 1, 1) + timedelta(days=int(dt_days))).isoformat()
     return SimpleNamespace(
-        pa_key=key, pa_dt_days=dt_days,
+        pa_key=key,
+        pa_dt_days=dt_days,
         pa_left=SimpleNamespace(th_date="2022-01-01", th_sensor=left),
         pa_right=SimpleNamespace(th_date=d2, th_sensor=right),
     )
@@ -393,7 +426,10 @@ class TestSensorWeightFactor:
 
     def test_pair_sensor_label(self):
         assert _pair_sensor_label(_sensor_pair("a", 1, "SPOT6")) == "spot6"
-        assert _pair_sensor_label(_sensor_pair("a", 1, "spot6", "planetscope")) == "spot6+planetscope"
+        assert (
+            _pair_sensor_label(_sensor_pair("a", 1, "spot6", "planetscope"))
+            == "spot6+planetscope"
+        )
         assert _pair_sensor_label(_make_pair("a", 1)) == ""
 
 
@@ -405,21 +441,30 @@ class TestSensorWeightsInComputePairWeights:
         return inv
 
     def test_uniform_times_sensor_factor(self):
-        inv = self._inv([_sensor_pair("a", 30, "spot6"), _sensor_pair("b", 30, "planetscope")])
-        assert inv.compute_pair_weights("uniform", sensor_weights={"planetscope": 0.5}) == [1.0, 0.5]
+        inv = self._inv(
+            [_sensor_pair("a", 30, "spot6"), _sensor_pair("b", 30, "planetscope")]
+        )
+        assert inv.compute_pair_weights(
+            "uniform", sensor_weights={"planetscope": 0.5}
+        ) == [1.0, 0.5]
 
     def test_applied_after_the_w_min_floor(self):
         """The floor is per mode; the sensor factor is a deliberate exception to it."""
-        pairs = [_sensor_pair("a", 30, "spot6"), _sensor_pair("b", 400, "spot6"),
-                 _sensor_pair("c", 30, "planetscope")]
+        pairs = [
+            _sensor_pair("a", 30, "spot6"),
+            _sensor_pair("b", 400, "spot6"),
+            _sensor_pair("c", 30, "planetscope"),
+        ]
         inv = self._inv(pairs)
         plain = inv.compute_pair_weights("sigmoid", w_min=0.2)
-        with_sw = inv.compute_pair_weights("sigmoid", w_min=0.2, sensor_weights={"spot": 0.5})
+        with_sw = inv.compute_pair_weights(
+            "sigmoid", w_min=0.2, sensor_weights={"spot": 0.5}
+        )
         assert with_sw[0] == pytest.approx(0.5 * plain[0])
         assert with_sw[1] == pytest.approx(0.5 * plain[1])
         assert with_sw[2] == pytest.approx(plain[2])
-        assert plain[1] >= 0.2                        # the floor held before the factor
-        assert with_sw[1] < 0.2                       # and is undercut by it, by design
+        assert plain[1] >= 0.2  # the floor held before the factor
+        assert with_sw[1] < 0.2  # and is undercut by it, by design
 
     def test_applies_to_quality_modes_too(self, monkeypatch):
         good = _sensor_pair("good", 30, "spot6")
@@ -440,28 +485,38 @@ class TestSensorWeightsInComputePairWeights:
 
     def test_pairs_without_sensor_attribute_are_unmatched_when_used(self):
         inv = self._inv([_make_pair("a", 30), _sensor_pair("b", 60, "spot6")])
-        assert inv.compute_pair_weights("uniform", sensor_weights={"spot": 0.5}) == [1.0, 0.5]
+        assert inv.compute_pair_weights("uniform", sensor_weights={"spot": 0.5}) == [
+            1.0,
+            0.5,
+        ]
 
     def test_write_liste_couple_threads_it_through(self, tmp_path):
-        inv = self._inv([_sensor_pair("a", 30, "spot6"), _sensor_pair("b", 30, "planetscope")])
+        inv = self._inv(
+            [_sensor_pair("a", 30, "spot6"), _sensor_pair("b", 30, "planetscope")]
+        )
         inv.inversion_dir = tmp_path
         inv._DIRECTIONS = ("EW", "NS")
         inv.solver = tio.TIOConfig()
         for d in inv._DIRECTIONS:
             (tmp_path / f"inverse_{d}").mkdir()
-        out = inv.write_liste_couple(sensor_weights={"planetscope": 0.5}, sync_geodb=False)
+        out = inv.write_liste_couple(
+            sensor_weights={"planetscope": 0.5}, sync_geodb=False
+        )
         assert out["EW"] == [1.0, 0.5]
         text = (tmp_path / "inverse_EW" / "liste_couple").read_text().splitlines()
         assert text[1].endswith(" 0.500000")
 
     def test_explicit_vectors_ignore_it_with_a_warning(self, tmp_path, caplog_gmc):
-        inv = self._inv([_sensor_pair("a", 30, "spot6"), _sensor_pair("b", 30, "planetscope")])
+        inv = self._inv(
+            [_sensor_pair("a", 30, "spot6"), _sensor_pair("b", 30, "planetscope")]
+        )
         inv.inversion_dir = tmp_path
         inv._DIRECTIONS = ("EW", "NS")
         inv.solver = tio.TIOConfig()
         for d in inv._DIRECTIONS:
             (tmp_path / f"inverse_{d}").mkdir()
-        out = inv.write_liste_couple(weights=[0.9, 0.9], sensor_weights={"planetscope": 0.5},
-                                     sync_geodb=False)
+        out = inv.write_liste_couple(
+            weights=[0.9, 0.9], sensor_weights={"planetscope": 0.5}, sync_geodb=False
+        )
         assert out["EW"] == [0.9, 0.9]
         assert "sensor_weights ignored" in caplog_gmc.text

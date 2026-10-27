@@ -2,27 +2,27 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # xzone.py
 # creation date: 2026-05-12.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -31,15 +31,19 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 import geopandas as gpd
+
 # from telenvi import raster_tools as rt
 
+
 class Xzone:
-        
+
     def __init__(self, session, xz_key):
-        
+
         # Check existence and unique
-        assert xz_key in session._xzones.xz_id.values, 'key not found in Xzones layer'
-        assert session._xzones.value_counts('xz_id')[xz_key] == 1, f'more than 1 Xzone have the key {xz_key}'
+        assert xz_key in session._xzones.xz_id.values, "key not found in Xzones layer"
+        assert (
+            session._xzones.value_counts("xz_id")[xz_key] == 1
+        ), f"more than 1 Xzone have the key {xz_key}"
 
         # Attributes
         self.session = session
@@ -48,42 +52,56 @@ class Xzone:
         self.geometry = self.data.geometry
         self.xz_key = xz_key
 
-    def get_thumbs_overview(self, criterias=''):
+    def get_thumbs_overview(self, criterias=""):
         return self.xz_pz.get_thumbs_overview(criterias)
-    
-    def get_thumbs(self, criterias=''):
+
+    def get_thumbs(self, criterias=""):
         return self.xz_pz.get_thumbs(criterias)
 
-    def get_pairs_overview(self, criterias=''):
+    def get_pairs_overview(self, criterias=""):
         return self.xz_pz.get_pairs_overview(criterias)
-    
+
     def get_pairs(self):
         return self.xz_pz.get_pairs()
-    
+
     def get_pairs_complete_overview(self):
-        return self.get_pairs_overview()[self.get_pairs_overview().pa_status == 'complete']
+        return self.get_pairs_overview()[
+            self.get_pairs_overview().pa_status == "complete"
+        ]
 
     def get_pairs_complete(self):
-        return [pair for pair in self.get_pairs() if pair.pa_status == 'complete']
-    
-    def show(self, criterias='', epsg=2154):
+        return [pair for pair in self.get_pairs() if pair.pa_status == "complete"]
+
+    def show(self, criterias="", epsg=2154):
         thumb = self.get_thumbs(criterias)[0].get_geoim()
         thumb = thumb.cropFromVector(self.geometry)
         thumb.maskFromVector(self.geometry, epsg=epsg)
         thumb.show()
-    
+
     def get_pairs_on_period_overview(self, ymin, ymax):
         print("""
         ne fonctionne pas ! a recoder en utilisant np.intersects() !
         """)
         pairs = self.get_pairs_overview()
-        pairs['chrono_min'] = pairs.apply(lambda row: min(int(row.pa_left_date.split('-')[0]), int(row.pa_right_date.split('-')[0])), axis=1)
-        pairs['chrono_max'] = pairs.apply(lambda row: max(int(row.pa_left_date.split('-')[0]), int(row.pa_right_date.split('-')[0])), axis=1)
-        pairs = pairs[(pairs.chrono_min>=ymin)&(pairs.chrono_max<=ymax)]
+        pairs["chrono_min"] = pairs.apply(
+            lambda row: min(
+                int(row.pa_left_date.split("-")[0]),
+                int(row.pa_right_date.split("-")[0]),
+            ),
+            axis=1,
+        )
+        pairs["chrono_max"] = pairs.apply(
+            lambda row: max(
+                int(row.pa_left_date.split("-")[0]),
+                int(row.pa_right_date.split("-")[0]),
+            ),
+            axis=1,
+        )
+        pairs = pairs[(pairs.chrono_min >= ymin) & (pairs.chrono_max <= ymax)]
         return pairs
-        
+
     def get_mean_disp_on_pair(self, magn_path, epsg=2154):
-        target = gpd.GeoDataFrame([{'geometry':self.geometry}]).set_crs(epsg=epsg)
+        target = gpd.GeoDataFrame([{"geometry": self.geometry}]).set_crs(epsg=epsg)
         data = rt.Open(magn_path, geoExtent=target, load_data=True)
         data.maskFromVector(target, epsg=epsg)
         return data.mean()
@@ -91,21 +109,28 @@ class Xzone:
     def get_disp_overview(self):
         disps = []
         pairs = self.get_pairs_complete()
-        for p in tqdm(pairs) :
-            row = pd.Series(dtype='object')
-            row['l'] = int(p.pa_left.th_year)
-            row['r'] = int(p.pa_right.th_year)
-            row['d'] = self.get_mean_disp_on_pair(p.pa_magn_path)
-            row['s'] = row.d / (row.r-row.l)        
-            row['abs_s'] = abs(row.d)
+        for p in tqdm(pairs):
+            row = pd.Series(dtype="object")
+            row["l"] = int(p.pa_left.th_year)
+            row["r"] = int(p.pa_right.th_year)
+            row["d"] = self.get_mean_disp_on_pair(p.pa_magn_path)
+            row["s"] = row.d / (row.r - row.l)
+            row["abs_s"] = abs(row.d)
             disps.append(row)
         return pd.DataFrame(disps)
-    
-    def show_mean_velocities(self, disps=None, savepath=None, bounds=None, col_regular='blue', col_reverse='orange'):
-        fig, ax = plt.subplots(figsize=(15,6.5))
+
+    def show_mean_velocities(
+        self,
+        disps=None,
+        savepath=None,
+        bounds=None,
+        col_regular="blue",
+        col_reverse="orange",
+    ):
+        fig, ax = plt.subplots(figsize=(15, 6.5))
         if type(disps) != pd.DataFrame:
             disps = self.get_disp_overview()
-        
+
         for pair in disps.iloc:
             ya = pair.l
             yb = pair.r
@@ -114,18 +139,25 @@ class Xzone:
             else:
                 color = col_reverse
             meters = pair.s
-            ax.plot([int(ya), int(yb)],[meters, meters], linewidth=1, color=color, alpha=0.7)
-            ax.plot([int(ya), int(yb)],[meters, meters], 'bo', color=color, alpha=0.7)
+            ax.plot(
+                [int(ya), int(yb)],
+                [meters, meters],
+                linewidth=1,
+                color=color,
+                alpha=0.7,
+            )
+            ax.plot([int(ya), int(yb)], [meters, meters], "bo", color=color, alpha=0.7)
 
         if bounds != None:
             ax.set_ybound(lower=bounds[0], upper=bounds[1])
 
         # ax.set_xticks(np.arange(2001,2023,2))
         ax.set_title(f"Vitesses annuelles moyennes redondantes sur {self.xz_key}")
-        ax.grid(True, axis='x')
+        ax.grid(True, axis="x")
         ax.set_xticks(np.unique([year for year in disps.l]))
         if savepath != None:
             fig.savefig(savepath)
+
 
 """
 GMC ISSUE 1

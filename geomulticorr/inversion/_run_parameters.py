@@ -56,6 +56,7 @@ the same reason: a disconnected graph changes what the result means.
 test may assert byte-equality, and re-running ``prepare_inversion`` will always
 show a diff.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -140,7 +141,8 @@ def describe_filter_pipeline(pipeline) -> list[dict] | None:
                 continue
             value = getattr(mask, name)
             params[name] = (
-                f"<{type(value).__name__}>" if name in _OPAQUE_ARGS
+                f"<{type(value).__name__}>"
+                if name in _OPAQUE_ARGS
                 else _jsonable(value)
             )
         described.append({"filter": type(mask).__name__, "params": params})
@@ -209,12 +211,17 @@ def build_run_parameters(
         "weights": {
             "mode": weight_mode,
             "combine": combine,
-            "label": (f"{weight_mode}:{combine}"
-                      if combine and weight_mode in ("quality", "quality_spatial")
-                      else weight_mode),
+            "label": (
+                f"{weight_mode}:{combine}"
+                if combine and weight_mode in ("quality", "quality_spatial")
+                else weight_mode
+            ),
             "source": weight_source,
-            "applied_by_solver": (None if solver is None
-                                  else bool(solver.get("weights_applied_by_solver"))),
+            "applied_by_solver": (
+                None
+                if solver is None
+                else bool(solver.get("weights_applied_by_solver"))
+            ),
             "params": _jsonable(weight_params),
             "relevant_params": sorted(relevant_params),
             "summary": _jsonable(weight_summary),

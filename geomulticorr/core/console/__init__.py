@@ -27,6 +27,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
 """Console output helpers: shared rich console, progress bars + summary tables."""
+
 from geomulticorr.core.console.console import _rich_console
 from geomulticorr.core.console.progress import BatchProgress
 from geomulticorr.core.console.tables import (

@@ -1,4 +1,5 @@
 """Terrain derivatives used to correlate multi-temporal DEMs (utils/_terrain.py)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -40,7 +41,9 @@ class TestSlope:
     def test_plane_slope_is_atan_of_gradient(self, gx, gy):
         z = _plane(gx=gx, gy=gy)
         expected = np.degrees(np.arctan(np.hypot(gx, gy)))
-        np.testing.assert_allclose(_interior(slope_degrees(z, 2.0, 2.0)), expected, atol=1e-9)
+        np.testing.assert_allclose(
+            _interior(slope_degrees(z, 2.0, 2.0)), expected, atol=1e-9
+        )
 
     def test_pixel_size_is_honoured(self):
         """Same elevation array at twice the pixel size is half the gradient."""
@@ -65,7 +68,7 @@ class TestSlope:
         z = rng.normal(size=(15, 12)).cumsum(0).cumsum(1)
         transform = Affine(3.0, 0, 0, 0, -2.0, 0)
         drow, dcol = np.gradient(z, 2.0, 3.0)
-        legacy = np.degrees(np.arctan(np.sqrt(drow ** 2 + dcol ** 2)))
+        legacy = np.degrees(np.arctan(np.sqrt(drow**2 + dcol**2)))
         np.testing.assert_array_equal(compute_slope(z, transform), legacy)
 
     def test_unknown_method_raises(self):
@@ -81,10 +84,14 @@ class TestHillshade:
 
     def test_slope_facing_the_light_is_brighter(self):
         """Light from the NW: a west-facing slope is lit, a south-facing one is not."""
-        faces_west = _plane(gx=0.5)     # rises eastwards → faces west
-        faces_south = _plane(gy=0.5)    # rises northwards → faces south
-        lit = _interior(hillshade(faces_west, 2.0, 2.0, azimuth=315, altitude=45)).mean()
-        shaded = _interior(hillshade(faces_south, 2.0, 2.0, azimuth=315, altitude=45)).mean()
+        faces_west = _plane(gx=0.5)  # rises eastwards → faces west
+        faces_south = _plane(gy=0.5)  # rises northwards → faces south
+        lit = _interior(
+            hillshade(faces_west, 2.0, 2.0, azimuth=315, altitude=45)
+        ).mean()
+        shaded = _interior(
+            hillshade(faces_south, 2.0, 2.0, azimuth=315, altitude=45)
+        ).mean()
         flat = np.sin(np.radians(45))
         assert lit > flat > shaded
 
@@ -102,8 +109,9 @@ class TestHillshade:
         z = _cone()
         single = _interior(hillshade(z, 1.0, 1.0, azimuth=315))
         multi = _interior(multidirectional_hillshade(z, 1.0, 1.0))
-        full_circle = _interior(multidirectional_hillshade(z, 1.0, 1.0,
-                                                           azimuths=(0, 90, 180, 270)))
+        full_circle = _interior(
+            multidirectional_hillshade(z, 1.0, 1.0, azimuths=(0, 90, 180, 270))
+        )
         assert np.nanstd(multi) < np.nanstd(single)
         assert np.nanstd(full_circle) < 0.1 * np.nanstd(multi)
 
@@ -111,7 +119,8 @@ class TestHillshade:
         z = _cone()
         np.testing.assert_allclose(
             multidirectional_hillshade(z, 1.0, 1.0, azimuths=(200,)),
-            hillshade(z, 1.0, 1.0, azimuth=200), equal_nan=True,
+            hillshade(z, 1.0, 1.0, azimuth=200),
+            equal_nan=True,
         )
 
     def test_empty_azimuths_raise(self):

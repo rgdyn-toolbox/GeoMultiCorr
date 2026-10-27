@@ -6,6 +6,7 @@ The writer must leave files a solver could have written — same names, same
 profile — so ``InversionExtractor`` reads a fused product like any other. The
 loader must refuse rasters that are not on one grid rather than resample.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -18,9 +19,11 @@ import xarray as xr
 from geomulticorr.inversion import load_cumulative_stack, write_cumulative_stack
 from geomulticorr.inversion._stack import COMPONENTS, magnitude, tot_tif_name
 from geomulticorr.inversion.tio_inversion import TIOInversion
-from geomulticorr.stats.inversion_extractor import (InversionExtractor,
-                                                    discover_tot_rasters,
-                                                    resolve_inversion_dir)
+from geomulticorr.stats.inversion_extractor import (
+    InversionExtractor,
+    discover_tot_rasters,
+    resolve_inversion_dir,
+)
 from tests.inversion.conftest import write_tot_stack, years_since
 
 DATES = ["20200101", "20201201", "20220201", "20221201", "20240101"]
@@ -71,6 +74,7 @@ class TestLoad:
             data = np.full(yy.shape, 1.0 + t, np.float32)
             data[2, 3] = np.nan
             return data
+
         write_tot_stack(tmp_path, DATES[:3], "EW", fn)
         ds = load_cumulative_stack(tmp_path, components=("EW",), chunks=None)
         assert np.isnan(ds["EW"].values[:, 2, 3]).all()
@@ -90,7 +94,9 @@ class TestLoad:
 
     def test_grid_mismatch_raises(self, tmp_path):
         write_tot_stack(tmp_path, DATES[:2], "EW", _linear(1.0))
-        write_tot_stack(tmp_path, DATES[:2], "NS", _linear(1.0), origin=(500003.0, 4649000.0))
+        write_tot_stack(
+            tmp_path, DATES[:2], "NS", _linear(1.0), origin=(500003.0, 4649000.0)
+        )
         with pytest.raises(ValueError, match="grid"):
             load_cumulative_stack(tmp_path)
 
@@ -122,7 +128,9 @@ class TestWrite:
         written = write_cumulative_stack(ds, out)
         assert set(written) == {"EW", "NS", "magn"}
         assert written == discover_tot_rasters(out)
-        assert written["EW"][DATES[0]] == tot_tif_name(out / "inverse_EW", DATES[0], "EW")
+        assert written["EW"][DATES[0]] == tot_tif_name(
+            out / "inverse_EW", DATES[0], "EW"
+        )
         back = load_cumulative_stack(out, chunks=None)
         xr.testing.assert_allclose(back["EW"], ds["EW"])
         xr.testing.assert_allclose(back["NS"], ds["NS"])
@@ -144,12 +152,17 @@ class TestWrite:
         with rasterio.open(written["magn"][DATES[2]]) as src:
             data = src.read(1)
         np.testing.assert_allclose(
-            data, np.hypot(ds["EW"].values[2], ds["NS"].values[2]), rtol=1e-6)
+            data, np.hypot(ds["EW"].values[2], ds["NS"].values[2]), rtol=1e-6
+        )
 
-    def test_a_magn_variable_is_never_written_as_given(self, inv_dir, tmp_path, caplog_gmc):
+    def test_a_magn_variable_is_never_written_as_given(
+        self, inv_dir, tmp_path, caplog_gmc
+    ):
         ds = load_cumulative_stack(inv_dir, chunks=None)
         ds["magn"] = ds["EW"] * 0 + 42.0
-        written = write_cumulative_stack(ds, tmp_path / "out", components=("EW", "NS", "magn"))
+        written = write_cumulative_stack(
+            ds, tmp_path / "out", components=("EW", "NS", "magn")
+        )
         with rasterio.open(written["magn"][DATES[1]]) as src:
             assert not np.allclose(src.read(1), 42.0)
         assert "derived from EW/NS" in caplog_gmc.text
@@ -171,10 +184,13 @@ class TestWrite:
 
     def test_fit_and_parameters_land_beside_the_rasters(self, inv_dir, tmp_path):
         ds = load_cumulative_stack(inv_dir, chunks=None)
-        fit = xr.Dataset({
-            v: (("component", "y", "x"), np.ones((2, 6, 5), np.float32) * k)
-            for k, v in enumerate(("offset", "rate", "rms", "n_valid"))
-        }, coords={"component": ["EW", "NS"], "y": ds["y"], "x": ds["x"]})
+        fit = xr.Dataset(
+            {
+                v: (("component", "y", "x"), np.ones((2, 6, 5), np.float32) * k)
+                for k, v in enumerate(("offset", "rate", "rms", "n_valid"))
+            },
+            coords={"component": ["EW", "NS"], "y": ds["y"], "x": ds["x"]},
+        )
         fit = fit.rio.write_crs(ds.rio.crs)
         out = tmp_path / "out"
         write_cumulative_stack(ds, out, fit=fit, parameters={"kind": "fusion", "n": 1})
@@ -184,14 +200,22 @@ class TestWrite:
         with rasterio.open(out / "calibration" / "NS_rate.tif") as src:
             np.testing.assert_allclose(src.read(1), 1.0)
         import json
-        assert json.loads((out / "fusion_parameters.json").read_text())["kind"] == "fusion"
 
-    def test_trace_failure_is_logged_not_raised(self, inv_dir, tmp_path, monkeypatch, caplog_gmc):
+        assert (
+            json.loads((out / "fusion_parameters.json").read_text())["kind"] == "fusion"
+        )
+
+    def test_trace_failure_is_logged_not_raised(
+        self, inv_dir, tmp_path, monkeypatch, caplog_gmc
+    ):
         monkeypatch.setattr(
             "geomulticorr.inversion._run_parameters.write_run_parameters",
-            lambda *a, **k: (_ for _ in ()).throw(OSError("read-only")))
+            lambda *a, **k: (_ for _ in ()).throw(OSError("read-only")),
+        )
         ds = load_cumulative_stack(inv_dir, chunks=None)
-        written = write_cumulative_stack(ds, tmp_path / "out", parameters={"kind": "fusion"})
+        written = write_cumulative_stack(
+            ds, tmp_path / "out", parameters={"kind": "fusion"}
+        )
         assert written["EW"][DATES[0]].exists()
         assert "could not write the trace" in caplog_gmc.text
 
@@ -208,7 +232,9 @@ class TestSharedDiscovery:
     def test_resolve_inversion_dir(self, tmp_path):
         assert resolve_inversion_dir(tmp_path) == tmp_path
         assert resolve_inversion_dir(str(tmp_path)) == tmp_path
-        assert resolve_inversion_dir(SimpleNamespace(inversion_dir=tmp_path)) == tmp_path
+        assert (
+            resolve_inversion_dir(SimpleNamespace(inversion_dir=tmp_path)) == tmp_path
+        )
         with pytest.raises(TypeError):
             resolve_inversion_dir(42)
 
@@ -218,8 +244,9 @@ class TestSharedDiscovery:
         assert ex.inversion_dir == inv_dir
 
     def test_tot_tif_name_is_the_method(self, tmp_path):
-        assert TIOInversion._tot_tif_name(tmp_path, "20200101", "magn") == \
-            tot_tif_name(tmp_path, "20200101", "magn")
+        assert TIOInversion._tot_tif_name(tmp_path, "20200101", "magn") == tot_tif_name(
+            tmp_path, "20200101", "magn"
+        )
 
     def test_to_xarray_on_a_bare_instance(self, inv_dir):
         inv = TIOInversion.__new__(TIOInversion)
@@ -253,7 +280,9 @@ class TestStackEdgePaths:
         with pytest.raises(FileNotFoundError, match="No date has every"):
             load_cumulative_stack(tmp_path)
 
-    def test_auto_chunks_without_dask_load_eagerly(self, inv_dir, monkeypatch, caplog_gmc):
+    def test_auto_chunks_without_dask_load_eagerly(
+        self, inv_dir, monkeypatch, caplog_gmc
+    ):
         from geomulticorr.inversion import _stack
 
         monkeypatch.setattr(_stack, "_dask_available", lambda: False)

@@ -9,6 +9,7 @@ closure RMS and ``rank_defect == 0`` — see
 warning here is the only place a user learns that the offset between the
 components was never measured.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -16,14 +17,15 @@ from types import SimpleNamespace
 import pytest
 
 import geomulticorr.inversion.tio_inversion as tio
-from geomulticorr.inversion.tio_inversion import (TIOInversion,
-                                                  connected_date_components)
+from geomulticorr.inversion.tio_inversion import TIOInversion, connected_date_components
 
 
 class TestConnectedDateComponents:
     def test_two_components(self):
-        assert connected_date_components([("a", "b"), ("b", "c"), ("d", "e")]) == \
-            [["a", "b", "c"], ["d", "e"]]
+        assert connected_date_components([("a", "b"), ("b", "c"), ("d", "e")]) == [
+            ["a", "b", "c"],
+            ["d", "e"],
+        ]
 
     def test_empty(self):
         assert connected_date_components([]) == []
@@ -53,12 +55,21 @@ def _pair(d1, d2, s1=None, s2=None):
         left.th_sensor = s1
     if s2 is not None:
         right.th_sensor = s2
-    return SimpleNamespace(pa_key=f"PZ_{d1}_{s1}__{d2}_{s2}", pa_dt_days=30,
-                           pa_left=left, pa_right=right)
+    return SimpleNamespace(
+        pa_key=f"PZ_{d1}_{s1}__{d2}_{s2}", pa_dt_days=30, pa_left=left, pa_right=right
+    )
 
 
-PS = [("2016-08-16", "2017-07-03"), ("2017-07-03", "2018-07-29"), ("2018-07-29", "2019-07-13")]
-SPOT = [("2018-09-27", "2021-08-29"), ("2021-08-29", "2024-07-17"), ("2018-09-27", "2024-07-17")]
+PS = [
+    ("2016-08-16", "2017-07-03"),
+    ("2017-07-03", "2018-07-29"),
+    ("2018-07-29", "2019-07-13"),
+]
+SPOT = [
+    ("2018-09-27", "2021-08-29"),
+    ("2021-08-29", "2024-07-17"),
+    ("2018-09-27", "2024-07-17"),
+]
 
 
 def _inv(pairs, tmp_path):
@@ -84,8 +95,9 @@ def _inv(pairs, tmp_path):
 
 class TestNetworkComponents:
     def test_two_sensor_groups(self, tmp_path):
-        pairs = ([_pair(a, b, "planetscope", "planetscope") for a, b in PS]
-                 + [_pair(a, b, "SPOT6", "spot7") for a, b in SPOT])
+        pairs = [_pair(a, b, "planetscope", "planetscope") for a, b in PS] + [
+            _pair(a, b, "SPOT6", "spot7") for a, b in SPOT
+        ]
         comps = _inv(pairs, tmp_path).network_components()
         assert len(comps) == 2
         ps, spot = comps
@@ -97,9 +109,11 @@ class TestNetworkComponents:
         assert ps["n_pairs"] + spot["n_pairs"] == len(pairs)
 
     def test_bridge_pair_makes_one_component(self, tmp_path):
-        pairs = ([_pair(a, b, "planetscope", "planetscope") for a, b in PS]
-                 + [_pair(a, b, "spot6", "spot6") for a, b in SPOT]
-                 + [_pair("2018-07-29", "2018-09-27", "planetscope", "spot6")])
+        pairs = (
+            [_pair(a, b, "planetscope", "planetscope") for a, b in PS]
+            + [_pair(a, b, "spot6", "spot6") for a, b in SPOT]
+            + [_pair("2018-07-29", "2018-09-27", "planetscope", "spot6")]
+        )
         comps = _inv(pairs, tmp_path).network_components()
         assert len(comps) == 1
         assert comps[0]["sensors"] == ["planetscope", "spot6"]
@@ -119,18 +133,30 @@ class TestNetworkComponents:
 
 class TestPrepareInversionWarning:
     def _stub(self, monkeypatch):
-        for name in ("setup_directories", "write_file_info_rsc", "export_pair_to_binary",
-                     "_create_symlinks", "write_liste_image", "write_liste_image_inv",
-                     "write_input_tio", "write_launch_script", "write_run_parameters"):
+        for name in (
+            "setup_directories",
+            "write_file_info_rsc",
+            "export_pair_to_binary",
+            "_create_symlinks",
+            "write_liste_image",
+            "write_liste_image_inv",
+            "write_input_tio",
+            "write_launch_script",
+            "write_run_parameters",
+        ):
             monkeypatch.setattr(TIOInversion, name, lambda *a, **k: None)
-        monkeypatch.setattr(TIOInversion, "write_liste_couple",
-                            lambda *a, **k: {"EW": [1], "NS": [1]})
+        monkeypatch.setattr(
+            TIOInversion, "write_liste_couple", lambda *a, **k: {"EW": [1], "NS": [1]}
+        )
         monkeypatch.setattr(tio, "print_tio_export_summary", lambda *a, **k: None)
 
-    def test_disconnected_network_warns_and_is_stashed(self, tmp_path, monkeypatch, caplog_gmc):
+    def test_disconnected_network_warns_and_is_stashed(
+        self, tmp_path, monkeypatch, caplog_gmc
+    ):
         self._stub(monkeypatch)
-        pairs = ([_pair(a, b, "planetscope", "planetscope") for a, b in PS]
-                 + [_pair(a, b, "spot6", "spot7") for a, b in SPOT])
+        pairs = [_pair(a, b, "planetscope", "planetscope") for a, b in PS] + [
+            _pair(a, b, "spot6", "spot7") for a, b in SPOT
+        ]
         inv = _inv(pairs, tmp_path)
         inv.prepare_inversion(print_summary=False)
         assert "2 disconnected components" in caplog_gmc.text
@@ -154,13 +180,19 @@ class TestPrepareInversionWarning:
             captured.update(kwargs)
             return {"ok": True}
 
-        monkeypatch.setattr("geomulticorr.inversion._run_parameters.build_run_parameters", fake_build)
-        monkeypatch.setattr("geomulticorr.inversion._run_parameters.write_run_parameters",
-                            lambda path, doc: path)
+        monkeypatch.setattr(
+            "geomulticorr.inversion._run_parameters.build_run_parameters", fake_build
+        )
+        monkeypatch.setattr(
+            "geomulticorr.inversion._run_parameters.write_run_parameters",
+            lambda path, doc: path,
+        )
         pairs = [_pair(a, b, "s", "s") for a, b in PS + SPOT]
         inv = _inv(pairs, tmp_path)
         inv._raster_width, inv._raster_height = 4, 3
         inv._last_network = {"n_components": 2, "components": inv.network_components()}
-        inv.write_run_parameters("uniform", None, "computed", {}, {"EW": [1], "NS": [1]})
+        inv.write_run_parameters(
+            "uniform", None, "computed", {}, {"EW": [1], "NS": [1]}
+        )
         assert captured["network"]["n_components"] == 2
         assert captured["solver"]["iponder"] == 2

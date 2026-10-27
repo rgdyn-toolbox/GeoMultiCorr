@@ -13,6 +13,7 @@
 # (https://www.gnu.org/licenses/agpl-3.0.txt), WITHOUT ANY WARRANTY.
 # ---------------------------------------------------------------------------- #
 """USGS M2M: token login, rate-limit retry, error diagnosis and download matching."""
+
 import io
 from pathlib import Path
 import json
@@ -84,8 +85,13 @@ class _Resp(io.BytesIO):
 
 
 def _http_error(code, body):
-    return HTTPError("http://x/api/" + body.get("endpoint", "scene-search"), code, "m", {},
-                     io.BytesIO(json.dumps(body).encode()))
+    return HTTPError(
+        "http://x/api/" + body.get("endpoint", "scene-search"),
+        code,
+        "m",
+        {},
+        io.BytesIO(json.dumps(body).encode()),
+    )
 
 
 class TestPost:
@@ -106,7 +112,12 @@ class TestPost:
 
     def test_unauthenticated_call_sends_no_token(self, monkeypatch):
         seen = {}
-        monkeypatch.setattr(mod, "urlopen", lambda req, timeout: seen.update(h=dict(req.header_items())) or _Resp(b"{}"))
+        monkeypatch.setattr(
+            mod,
+            "urlopen",
+            lambda req, timeout: seen.update(h=dict(req.header_items()))
+            or _Resp(b"{}"),
+        )
         c = M2MClient(username="u", api_token="t")
         c.session_token = "SESSION"
         c._post("http://x/login-token", {}, authenticated=False)
@@ -114,14 +125,23 @@ class TestPost:
 
     def test_error_code_in_a_200_body_raises(self, monkeypatch):
         monkeypatch.setattr(
-            mod, "urlopen", lambda req, timeout: _Resp(b'{"errorCode": "AUTH", "errorMessage": "bad"}')
+            mod,
+            "urlopen",
+            lambda req, timeout: _Resp(b'{"errorCode": "AUTH", "errorMessage": "bad"}'),
         )
         with pytest.raises(RuntimeError, match="AUTH"):
             M2MClient(username="u", api_token="t")._post("http://x/y", {})
 
     def test_403_on_download_endpoint_points_at_the_role(self, monkeypatch):
         def fake(req, timeout):
-            raise _http_error(403, {"errorCode": "FORBIDDEN", "errorMessage": "no", "endpoint": "download-request"})
+            raise _http_error(
+                403,
+                {
+                    "errorCode": "FORBIDDEN",
+                    "errorMessage": "no",
+                    "endpoint": "download-request",
+                },
+            )
 
         monkeypatch.setattr(mod, "urlopen", fake)
         c = M2MClient(username="u", api_token="t")
@@ -130,9 +150,15 @@ class TestPost:
         assert "download role" in str(exc.value) and "FORBIDDEN" in str(exc.value)
 
     def test_403_on_search_points_at_the_token(self, monkeypatch):
-        monkeypatch.setattr(mod, "urlopen", lambda req, timeout: (_ for _ in ()).throw(_http_error(401, {})))
+        monkeypatch.setattr(
+            mod,
+            "urlopen",
+            lambda req, timeout: (_ for _ in ()).throw(_http_error(401, {})),
+        )
         with pytest.raises(RuntimeError, match="regenerate the application token"):
-            M2MClient(username="u", api_token="t")._post("http://x/api/scene-search", {})
+            M2MClient(username="u", api_token="t")._post(
+                "http://x/api/scene-search", {}
+            )
 
     def test_rate_limit_is_retried_with_backoff(self, monkeypatch):
         attempts, sleeps = [], []
@@ -145,25 +171,32 @@ class TestPost:
 
         monkeypatch.setattr(M2MClient, "_post_once", once)
         monkeypatch.setattr(mod._time, "sleep", sleeps.append)
-        assert M2MClient(username="u", api_token="t")._post("http://x/y", {}) == {"data": "ok"}
+        assert M2MClient(username="u", api_token="t")._post("http://x/y", {}) == {
+            "data": "ok"
+        }
         assert len(attempts) == 3
         assert sleeps == [mod.RATE_LIMIT_BACKOFF_S, 2 * mod.RATE_LIMIT_BACKOFF_S]
 
     def test_rate_limit_gives_up_after_the_retry_budget(self, monkeypatch):
         n = []
         monkeypatch.setattr(
-            M2MClient, "_post_once",
-            lambda *a, **k: n.append(1) or (_ for _ in ()).throw(RuntimeError("RATE_LIMIT")),
+            M2MClient,
+            "_post_once",
+            lambda *a, **k: n.append(1)
+            or (_ for _ in ()).throw(RuntimeError("RATE_LIMIT")),
         )
         monkeypatch.setattr(mod._time, "sleep", lambda s: None)
         with pytest.raises(RuntimeError, match="RATE_LIMIT"):
-            M2MClient(username="u", api_token="t")._post("http://x/y", {}, rate_limit_retries=2)
+            M2MClient(username="u", api_token="t")._post(
+                "http://x/y", {}, rate_limit_retries=2
+            )
         assert len(n) == 3
 
     def test_other_errors_are_not_retried(self, monkeypatch):
         n = []
         monkeypatch.setattr(
-            M2MClient, "_post_once",
+            M2MClient,
+            "_post_once",
             lambda *a, **k: n.append(1) or (_ for _ in ()).throw(RuntimeError("boom")),
         )
         with pytest.raises(RuntimeError, match="boom"):
@@ -172,17 +205,42 @@ class TestPost:
 
 
 def _sec(name, available=True, ident="shared"):
-    return {"displayId": name, "entityId": "E_" + name.replace(".", "_"), "id": ident, "available": available}
+    return {
+        "displayId": name,
+        "entityId": "E_" + name.replace(".", "_"),
+        "id": ident,
+        "available": available,
+    }
 
 
 def _options():
     scene = "LC09_L1TP_232083_20231221_20231223_02_T1"
-    secs = [_sec(f"{scene}_B1.TIF"), _sec(f"{scene}_B10.TIF"), _sec(f"{scene}_B8.TIF"),
-            _sec(f"{scene}_MTL.txt"), _sec(f"{scene}_ANG.txt"), _sec(f"{scene}_B5.TIF", available=False)]
+    secs = [
+        _sec(f"{scene}_B1.TIF"),
+        _sec(f"{scene}_B10.TIF"),
+        _sec(f"{scene}_B8.TIF"),
+        _sec(f"{scene}_MTL.txt"),
+        _sec(f"{scene}_ANG.txt"),
+        _sec(f"{scene}_B5.TIF", available=False),
+    ]
     return [
-        {"entityId": "ent", "available": True, "productName": "Band File", "secondaryDownloads": secs},
-        {"entityId": "ent", "available": True, "productName": "Band File", "secondaryDownloads": secs},
-        {"entityId": "ent", "available": True, "productName": "Landsat Collection 2 Level-1 Product Bundle"},
+        {
+            "entityId": "ent",
+            "available": True,
+            "productName": "Band File",
+            "secondaryDownloads": secs,
+        },
+        {
+            "entityId": "ent",
+            "available": True,
+            "productName": "Band File",
+            "secondaryDownloads": secs,
+        },
+        {
+            "entityId": "ent",
+            "available": True,
+            "productName": "Landsat Collection 2 Level-1 Product Bundle",
+        },
         {"entityId": "other", "available": True, "productName": "Product Bundle"},
     ], scene
 
@@ -216,7 +274,9 @@ class TestMatching:
 
     def test_missing_band_is_skipped_with_a_warning(self, caplog):
         options, _ = _options()
-        got = M2MImageFinder._match_products(options, "ent", ["B8", "B5"])  # B5 unavailable
+        got = M2MImageFinder._match_products(
+            options, "ent", ["B8", "B5"]
+        )  # B5 unavailable
         assert len(got) == 1
         assert any("B5" in r.message for r in caplog.records)
 
@@ -233,12 +293,18 @@ class TestMatching:
 class TestUrlBasename:
     @pytest.mark.parametrize(
         "url, expected",
-        [("https://x/y/LC08_B8.TIF?token=1", "LC08_B8.TIF"), ("https://x/download", None),
-         ("https://x/", None), ("https://x/a/..%2F..%2Fx.tif", "x.tif")],
+        [
+            ("https://x/y/LC08_B8.TIF?token=1", "LC08_B8.TIF"),
+            ("https://x/download", None),
+            ("https://x/", None),
+            ("https://x/a/..%2F..%2Fx.tif", "x.tif"),
+        ],
     )
     def test_cases(self, url, expected):
         got = mod._url_basename(url)
-        assert got == expected or (expected is not None and got is not None and "/" not in got)
+        assert got == expected or (
+            expected is not None and got is not None and "/" not in got
+        )
 
 
 class TestDownloadFile:
@@ -255,24 +321,34 @@ class TestDownloadFile:
 
     def test_keeps_the_server_name_when_asked(self, tmp_path, monkeypatch):
         self._patch(monkeypatch, b"d", cd='attachment; filename="server.tif"')
-        out = M2MImageFinder._download_file("https://x/dl", tmp_path, "mine.tif", keep_original_names=True)
+        out = M2MImageFinder._download_file(
+            "https://x/dl", tmp_path, "mine.tif", keep_original_names=True
+        )
         assert out.name == "server.tif"
 
     def test_server_name_cannot_escape_the_directory(self, tmp_path, monkeypatch):
         self._patch(monkeypatch, b"d", cd='attachment; filename="../../evil.sh"')
-        out = M2MImageFinder._download_file("https://x/dl", tmp_path / "out", "mine.tif", keep_original_names=True)
+        out = M2MImageFinder._download_file(
+            "https://x/dl", tmp_path / "out", "mine.tif", keep_original_names=True
+        )
         assert out.parent == tmp_path / "out" and out.name == "evil.sh"
 
     def test_url_basename_then_fallback(self, tmp_path, monkeypatch):
         self._patch(monkeypatch, b"d")
-        out = M2MImageFinder._download_file("https://x/dir/f.tif?t=1", tmp_path, "mine.tif", keep_original_names=True)
+        out = M2MImageFinder._download_file(
+            "https://x/dir/f.tif?t=1", tmp_path, "mine.tif", keep_original_names=True
+        )
         assert out.name == "f.tif"
-        out = M2MImageFinder._download_file("https://x/dl", tmp_path, "mine.tif", keep_original_names=True)
+        out = M2MImageFinder._download_file(
+            "https://x/dl", tmp_path, "mine.tif", keep_original_names=True
+        )
         assert out.name == "mine.tif"
 
 
 def test_finder_construction_takes_a_shapely_aoi():
-    f = M2MImageFinder(M2MClient(username="u", api_token="t"), aoi=box(6, 45, 6.1, 45.1), cloud_max=10)
+    f = M2MImageFinder(
+        M2MClient(username="u", api_token="t"), aoi=box(6, 45, 6.1, 45.1), cloud_max=10
+    )
     assert f.cloud_max == 10 and f.aoi_area_km2 > 0
 
 
@@ -328,7 +404,9 @@ class TestClientEndpoints:
     def test_permissions_logs_in_and_returns_strings(self, routed, monkeypatch):
         client, calls, responses = routed
         client.session_token = None
-        monkeypatch.setattr(client, "login", lambda: setattr(client, "session_token", "S"))
+        monkeypatch.setattr(
+            client, "login", lambda: setattr(client, "session_token", "S")
+        )
         responses[mod.M2M_PERMISSIONS_ENDPOINT] = {"data": ["user", "download"]}
         assert client.permissions() == ["user", "download"]
         assert client.session_token == "S"
@@ -341,12 +419,20 @@ class TestClientEndpoints:
     def test_search_scenes_builds_mbr_payload(self, routed):
         client, calls, responses = routed
         responses[mod.M2M_SEARCH_ENDPOINT] = {"data": {"results": [{"entityId": "e"}]}}
-        out = client.search_scenes("landsat_ot_c2_l1", box(6, 45, 7, 46), ("2020-01-01", "2020-12-28"), cloud_max=15)
+        out = client.search_scenes(
+            "landsat_ot_c2_l1",
+            box(6, 45, 7, 46),
+            ("2020-01-01", "2020-12-28"),
+            cloud_max=15,
+        )
         assert out == [{"entityId": "e"}]
         _, payload, _ = calls[-1]
         flt = payload["sceneFilter"]
         assert flt["spatialFilter"]["lowerLeft"] == {"latitude": 45.0, "longitude": 6.0}
-        assert flt["spatialFilter"]["upperRight"] == {"latitude": 46.0, "longitude": 7.0}
+        assert flt["spatialFilter"]["upperRight"] == {
+            "latitude": 46.0,
+            "longitude": 7.0,
+        }
         assert flt["cloudCoverFilter"]["max"] == 15
         assert flt["acquisitionFilter"] == {"start": "2020-01-01", "end": "2020-12-28"}
 
@@ -359,11 +445,17 @@ class TestClientEndpoints:
     def test_download_options_request_retrieve(self, routed):
         client, calls, responses = routed
         responses[mod.M2M_DOWNLOAD_OPTIONS_ENDPOINT] = {"data": [{"id": 1}]}
-        responses[mod.M2M_DOWNLOAD_REQUEST_ENDPOINT] = {"data": {"availableDownloads": []}}
-        responses[mod.M2M_DOWNLOAD_RETRIEVE_ENDPOINT] = {"data": {"available": [{"url": "u"}]}}
+        responses[mod.M2M_DOWNLOAD_REQUEST_ENDPOINT] = {
+            "data": {"availableDownloads": []}
+        }
+        responses[mod.M2M_DOWNLOAD_RETRIEVE_ENDPOINT] = {
+            "data": {"available": [{"url": "u"}]}
+        }
         assert client.download_options("ds", ["a", "b"]) == [{"id": 1}]
         assert calls[-1][1] == {"datasetName": "ds", "entityIds": ["a", "b"]}
-        assert client.download_request([{"entityId": "a", "productId": "p"}], label="L") == {"availableDownloads": []}
+        assert client.download_request(
+            [{"entityId": "a", "productId": "p"}], label="L"
+        ) == {"availableDownloads": []}
         assert calls[-1][1]["label"] == "L"
         assert client.download_retrieve(label="L") == {"available": [{"url": "u"}]}
         assert calls[-1][1] == {"label": "L"}
@@ -406,7 +498,9 @@ class TestClientEndpoints:
 
 def test_non_json_error_body_still_reports_the_status(monkeypatch):
     def fake(req, timeout):
-        raise HTTPError("http://x/api/scene-search", 500, "m", {}, io.BytesIO(b"<html>oops</html>"))
+        raise HTTPError(
+            "http://x/api/scene-search", 500, "m", {}, io.BytesIO(b"<html>oops</html>")
+        )
 
     monkeypatch.setattr(mod, "urlopen", fake)
     with pytest.raises(RuntimeError, match="HTTP 500 on scene-search"):
@@ -429,7 +523,9 @@ class _Client(M2MClient):
         self.retrieve_results = []
         self.queue = []
 
-    def search_scenes(self, collection_id, geometry, date_range, cloud_max=100, max_results=5000):
+    def search_scenes(
+        self, collection_id, geometry, date_range, cloud_max=100, max_results=5000
+    ):
         r = self.search_results.get(collection_id, [])
         if isinstance(r, Exception):
             raise r
@@ -490,9 +586,24 @@ class TestSearchMetadata:
     def test_rows_dates_and_cloud_fallbacks(self):
         c = _Client()
         c.search_results["landsat_ot_c2_l1"] = [
-            {"entityId": "a", "displayId": "da", "acquisitionDate": "2023-01-01", "cloudCover": "5"},
-            {"entityId": "b", "displayId": "db", "temporalCoverage": {"startDate": "2023-06-01"}, "cloudCover": "-1"},
-            {"entityId": "c", "displayId": "dc", "temporalCoverage": {"endDate": "2023-03-01"}, "cloudCover": None},
+            {
+                "entityId": "a",
+                "displayId": "da",
+                "acquisitionDate": "2023-01-01",
+                "cloudCover": "5",
+            },
+            {
+                "entityId": "b",
+                "displayId": "db",
+                "temporalCoverage": {"startDate": "2023-06-01"},
+                "cloudCover": "-1",
+            },
+            {
+                "entityId": "c",
+                "displayId": "dc",
+                "temporalCoverage": {"endDate": "2023-03-01"},
+                "cloudCover": None,
+            },
         ]
         gdf = _finder(c).search_metadata(["L8_L1"])
         assert list(gdf["image_id"]) == ["b", "c", "a"]  # newest first
@@ -532,7 +643,9 @@ class TestDownloadImages:
 
     def test_invalid_organize_by_raises(self, tmp_path):
         with pytest.raises(ValueError, match="organize_by"):
-            _finder().download_images(_images(), output_dir=tmp_path, organize_by="bogus")
+            _finder().download_images(
+                _images(), output_dir=tmp_path, organize_by="bogus"
+            )
 
     def test_logs_in_when_there_is_no_session(self, tmp_path, monkeypatch):
         c = self._ready_client()
@@ -543,17 +656,28 @@ class TestDownloadImages:
         _finder(c).download_images(_images(), output_dir=tmp_path)
         assert logins == [1]
 
-    def test_happy_path_names_and_files_per_collection(self, tmp_path, monkeypatch, fast):
+    def test_happy_path_names_and_files_per_collection(
+        self, tmp_path, monkeypatch, fast
+    ):
         c = self._ready_client()
-        c.request_result = {"availableDownloads": [{"entityId": "ent", "url": "https://x/f.tar.gz?t=1"}]}
+        c.request_result = {
+            "availableDownloads": [{"entityId": "ent", "url": "https://x/f.tar.gz?t=1"}]
+        }
         self._patch_download(monkeypatch)
-        out = _finder(c).download_images(_images(), output_dir=tmp_path, show_progress=False)
+        out = _finder(c).download_images(
+            _images(), output_dir=tmp_path, show_progress=False
+        )
         assert len(out) == 1
         assert out[0].parent == tmp_path / "L9_L1"
-        assert out[0].name == f"{SCENE}_2023-12-21_Landsat_Collection_2_Level_1_Product_Bundle.gz"
+        assert (
+            out[0].name
+            == f"{SCENE}_2023-12-21_Landsat_Collection_2_Level_1_Product_Bundle.gz"
+        )
         assert c.requests[0][1] == "gmc_L9_L1"
 
-    def test_bands_pull_metadata_and_sensor_pathrow_layout(self, tmp_path, monkeypatch, fast):
+    def test_bands_pull_metadata_and_sensor_pathrow_layout(
+        self, tmp_path, monkeypatch, fast
+    ):
         c = self._ready_client()
         options, scene = _options()
         # per-file entries carry their own entityId, as M2M's secondaryDownloads do
@@ -564,14 +688,24 @@ class TestDownloadImages:
         c.options = options
         c.request_result = {
             "availableDownloads": [
-                {"entityId": "E_" + f"{scene}_B8.TIF".replace(".", "_"), "url": "https://x/a.TIF"},
-                {"entityId": "E_" + f"{scene}_MTL.txt".replace(".", "_"), "url": "https://x/m.txt"},
+                {
+                    "entityId": "E_" + f"{scene}_B8.TIF".replace(".", "_"),
+                    "url": "https://x/a.TIF",
+                },
+                {
+                    "entityId": "E_" + f"{scene}_MTL.txt".replace(".", "_"),
+                    "url": "https://x/m.txt",
+                },
             ]
         }
         self._patch_download(monkeypatch)
         out = _finder(c).download_images(
-            _images(), output_dir=tmp_path, bands=["B8"], keep_original_names=True,
-            organize_by="sensor_pathrow", show_progress=False,
+            _images(),
+            output_dir=tmp_path,
+            bands=["B8"],
+            keep_original_names=True,
+            organize_by="sensor_pathrow",
+            show_progress=False,
         )
         sent = {d["entityId"] for d in c.requests[0][0]}
         assert len(sent) == 3  # B8 + MTL + ANG, each with its own entity id
@@ -595,31 +729,56 @@ class TestDownloadImages:
     def test_chunking_by_file_count(self, tmp_path, monkeypatch, fast):
         c = _Client()
         c.options = [
-            {"entityId": f"ent{i}", "available": True, "productName": "Product Bundle", "id": f"p{i}"}
+            {
+                "entityId": f"ent{i}",
+                "available": True,
+                "productName": "Product Bundle",
+                "id": f"p{i}",
+            }
             for i in range(3)
         ]
         c.request_result = {"availableDownloads": []}
-        _finder(c).download_images(_images(3), output_dir=tmp_path, max_files_per_request=1)
+        _finder(c).download_images(
+            _images(3), output_dir=tmp_path, max_files_per_request=1
+        )
         assert [len(r[0]) for r in c.requests] == [1, 1, 1]
 
-    def test_preparing_downloads_are_polled_until_ready(self, tmp_path, monkeypatch, fast):
+    def test_preparing_downloads_are_polled_until_ready(
+        self, tmp_path, monkeypatch, fast
+    ):
         c = self._ready_client()
         c.request_result = {"preparingDownloads": [{"downloadId": 7}]}
-        c.retrieve_results = [{"available": [{"downloadId": 7, "entityId": "ent", "url": "https://x/f.tar"}]}]
+        c.retrieve_results = [
+            {
+                "available": [
+                    {"downloadId": 7, "entityId": "ent", "url": "https://x/f.tar"}
+                ]
+            }
+        ]
         self._patch_download(monkeypatch)
-        out = _finder(c).download_images(_images(), output_dir=tmp_path, show_progress=False)
+        out = _finder(c).download_images(
+            _images(), output_dir=tmp_path, show_progress=False
+        )
         assert len(out) == 1
 
-    def test_request_failure_recovers_through_the_label(self, tmp_path, monkeypatch, fast, caplog):
+    def test_request_failure_recovers_through_the_label(
+        self, tmp_path, monkeypatch, fast, caplog
+    ):
         c = self._ready_client()
         c.request_result = RuntimeError("timeout")
         c.retrieve_results = [
             RuntimeError("flaky"),
-            {"available": [{"downloadId": 1, "entityId": "ent", "url": "https://x/f.tar"}]},
+            {
+                "available": [
+                    {"downloadId": 1, "entityId": "ent", "url": "https://x/f.tar"}
+                ]
+            },
         ]
         self._patch_download(monkeypatch)
         caplog.set_level(logging.WARNING)
-        out = _finder(c).download_images(_images(), output_dir=tmp_path, show_progress=False)
+        out = _finder(c).download_images(
+            _images(), output_dir=tmp_path, show_progress=False
+        )
         assert len(out) == 1
         assert any("recovering via" in r.message for r in caplog.records)
 
@@ -628,7 +787,10 @@ class TestDownloadImages:
         c.request_result = {"preparingDownloads": [{"downloadId": 7}]}
         caplog.set_level(logging.WARNING)
         _finder(c).download_images(_images(), output_dir=tmp_path, max_poll_attempts=2)
-        assert any("resume_label" in r.message and "gmc_L9_L1" in r.message for r in caplog.records)
+        assert any(
+            "resume_label" in r.message and "gmc_L9_L1" in r.message
+            for r in caplog.records
+        )
 
 
 class TestWriteDownloads:
@@ -642,9 +804,14 @@ class TestWriteDownloads:
         monkeypatch.setattr(M2MImageFinder, "_download_file", staticmethod(fake))
         f = _finder()
         res = f._write_downloads(
-            ready, pre_meta or {}, out_root=tmp_path, default_dir=tmp_path / "d",
-            keep_original_names=kw.get("keep", False), organize_by=kw.get("organize_by"),
-            show_progress=False, desc="x",
+            ready,
+            pre_meta or {},
+            out_root=tmp_path,
+            default_dir=tmp_path / "d",
+            keep_original_names=kw.get("keep", False),
+            organize_by=kw.get("organize_by"),
+            show_progress=False,
+            desc="x",
         )
         return res, names
 
@@ -652,31 +819,57 @@ class TestWriteDownloads:
         res, names = self._write(tmp_path, [{"entityId": "e"}], monkeypatch=monkeypatch)
         assert res == [] and names == []
 
-    def test_unmatched_entity_uses_download_id_and_default_extension(self, tmp_path, monkeypatch):
-        _, names = self._write(tmp_path, [{"downloadId": 9, "url": "https://x/blob"}], monkeypatch=monkeypatch)
+    def test_unmatched_entity_uses_download_id_and_default_extension(
+        self, tmp_path, monkeypatch
+    ):
+        _, names = self._write(
+            tmp_path,
+            [{"downloadId": 9, "url": "https://x/blob"}],
+            monkeypatch=monkeypatch,
+        )
         assert names == [(tmp_path / "d", "download_9.tar.gz")]
 
     def test_keep_original_names_uses_the_catalog_name(self, tmp_path, monkeypatch):
         meta = {"e": ("disp", "2020-01-01", "Band File", "orig_B8.TIF")}
-        _, names = self._write(tmp_path, [{"entityId": "e", "url": "https://x/f.TIF"}], meta, monkeypatch, keep=True)
+        _, names = self._write(
+            tmp_path,
+            [{"entityId": "e", "url": "https://x/f.TIF"}],
+            meta,
+            monkeypatch,
+            keep=True,
+        )
         assert names[0][1] == "orig_B8.TIF"
 
-    def test_download_exception_is_logged_not_raised(self, tmp_path, monkeypatch, caplog):
+    def test_download_exception_is_logged_not_raised(
+        self, tmp_path, monkeypatch, caplog
+    ):
         def boom(*a, **k):
             raise OSError("disk")
 
         monkeypatch.setattr(M2MImageFinder, "_download_file", staticmethod(boom))
         caplog.set_level(logging.ERROR)
         res = _finder()._write_downloads(
-            [{"url": "https://x/f.tif"}], {}, out_root=tmp_path, default_dir=tmp_path,
-            keep_original_names=False, organize_by=None, show_progress=False, desc="x",
+            [{"url": "https://x/f.tif"}],
+            {},
+            out_root=tmp_path,
+            default_dir=tmp_path,
+            keep_original_names=False,
+            organize_by=None,
+            show_progress=False,
+            desc="x",
         )
-        assert res == [] and any("Failed to download" in r.message for r in caplog.records)
+        assert res == [] and any(
+            "Failed to download" in r.message for r in caplog.records
+        )
 
     def test_tqdm_progress_branch(self, tmp_path, monkeypatch):
         monkeypatch.setattr(mod, "_HAS_TQDM", True)
         monkeypatch.setattr(mod, "_tqdm", lambda it, **k: it, raising=False)
-        res, _ = self._write(tmp_path, [{"downloadId": 1, "url": "https://x/f.tif"}], monkeypatch=monkeypatch)
+        res, _ = self._write(
+            tmp_path,
+            [{"downloadId": 1, "url": "https://x/f.tif"}],
+            monkeypatch=monkeypatch,
+        )
         assert len(res) == 1
 
 
@@ -703,27 +896,52 @@ class TestResumeLabel:
     def test_empty_queue_returns_empty(self, tmp_path):
         assert _finder().resume_label("L", output_dir=tmp_path) == []
 
-    def test_retrieves_ready_records_into_pathrow_layout(self, tmp_path, monkeypatch, fast):
+    def test_retrieves_ready_records_into_pathrow_layout(
+        self, tmp_path, monkeypatch, fast
+    ):
         self._setup(monkeypatch)
         c = _Client()
         c.queue = [self._rec(1)]
-        c.retrieve_results = [{"available": [{"downloadId": 1, "entityId": "e1", "url": "https://x/a.TIF"}]}]
+        c.retrieve_results = [
+            {
+                "available": [
+                    {"downloadId": 1, "entityId": "e1", "url": "https://x/a.TIF"}
+                ]
+            }
+        ]
         out = _finder(c).resume_label("L", output_dir=tmp_path, show_progress=False)
         assert out == [tmp_path / "LANDSAT9" / "232_083" / f"{SCENE}_B1.TIF"]
         assert c.requests == []
 
-    def test_re_requests_records_that_are_no_longer_retrievable(self, tmp_path, monkeypatch, fast):
+    def test_re_requests_records_that_are_no_longer_retrievable(
+        self, tmp_path, monkeypatch, fast
+    ):
         self._setup(monkeypatch)
         c = _Client()
         c.queue = [self._rec(1), self._rec(2), self._rec(3, product=False)]
         c.retrieve_results = [RuntimeError("flaky")]
         c.request_result = {
-            "availableDownloads": [{"downloadId": 1, "entityId": "e1", "url": "https://x/a.TIF"}],
+            "availableDownloads": [
+                {"downloadId": 1, "entityId": "e1", "url": "https://x/a.TIF"}
+            ],
             "preparingDownloads": [{"downloadId": 2}],
         }
-        c.retrieve_results += [{}, {}, {"available": [{"downloadId": 2, "entityId": "e2", "url": "https://x/b.TIF"}]}]
-        out = _finder(c).resume_label("L", output_dir=tmp_path, show_progress=False, max_files_per_request=1)
-        assert {r[0][0]["entityId"] for r in c.requests} == {"e1", "e2"}  # e3 has no productId
+        c.retrieve_results += [
+            {},
+            {},
+            {
+                "available": [
+                    {"downloadId": 2, "entityId": "e2", "url": "https://x/b.TIF"}
+                ]
+            },
+        ]
+        out = _finder(c).resume_label(
+            "L", output_dir=tmp_path, show_progress=False, max_files_per_request=1
+        )
+        assert {r[0][0]["entityId"] for r in c.requests} == {
+            "e1",
+            "e2",
+        }  # e3 has no productId
         assert len(out) >= 1
 
     def test_re_request_failure_is_warned_and_skipped(self, tmp_path, fast, caplog):
@@ -745,8 +963,15 @@ class TestResumeLabel:
 
 
 def test_no_bundle_falls_back_to_the_first_available_option():
-    opts = [{"entityId": "ent", "available": True, "productName": "Something Else", "id": 1},
-            {"entityId": "ent", "available": True, "productName": "Other", "id": 2}]
+    opts = [
+        {
+            "entityId": "ent",
+            "available": True,
+            "productName": "Something Else",
+            "id": 1,
+        },
+        {"entityId": "ent", "available": True, "productName": "Other", "id": 2},
+    ]
     assert M2MImageFinder._match_products(opts, "ent", None) == opts[:1]
 
 

@@ -46,6 +46,7 @@ Public API: :func:`figure_design_map`, :func:`figure_kernel_search`,
 :func:`figure_snr`, :func:`figure_cost`, plus :data:`VIEW_BUILDERS` and
 :data:`VIEW_LABELS`.
 """
+
 from __future__ import annotations
 
 from typing import Callable
@@ -64,8 +65,8 @@ from geomulticorr.correlation.corr_params import (
 #: Colour of each boundary and the pairs, shared with the matplotlib twins so a
 #: PNG cannot diverge from its HTML counterpart.
 DESIGN_COLORS: dict[str, str] = {
-    "floor": "#c0392b",      # detection floor — below it is noise
-    "ceiling": "#2471a3",    # search reach — above it the box rails
+    "floor": "#c0392b",  # detection floor — below it is noise
+    "ceiling": "#2471a3",  # search reach — above it the box rails
     "band": "rgba(39,174,96,0.10)",
     "pairs": "#34495e",
     "flagged": "#e67e22",
@@ -75,8 +76,14 @@ DESIGN_COLORS: dict[str, str] = {
 #: Qualitative palette for per-group series.  Deliberately short: a design map
 #: with more than a handful of groups is telling you the binning is too fine.
 GROUP_PALETTE: tuple[str, ...] = (
-    "#4C72B0", "#DD8452", "#55A868", "#C44E52",
-    "#8172B3", "#937860", "#DA8BC3", "#8C8C8C",
+    "#4C72B0",
+    "#DD8452",
+    "#55A868",
+    "#C44E52",
+    "#8172B3",
+    "#937860",
+    "#DA8BC3",
+    "#8C8C8C",
 )
 
 
@@ -86,8 +93,13 @@ def _empty_figure(message: str, *, title: str = "", height: int = 460) -> go.Fig
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False)
     fig.add_annotation(
-        text=message, showarrow=False, xref="paper", yref="paper",
-        x=0.5, y=0.5, font=dict(size=13, color="#888"),
+        text=message,
+        showarrow=False,
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.5,
+        font=dict(size=13, color="#888"),
     )
     return _base_layout(fig, title, height)
 
@@ -144,6 +156,7 @@ def _dt_grid(frame: pd.DataFrame, n: int = 64) -> np.ndarray:
 
 # ── design map: the key figure ──────────────────────────────────────────────── #
 
+
 def figure_design_map(
     frame: pd.DataFrame,
     *,
@@ -191,8 +204,13 @@ def figure_design_map(
     # reach to draw, and a line from a fabricated default would describe nothing.
     search = _explicit_search_px(frame)
     bounds = feasibility_bounds(
-        grid, resolution, c_px, search if search is not None else 0.0,
-        k=k, coreg_px=coreg_px, margin_px=margin_px,
+        grid,
+        resolution,
+        c_px,
+        search if search is not None else 0.0,
+        k=k,
+        coreg_px=coreg_px,
+        margin_px=margin_px,
     )
 
     if search is not None:
@@ -201,14 +219,19 @@ def figure_design_map(
             go.Scatter(
                 x=np.concatenate([grid, grid[::-1]]),
                 y=np.concatenate([bounds["v_max"], bounds["v_min"][::-1]]),
-                fill="toself", fillcolor=DESIGN_COLORS["band"],
-                line=dict(width=0), hoverinfo="skip",
-                name="measurable", showlegend=True,
+                fill="toself",
+                fillcolor=DESIGN_COLORS["band"],
+                line=dict(width=0),
+                hoverinfo="skip",
+                name="measurable",
+                showlegend=True,
             )
         )
     fig.add_trace(
         go.Scatter(
-            x=grid, y=bounds["v_min"], mode="lines",
+            x=grid,
+            y=bounds["v_min"],
+            mode="lines",
             line=dict(color=DESIGN_COLORS["floor"], width=2),
             name=f"detection floor (k={k:g})",
             hovertemplate="Δt=%{x:.0f} d<br>v_min=%{y:.2f} m/yr<extra></extra>",
@@ -217,7 +240,9 @@ def figure_design_map(
     if search is not None:
         fig.add_trace(
             go.Scatter(
-                x=grid, y=bounds["v_max"], mode="lines",
+                x=grid,
+                y=bounds["v_max"],
+                mode="lines",
                 line=dict(color=DESIGN_COLORS["ceiling"], width=2, dash="dash"),
                 name=f"search reach (S={search:.0f} px)",
                 hovertemplate="Δt=%{x:.0f} d<br>v_max=%{y:.2f} m/yr<extra></extra>",
@@ -227,7 +252,9 @@ def figure_design_map(
         # Say so, rather than leaving a reader to wonder where the ceiling went.
         fig.add_trace(
             go.Scatter(
-                x=[None], y=[None], mode="lines",
+                x=[None],
+                y=[None],
+                mode="lines",
                 line=dict(color=DESIGN_COLORS["limit"], width=2, dash="dash"),
                 name="search reach: ASP auto (no explicit box)",
                 hoverinfo="skip",
@@ -236,8 +263,10 @@ def figure_design_map(
 
     if tau_days:
         fig.add_vline(
-            x=float(tau_days), line=dict(color=DESIGN_COLORS["limit"], width=1.5, dash="dot"),
-            annotation_text=f"τ = {float(tau_days):.0f} d", annotation_position="top",
+            x=float(tau_days),
+            line=dict(color=DESIGN_COLORS["limit"], width=1.5, dash="dot"),
+            annotation_text=f"τ = {float(tau_days):.0f} d",
+            annotation_position="top",
         )
 
     _add_pair_markers(fig, frame, color_by, k)
@@ -248,7 +277,9 @@ def figure_design_map(
     return _base_layout(fig, title or "Correlation design map", height)
 
 
-def _add_pair_markers(fig: go.Figure, frame: pd.DataFrame, color_by: str, k: float) -> None:
+def _add_pair_markers(
+    fig: go.Figure, frame: pd.DataFrame, color_by: str, k: float
+) -> None:
     """One batched trace per colour group — never one trace per pair."""
     hover = (
         "%{text}"
@@ -277,13 +308,20 @@ def _add_pair_markers(fig: go.Figure, frame: pd.DataFrame, color_by: str, k: flo
                 customdata=[
                     [d, p, s, kp, sp]
                     for d, p, s, kp, sp in zip(
-                        sub["disp_m"], sub["disp_px"], sub["snr"],
-                        sub["kernel_px"], sub["search_px"],
+                        sub["disp_m"],
+                        sub["disp_px"],
+                        sub["snr"],
+                        sub["kernel_px"],
+                        sub["search_px"],
                     )
                 ],
                 marker=dict(
                     size=10,
-                    color=_group_color(key, keys) if column is not None else DESIGN_COLORS["pairs"],
+                    color=(
+                        _group_color(key, keys)
+                        if column is not None
+                        else DESIGN_COLORS["pairs"]
+                    ),
                     symbol=np.where(below, "x", "circle"),
                     line=dict(width=1, color="white"),
                 ),
@@ -293,6 +331,7 @@ def _add_pair_markers(fig: go.Figure, frame: pd.DataFrame, color_by: str, k: flo
 
 
 # ── kernel and search versus baseline ───────────────────────────────────────── #
+
 
 def figure_kernel_search(
     frame: pd.DataFrame,
@@ -318,8 +357,10 @@ def figure_kernel_search(
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
-            x=frame["dt_days"].tolist(), y=frame["kernel_px"].tolist(),
-            mode="markers", name="kernel (px)",
+            x=frame["dt_days"].tolist(),
+            y=frame["kernel_px"].tolist(),
+            mode="markers",
+            name="kernel (px)",
             text=frame["pa_key"].tolist(),
             marker=dict(size=9, color=GROUP_PALETTE[0]),
             hovertemplate="%{text}<br>Δt=%{x:.0f} d<br>kernel=%{y} px<extra></extra>",
@@ -327,8 +368,10 @@ def figure_kernel_search(
     )
     fig.add_trace(
         go.Scatter(
-            x=frame["dt_days"].tolist(), y=frame["search_px"].tolist(),
-            mode="markers", name="search half-width (px)",
+            x=frame["dt_days"].tolist(),
+            y=frame["search_px"].tolist(),
+            mode="markers",
+            name="search half-width (px)",
             text=frame["pa_key"].tolist(),
             marker=dict(size=9, symbol="diamond", color=GROUP_PALETTE[1]),
             hovertemplate="%{text}<br>Δt=%{x:.0f} d<br>search=%{y:.0f} px<extra></extra>",
@@ -348,7 +391,10 @@ def figure_kernel_search(
             limit = [strain_kernel_limit_px(strain_rate_per_yr, d) for d in grid]
             fig.add_trace(
                 go.Scatter(
-                    x=grid, y=limit, mode="lines", name="strain ceiling",
+                    x=grid,
+                    y=limit,
+                    mode="lines",
+                    name="strain ceiling",
                     line=dict(color=DESIGN_COLORS["floor"], width=2, dash="dash"),
                     hovertemplate="Δt=%{x:.0f} d<br>K ≤ %{y:.1f} px<extra></extra>",
                 )
@@ -363,6 +409,7 @@ def figure_kernel_search(
 
 
 # ── SNR ─────────────────────────────────────────────────────────────────────── #
+
 
 def figure_snr(
     frame: pd.DataFrame, *, title: str = "", height: int = 460, k: float = 3.0
@@ -382,8 +429,11 @@ def figure_snr(
     below = snr_values < float(k)
     fig = go.Figure(
         go.Scatter(
-            x=frame["dt_days"].tolist(), y=snr_values.tolist(), mode="markers",
-            name="pairs", text=frame["pa_key"].tolist(),
+            x=frame["dt_days"].tolist(),
+            y=snr_values.tolist(),
+            mode="markers",
+            name="pairs",
+            text=frame["pa_key"].tolist(),
             marker=dict(
                 size=10,
                 color=np.where(below, DESIGN_COLORS["flagged"], DESIGN_COLORS["pairs"]),
@@ -393,8 +443,10 @@ def figure_snr(
         )
     )
     fig.add_hline(
-        y=float(k), line=dict(color=DESIGN_COLORS["floor"], width=2),
-        annotation_text=f"detection threshold k={k:g}", annotation_position="top right",
+        y=float(k),
+        line=dict(color=DESIGN_COLORS["floor"], width=2),
+        annotation_text=f"detection threshold k={k:g}",
+        annotation_position="top right",
     )
     fig.update_xaxes(type="log", title_text="Temporal baseline Δt (days)")
     fig.update_yaxes(type="log", title_text="SNR = v·Δt / σ_D")
@@ -405,7 +457,10 @@ def figure_snr(
 
 # ── cost ────────────────────────────────────────────────────────────────────── #
 
-def figure_cost(frame: pd.DataFrame, *, title: str = "", height: int = 460) -> go.Figure:
+
+def figure_cost(
+    frame: pd.DataFrame, *, title: str = "", height: int = 460
+) -> go.Figure:
     """Summed relative correlation cost per parameter group.
 
     Cost scales as ``K² · S_x · S_y``, so this is where an oversized search box
@@ -426,7 +481,8 @@ def figure_cost(frame: pd.DataFrame, *, title: str = "", height: int = 460) -> g
 
     fig = go.Figure(
         go.Bar(
-            x=groups, y=totals,
+            x=groups,
+            y=totals,
             marker_color=[_group_color(g, groups) for g in groups],
             customdata=np.column_stack([counts, totals / np.maximum(counts, 1)]),
             hovertemplate=(

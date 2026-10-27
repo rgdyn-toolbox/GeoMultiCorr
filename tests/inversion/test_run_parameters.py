@@ -36,6 +36,7 @@ thirteen, so ``write_liste_couple(**params)`` reproduces the run from the file
 alone; and a failure to write must **never** abort an otherwise fully prepared
 inversion.
 """
+
 from __future__ import annotations
 
 import json
@@ -64,7 +65,9 @@ def _stats(nmad: float = 0.3, cc: float = 0.7) -> dict:
 def _pairs(n: int = 3):
     return [
         SimpleNamespace(
-            pa_key=f"PZ_p{i}", pa_dt_days=30 * (i + 1), pa_direction="forward",
+            pa_key=f"PZ_p{i}",
+            pa_dt_days=30 * (i + 1),
+            pa_direction="forward",
             pa_left=SimpleNamespace(th_date="2022-01-01"),
             pa_right=SimpleNamespace(th_date=f"2022-0{i + 2}-01"),
         )
@@ -96,9 +99,19 @@ def inv(monkeypatch, tmp_path):
 
 
 PARAMS_13 = dict(
-    weight_mode="quality", slope=2.0, min_weight=0.1, dt_range=None,
-    sharpness=5.0, w_min=0.0, invert=False, combine="wmean",
-    alpha=1 / 3, beta=1 / 3, gamma=1 / 3, cc_gamma=1.5, sensor_weights=None,
+    weight_mode="quality",
+    slope=2.0,
+    min_weight=0.1,
+    dt_range=None,
+    sharpness=5.0,
+    w_min=0.0,
+    invert=False,
+    combine="wmean",
+    alpha=1 / 3,
+    beta=1 / 3,
+    gamma=1 / 3,
+    cc_gamma=1.5,
+    sensor_weights=None,
 )
 
 
@@ -107,10 +120,17 @@ class TestBuildDocument:
 
     def _doc(self, **overrides):
         base = dict(
-            direction="EW", inversion_name="PDL", pzone="PasDeLours",
-            inversion_dir="/tmp/x", raster_shape=(2048, 1536),
-            pair_keys=["a", "b"], n_images=3, weight_mode="quality",
-            combine="wmean", weight_source="explorer", weight_params=PARAMS_13,
+            direction="EW",
+            inversion_name="PDL",
+            pzone="PasDeLours",
+            inversion_dir="/tmp/x",
+            raster_shape=(2048, 1536),
+            pair_keys=["a", "b"],
+            n_images=3,
+            weight_mode="quality",
+            combine="wmean",
+            weight_source="explorer",
+            weight_params=PARAMS_13,
             relevant_params=["alpha", "beta", "cc_gamma", "combine", "gamma"],
             weight_summary={"n": 2, "min": 0.2, "max": 1.0, "mean": 0.6},
         )
@@ -153,8 +173,12 @@ class TestBuildDocument:
         assert "input_tio" not in note
 
     def test_records_the_solver_block(self):
-        solver = {"weight_mode": "file", "gamma": 0.003, "iponder": 2,
-                  "weights_applied_by_solver": True}
+        solver = {
+            "weight_mode": "file",
+            "gamma": 0.003,
+            "iponder": 2,
+            "weights_applied_by_solver": True,
+        }
         doc = self._doc(solver=solver)
         assert doc["solver"]["iponder"] == 2
         assert doc["solver"]["gamma"] == 0.003
@@ -162,8 +186,11 @@ class TestBuildDocument:
         json.dumps(doc)
 
     def test_legacy_solver_says_the_weights_were_not_applied(self):
-        solver = {"weight_mode": "variance", "iponder": 0,
-                  "weights_applied_by_solver": False}
+        solver = {
+            "weight_mode": "variance",
+            "iponder": 0,
+            "weights_applied_by_solver": False,
+        }
         assert self._doc(solver=solver)["weights"]["applied_by_solver"] is False
 
     def test_without_solver_the_flag_is_unknown(self):
@@ -172,10 +199,13 @@ class TestBuildDocument:
         assert doc["weights"]["applied_by_solver"] is None
 
     def test_records_the_network(self):
-        network = {"n_components": 2, "components": [
-            {"start": "20160816", "end": "20250716", "sensors": ["planetscope"]},
-            {"start": "20180927", "end": "20240717", "sensors": ["spot6", "spot7"]},
-        ]}
+        network = {
+            "n_components": 2,
+            "components": [
+                {"start": "20160816", "end": "20250716", "sensors": ["planetscope"]},
+                {"start": "20180927", "end": "20240717", "sensors": ["spot6", "spot7"]},
+            ],
+        }
         doc = self._doc(network=network)
         assert doc["network"]["n_components"] == 2
         assert doc["network"]["components"][1]["sensors"] == ["spot6", "spot7"]
@@ -232,7 +262,10 @@ class TestDescribeFilterPipeline:
 class TestWriteRunParameters:
     def test_writes_both_directions(self, inv):
         written = inv.write_run_parameters(
-            "quality", "wmean", "explorer", PARAMS_13,
+            "quality",
+            "wmean",
+            "explorer",
+            PARAMS_13,
             {"EW": [0.9, 0.5, 0.2], "NS": [0.8, 0.4, 0.1]},
         )
         assert set(written) == {"EW", "NS"}
@@ -243,7 +276,10 @@ class TestWriteRunParameters:
 
     def test_each_file_is_self_contained(self, inv):
         written = inv.write_run_parameters(
-            "quality", "wmean", "explorer", PARAMS_13,
+            "quality",
+            "wmean",
+            "explorer",
+            PARAMS_13,
             {"EW": [0.9, 0.5, 0.2], "NS": [0.8, 0.4, 0.1]},
         )
         for direction, path in written.items():
@@ -257,7 +293,10 @@ class TestWriteRunParameters:
     def test_the_two_files_differ_where_they_should(self, inv):
         """Otherwise the per-direction split is theatre."""
         written = inv.write_run_parameters(
-            "quality", "wmean", "explorer", PARAMS_13,
+            "quality",
+            "wmean",
+            "explorer",
+            PARAMS_13,
             {"EW": [0.9, 0.5, 0.2], "NS": [0.1, 0.1, 0.1]},
         )
         ew = json.loads(written["EW"].read_text())
@@ -268,7 +307,10 @@ class TestWriteRunParameters:
     def test_date_based_modes_give_matching_summaries(self, inv):
         """Which is itself informative, not a bug."""
         written = inv.write_run_parameters(
-            "uniform", None, "computed", {**PARAMS_13, "weight_mode": "uniform"},
+            "uniform",
+            None,
+            "computed",
+            {**PARAMS_13, "weight_mode": "uniform"},
             {"EW": [1.0, 1.0, 1.0], "NS": [1.0, 1.0, 1.0]},
         )
         ew = json.loads(written["EW"].read_text())
@@ -278,31 +320,48 @@ class TestWriteRunParameters:
     def test_records_the_filter_pipeline(self, inv):
         inv.filter_pipeline = CCFilter(0.6) + OutlierFilter((-5, 5))
         written = inv.write_run_parameters(
-            "quality", "wmean", "explorer", PARAMS_13,
-            {"EW": [1, 1, 1], "NS": [1, 1, 1]})
+            "quality",
+            "wmean",
+            "explorer",
+            PARAMS_13,
+            {"EW": [1, 1, 1], "NS": [1, 1, 1]},
+        )
         doc = json.loads(written["EW"].read_text())
         assert [f["filter"] for f in doc["filter_pipeline"]] == [
-            "CCFilter", "OutlierFilter"]
+            "CCFilter",
+            "OutlierFilter",
+        ]
 
     def test_records_the_nmad_filter_and_launch_profile(self, inv):
         inv._last_nmad_filter = {"threshold": 0.7, "kept": 3, "removed": 1}
-        inv._last_launch = {"cluster": "isterre", "nodes": 1, "cores": 8,
-                            "walltime": "12:00:00"}
+        inv._last_launch = {
+            "cluster": "isterre",
+            "nodes": 1,
+            "cores": 8,
+            "walltime": "12:00:00",
+        }
         written = inv.write_run_parameters(
-            "uniform", None, "computed", PARAMS_13,
-            {"EW": [1, 1, 1], "NS": [1, 1, 1]})
+            "uniform", None, "computed", PARAMS_13, {"EW": [1, 1, 1], "NS": [1, 1, 1]}
+        )
         doc = json.loads(written["EW"].read_text())
         assert doc["nmad_filter"]["removed"] == 1
         assert doc["launch"]["cluster"] == "isterre"
 
     def test_sensor_weights_survive_the_round_trip(self, inv):
         """The dict must come back from the file and be a legal splat."""
-        params = {**PARAMS_13, "weight_mode": "uniform",
-                  "sensor_weights": {"spot": 1.0, "planetscope": 0.5}}
+        params = {
+            **PARAMS_13,
+            "weight_mode": "uniform",
+            "sensor_weights": {"spot": 1.0, "planetscope": 0.5},
+        }
         written = inv.write_run_parameters(
-            "uniform", None, "computed", params, {"EW": [1, 1, 1], "NS": [1, 1, 1]})
+            "uniform", None, "computed", params, {"EW": [1, 1, 1], "NS": [1, 1, 1]}
+        )
         doc = json.loads(written["EW"].read_text())
-        assert doc["weights"]["params"]["sensor_weights"] == {"spot": 1.0, "planetscope": 0.5}
+        assert doc["weights"]["params"]["sensor_weights"] == {
+            "spot": 1.0,
+            "planetscope": 0.5,
+        }
         assert "sensor_weights" in doc["weights"]["relevant_params"]
         replay = dict(doc["weights"]["params"])
         replay.pop("weight_mode")
@@ -310,8 +369,12 @@ class TestWriteRunParameters:
 
     def test_relevant_params_omit_sensor_weights_when_unset(self, inv):
         written = inv.write_run_parameters(
-            "uniform", None, "computed", {**PARAMS_13, "weight_mode": "uniform"},
-            {"EW": [1, 1, 1], "NS": [1, 1, 1]})
+            "uniform",
+            None,
+            "computed",
+            {**PARAMS_13, "weight_mode": "uniform"},
+            {"EW": [1, 1, 1], "NS": [1, 1, 1]},
+        )
         doc = json.loads(written["EW"].read_text())
         assert "sensor_weights" not in doc["weights"]["relevant_params"]
         assert doc["weights"]["params"]["sensor_weights"] is None
@@ -320,16 +383,20 @@ class TestWriteRunParameters:
         inv._raster_width = None
         inv.pairs[0].pa_ew_path = "/nonexistent/nope.tif"
         written = inv.write_run_parameters(
-            "uniform", None, "computed", PARAMS_13,
-            {"EW": [1, 1, 1], "NS": [1, 1, 1]})
+            "uniform", None, "computed", PARAMS_13, {"EW": [1, 1, 1], "NS": [1, 1, 1]}
+        )
         assert json.loads(written["EW"].read_text())["raster"]["width"] is None
 
     def test_params_round_trip_through_write_liste_couple(self, inv, monkeypatch):
         """The point of storing the unpruned twelve: the run can be replayed."""
         monkeypatch.setattr(inv, "_sync_pair_weights", lambda *a, **k: None)
         written = inv.write_run_parameters(
-            "quality", "wmean", "explorer", PARAMS_13,
-            {"EW": [1, 1, 1], "NS": [1, 1, 1]})
+            "quality",
+            "wmean",
+            "explorer",
+            PARAMS_13,
+            {"EW": [1, 1, 1], "NS": [1, 1, 1]},
+        )
         params = json.loads(written["EW"].read_text())["weights"]["params"]
         if params["dt_range"] is not None:
             params["dt_range"] = tuple(params["dt_range"])
@@ -339,44 +406,54 @@ class TestWriteRunParameters:
 
     def test_the_file_is_indented_json(self, inv):
         written = inv.write_run_parameters(
-            "uniform", None, "computed", PARAMS_13,
-            {"EW": [1, 1, 1], "NS": [1, 1, 1]})
+            "uniform", None, "computed", PARAMS_13, {"EW": [1, 1, 1], "NS": [1, 1, 1]}
+        )
         assert "\n  " in written["EW"].read_text()
 
 
 class TestFailureIsNeverFatal:
     """A lost trace must not cost an otherwise fully prepared inversion."""
 
-    def test_write_failure_logs_a_warning_and_carries_on(self, inv, caplog_gmc,
-                                                         monkeypatch):
+    def test_write_failure_logs_a_warning_and_carries_on(
+        self, inv, caplog_gmc, monkeypatch
+    ):
         def _boom(*a, **k):
             raise OSError("read-only filesystem")
 
         monkeypatch.setattr(
-            "geomulticorr.inversion._run_parameters.write_run_parameters", _boom)
+            "geomulticorr.inversion._run_parameters.write_run_parameters", _boom
+        )
         # the guard lives in prepare_inversion, so emulate its call shape
         try:
-            inv.write_run_parameters("uniform", None, "computed", PARAMS_13,
-                                     {"EW": [1], "NS": [1]})
+            inv.write_run_parameters(
+                "uniform", None, "computed", PARAMS_13, {"EW": [1], "NS": [1]}
+            )
         except OSError as exc:
             from geomulticorr._logging import logger
 
             logger.warning(f"[run parameters] could not write the trace: {exc}")
         assert "run parameters" in caplog_gmc.text
 
-    def test_prepare_inversion_swallows_the_failure(self, inv, monkeypatch,
-                                                    caplog_gmc):
+    def test_prepare_inversion_swallows_the_failure(self, inv, monkeypatch, caplog_gmc):
         monkeypatch.setattr(
-            TIOInversion, "write_run_parameters",
+            TIOInversion,
+            "write_run_parameters",
             lambda *a, **k: (_ for _ in ()).throw(OSError("read-only")),
         )
-        for name in ("setup_directories", "write_file_info_rsc",
-                     "export_pair_to_binary", "_create_symlinks",
-                     "write_liste_image", "write_liste_image_inv",
-                     "write_input_tio", "write_launch_script"):
+        for name in (
+            "setup_directories",
+            "write_file_info_rsc",
+            "export_pair_to_binary",
+            "_create_symlinks",
+            "write_liste_image",
+            "write_liste_image_inv",
+            "write_input_tio",
+            "write_launch_script",
+        ):
             monkeypatch.setattr(TIOInversion, name, lambda *a, **k: None)
-        monkeypatch.setattr(TIOInversion, "write_liste_couple",
-                            lambda *a, **k: {"EW": [1], "NS": [1]})
+        monkeypatch.setattr(
+            TIOInversion, "write_liste_couple", lambda *a, **k: {"EW": [1], "NS": [1]}
+        )
         monkeypatch.setattr(tio, "print_tio_export_summary", lambda *a, **k: None)
 
         inv.prepare_inversion(print_summary=False)  # must not raise

@@ -66,6 +66,7 @@ Public API:
 - :func:`feasibility_bounds` — the two boundary curves, for the design map.
 - :func:`suggest_parameters` — the whole derivation for one pair.
 """
+
 from __future__ import annotations
 
 import math
@@ -136,7 +137,11 @@ def days_to_years(dt_days: float | NDArrayNum) -> float | NDArrayNum:
     :param dt_days: Temporal baseline(s) in days.
     :returns: Baseline(s) in years, using :data:`DAYS_PER_YEAR`.
     """
-    return np.asarray(dt_days, dtype="float64") / DAYS_PER_YEAR if np.ndim(dt_days) else float(dt_days) / DAYS_PER_YEAR
+    return (
+        np.asarray(dt_days, dtype="float64") / DAYS_PER_YEAR
+        if np.ndim(dt_days)
+        else float(dt_days) / DAYS_PER_YEAR
+    )
 
 
 def to_odd(value: float, *, minimum: int = 1) -> int:
@@ -261,7 +266,9 @@ def noise_floor_m(
     if kernel_px is not None:
         if kernel_px <= 0:
             raise ValueError(f"kernel_px must be positive, got {kernel_px}")
-        c *= (_KERNEL_PRECISION_REFERENCE_PX / float(kernel_px)) ** _KERNEL_PRECISION_EXPONENT
+        c *= (
+            _KERNEL_PRECISION_REFERENCE_PX / float(kernel_px)
+        ) ** _KERNEL_PRECISION_EXPONENT
     return c * float(resolution_m)
 
 
@@ -596,7 +603,9 @@ def coherence(
     dt = np.asarray(dt_days, dtype="float64")
     decay = float(rho_0) * np.exp(-dt / float(tau_days))
     if seasonal_amplitude:
-        season = 1.0 - float(seasonal_amplitude) * np.sin(np.pi * dt / DAYS_PER_YEAR) ** 2
+        season = (
+            1.0 - float(seasonal_amplitude) * np.sin(np.pi * dt / DAYS_PER_YEAR) ** 2
+        )
         decay = decay * season
     out = np.clip(decay, 0.0, None)
     return out if np.ndim(dt_days) else float(out)
@@ -774,9 +783,13 @@ def feasibility_bounds(
     dt = np.asarray(dt_grid_days, dtype="float64")
     return {
         "dt_days": dt,
-        "v_min": np.asarray(min_detectable_velocity(dt, resolution_m, c_px, k), dtype="float64"),
+        "v_min": np.asarray(
+            min_detectable_velocity(dt, resolution_m, c_px, k), dtype="float64"
+        ),
         "v_max": np.asarray(
-            max_measurable_velocity(dt, resolution_m, search_px, coreg_px=coreg_px, margin_px=margin_px),
+            max_measurable_velocity(
+                dt, resolution_m, search_px, coreg_px=coreg_px, margin_px=margin_px
+            ),
             dtype="float64",
         ),
     }
@@ -866,7 +879,9 @@ def suggest_parameters(
             f"that template size"
         )
     k_max = None if math.isinf(strain_limit) else strain_limit
-    kernel = kernel_from_footprint(footprint_m, resolution_m, k_min=TEXTURE_FLOOR_PX, k_max=k_max)
+    kernel = kernel_from_footprint(
+        footprint_m, resolution_m, k_min=TEXTURE_FLOOR_PX, k_max=k_max
+    )
     if kernel < raw_kernel and not math.isinf(strain_limit):
         warnings.append(
             f"strain ceiling caps the kernel at {strain_limit:.1f} px (requested {raw_kernel} px "
@@ -894,7 +909,9 @@ def suggest_parameters(
     # auto failing costs RUNTIME, an explicit box failing costs CORRECTNESS,
     # because a low velocity guess clips real motion and the field saturates at
     # the box edge.  So below the threshold we keep ASP's own estimate.
-    use_explicit = bool(explicit_search) and dt_days >= float(explicit_search_above_days)
+    use_explicit = bool(explicit_search) and dt_days >= float(
+        explicit_search_above_days
+    )
 
     if use_explicit:
         corr_search = required_search_px(
@@ -1030,9 +1047,7 @@ def parse_search_box(text: str | Sequence[int]) -> tuple[int, int, int, int]:
             )
         return (x_lo, y_lo, x_hi, y_hi)
 
-    raise ValueError(
-        f"Search box '{text}' has {len(values)} numbers; expected 1 or 4."
-    )
+    raise ValueError(f"Search box '{text}' has {len(values)} numbers; expected 1 or 4.")
 
 
 def uniform_conflicts(
@@ -1084,7 +1099,11 @@ def uniform_conflicts(
                 f"and read as saturation"
             )
         cost = cost_index(
-            kernel_px if kernel_px is not None else derived.get("corr_kernel", (21, 21)),
+            (
+                kernel_px
+                if kernel_px is not None
+                else derived.get("corr_kernel", (21, 21))
+            ),
             corr_search,
             corr_algorithm,
         )

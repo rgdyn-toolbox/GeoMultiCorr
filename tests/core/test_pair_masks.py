@@ -4,6 +4,7 @@ These masks record which pixels the corrections were fitted on. They are
 binary, so they are written NBITS=1 + DEFLATE; the size guard below is what
 catches an accidental float32 write or a dropped co_opts dict.
 """
+
 import numpy as np
 import pytest
 import rasterio
@@ -13,7 +14,6 @@ from rasterio.crs import CRS
 import geoutils as gu
 
 from geomulticorr.core.pair import Pair
-
 
 TRANSFORM = Affine(3.0, 0.0, 500000.0, 0.0, -3.0, 9900000.0)
 EPSG = 32717

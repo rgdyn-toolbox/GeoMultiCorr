@@ -12,6 +12,7 @@ That it reads *tables* is the point, not an implementation detail: constructing
 computes a densified ~20 000-vertex footprint polygon costing ~150 ms. The stub's
 ``get_pairs()`` raises so that path cannot come back unnoticed.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -28,7 +29,6 @@ from geomulticorr.utils._corrparams_frame import (  # noqa: E402
     CORRPARAMS_FRAME_COLUMNS,
     corrparams_frame_from_plan,
 )
-
 
 #: Resolutions the stub archive's two sensors were sieved to.
 _SENSOR_RES = {"planetscope": 3.0, "spot": 1.5}
@@ -91,16 +91,22 @@ def _stub_frames(specs, pz="PZ", with_res=True):
         # One acquisition date per (sensor, dt) so the join has something to hit;
         # the derivation only reads dt_days, so the dates need only be distinct.
         left_date, right_date = "2020-01-01", f"2020-01-{(dt % 27) + 1:02d}"
-        pairs.append({
-            "pa_pz_name": pz,
-            "pa_path": f"/proj/{pz}/image_correlation/{key}",
-            "pa_left_date": left_date, "pa_left_sensor": sensor,
-            "pa_right_date": right_date, "pa_right_sensor": sensor,
-            "pa_dt_days": dt,
-        })
+        pairs.append(
+            {
+                "pa_pz_name": pz,
+                "pa_path": f"/proj/{pz}/image_correlation/{key}",
+                "pa_left_date": left_date,
+                "pa_left_sensor": sensor,
+                "pa_right_date": right_date,
+                "pa_right_sensor": sensor,
+                "pa_dt_days": dt,
+            }
+        )
         for date in (left_date, right_date):
             thumbs[(pz, date, sensor)] = {
-                "th_pz_name": pz, "th_date": date, "th_sensor": sensor,
+                "th_pz_name": pz,
+                "th_date": date,
+                "th_sensor": sensor,
                 "th_path": f"/data/{sensor}_{date}.tif",
                 "th_res": _SENSOR_RES[sensor] if with_res else float("nan"),
             }
@@ -122,7 +128,8 @@ def _headless(session, **kwargs):
 def _widget(box, description):
     """Find a control by its description — positional indices break on relayout."""
     found = [
-        w for row in box.children
+        w
+        for row in box.children
         for w in getattr(row, "children", ())
         if getattr(w, "description", "").startswith(description)
     ]
@@ -243,9 +250,7 @@ class TestStash:
 
         session = _session()
         _headless(session)
-        accepted = set(
-            inspect.signature(Session.prepare_pairs_correlation).parameters
-        )
+        accepted = set(inspect.signature(Session.prepare_pairs_correlation).parameters)
         assert set(session._last_corr_params) <= accepted
 
     def test_assumptions_are_stashed_separately(self):
@@ -297,8 +302,9 @@ class TestStash:
     def test_the_frame_shows_the_committed_parameters_not_the_ideal(self):
         """A pair whose group was reduced must report the group's kernel."""
         session = _session()
-        frame, _ = _headless(session, velocity_m_yr=3.0, strain_rate_per_yr=0.02,
-                             dt_bin_ratio=10.0)
+        frame, _ = _headless(
+            session, velocity_m_yr=3.0, strain_rate_per_yr=0.02, dt_bin_ratio=10.0
+        )
         for group, block in session._last_corr_plan["groups"].items():
             committed = max(block["params"]["corr_kernel"])
             assert set(frame[frame["group"] == group]["kernel_px"]) == {committed}
@@ -331,8 +337,9 @@ class TestStash:
 
     def test_group_search_covers_its_longest_baseline(self):
         session = _session()
-        frame, _ = _headless(session, velocity_m_yr=5.0, dt_bin_ratio=10.0,
-                             explicit_search_above_days=0)
+        frame, _ = _headless(
+            session, velocity_m_yr=5.0, dt_bin_ratio=10.0, explicit_search_above_days=0
+        )
         for name, block in session._last_corr_plan["groups"].items():
             reach = max(abs(v) for v in block["params"]["corr_search"])
             worst = frame[frame["group"] == name]["disp_px"].max()
@@ -420,11 +427,21 @@ class TestPlanFollowsLiveSettings:
 
     def test_coreg_allowance_reaches_the_plan(self):
         tight = _session()
-        _headless(tight, velocity_m_yr=5.0, coreg_px=0.0, margin_px=0.0,
-                  explicit_search_above_days=0)
+        _headless(
+            tight,
+            velocity_m_yr=5.0,
+            coreg_px=0.0,
+            margin_px=0.0,
+            explicit_search_above_days=0,
+        )
         loose = _session()
-        _headless(loose, velocity_m_yr=5.0, coreg_px=20.0, margin_px=20.0,
-                  explicit_search_above_days=0)
+        _headless(
+            loose,
+            velocity_m_yr=5.0,
+            coreg_px=20.0,
+            margin_px=20.0,
+            explicit_search_above_days=0,
+        )
 
         def widest(session):
             return max(
@@ -436,16 +453,25 @@ class TestPlanFollowsLiveSettings:
 
     def test_flow_azimuth_reaches_the_plan(self):
         session = _session()
-        _headless(session, velocity_m_yr=5.0, flow_azimuth_deg=90.0,
-                  explicit_search_above_days=0)
+        _headless(
+            session,
+            velocity_m_yr=5.0,
+            flow_azimuth_deg=90.0,
+            explicit_search_above_days=0,
+        )
         for block in session._last_corr_plan["groups"].values():
             x_lo, y_lo, x_hi, y_hi = block["params"]["corr_search"]
             assert (x_hi - x_lo) >= (y_hi - y_lo)
 
     def test_plan_search_matches_the_frame_reach(self):
         session = _session()
-        frame, _ = _headless(session, velocity_m_yr=5.0, coreg_px=7.0,
-                             margin_px=3.0, explicit_search_above_days=0)
+        frame, _ = _headless(
+            session,
+            velocity_m_yr=5.0,
+            coreg_px=7.0,
+            margin_px=3.0,
+            explicit_search_above_days=0,
+        )
         for name, block in session._last_corr_plan["groups"].items():
             reach = max(abs(v) for v in block["params"]["corr_search"])
             assert reach >= frame[frame["group"] == name]["search_px"].max()
@@ -461,8 +487,9 @@ class TestMultiPzonePlan:
             pa, th = _stub_frames([(f"{pz}_400", "planetscope", 400)], pz=pz)
             pairs.append(pa)
             thumbs.append(th)
-        return _StubSession(pd.concat(pairs, ignore_index=True),
-                            pd.concat(thumbs, ignore_index=True))
+        return _StubSession(
+            pd.concat(pairs, ignore_index=True), pd.concat(thumbs, ignore_index=True)
+        )
 
     def test_multi_pzone_frame_claims_no_pzone(self):
         session = self._two_pzones()
@@ -599,7 +626,7 @@ class TestDurationStrings:
         mindt = _widget(box, "min Δt")
         mindt.value = "6M"
         n_before = len(session._last_corr_plan["pairs"])
-        mindt.value = "!!!"            # must not propagate
+        mindt.value = "!!!"  # must not propagate
         assert len(session._last_corr_plan["pairs"]) == n_before
 
     def test_clearing_the_field_turns_the_filter_off(self):
@@ -621,7 +648,7 @@ class TestUniformOverrides:
 
     def test_neither_is_the_derived_behaviour(self):
         frame, _ = _headless(_session(), explicit_search_above_days=0)
-        assert frame["kernel_px"].nunique() > 1   # per-group derivation
+        assert frame["kernel_px"].nunique() > 1  # per-group derivation
 
     def test_uniform_kernel_reaches_every_group(self):
         session = _session()
@@ -640,23 +667,36 @@ class TestUniformOverrides:
 
     def test_uniform_search_reaches_every_explicit_group(self):
         session = _session()
-        _headless(session, uniform_search=True, uniform_search_box="20",
-                  explicit_search_above_days=0)
+        _headless(
+            session,
+            uniform_search=True,
+            uniform_search_box="20",
+            explicit_search_above_days=0,
+        )
         for block in session._last_corr_plan["groups"].values():
             assert block["params"]["corr_search"] == [-20, -20, 20, 20]
 
     def test_uniform_search_accepts_an_asymmetric_box(self):
         session = _session()
-        _headless(session, uniform_search=True, uniform_search_box="-80 -2 20 2",
-                  explicit_search_above_days=0)
+        _headless(
+            session,
+            uniform_search=True,
+            uniform_search_box="-80 -2 20 2",
+            explicit_search_above_days=0,
+        )
         for block in session._last_corr_plan["groups"].values():
             assert block["params"]["corr_search"] == [-80, -2, 20, 2]
 
     def test_both_together_give_one_parameter_set(self):
         session = _session()
-        _headless(session, uniform_kernel=True, uniform_kernel_px=21,
-                  uniform_search=True, uniform_search_box="20",
-                  explicit_search_above_days=0)
+        _headless(
+            session,
+            uniform_kernel=True,
+            uniform_kernel_px=21,
+            uniform_search=True,
+            uniform_search_box="20",
+            explicit_search_above_days=0,
+        )
         blocks = list(session._last_corr_plan["groups"].values())
         assert len({str(b["params"]["corr_kernel"]) for b in blocks}) == 1
         assert len({str(b["params"]["corr_search"]) for b in blocks}) == 1
@@ -664,18 +704,23 @@ class TestUniformOverrides:
     def test_kernel_uniform_leaves_search_derived(self):
         session = _session()
         _headless(session, uniform_kernel=True, explicit_search_above_days=0)
-        boxes = {str(b["params"]["corr_search"])
-                 for b in session._last_corr_plan["groups"].values()}
+        boxes = {
+            str(b["params"]["corr_search"])
+            for b in session._last_corr_plan["groups"].values()
+        }
         assert len(boxes) > 1
 
     def test_the_threshold_still_gates_whether_a_box_is_used(self):
         """Uniform sets the VALUE; the Δt threshold decides WHETHER."""
         session = _session()
-        _headless(session, uniform_search=True, uniform_search_box="20",
-                  explicit_search_above_days=365)
+        _headless(
+            session,
+            uniform_search=True,
+            uniform_search_box="20",
+            explicit_search_above_days=365,
+        )
         blocks = session._last_corr_plan["groups"]
-        short = [b for name, b in blocks.items()
-                 if b["dt_days"][1] < 365]
+        short = [b for name, b in blocks.items() if b["dt_days"][1] < 365]
         assert short, "the stub archive must contain a short-baseline group"
         for block in short:
             assert block["params"]["corr_search"] is None
@@ -693,28 +738,48 @@ class TestUniformOverrides:
 
     def test_a_conflicting_uniform_kernel_is_flagged_not_clamped(self):
         """The whole point: you get the run you asked for, plus the warning."""
-        frame, _ = _headless(_session(), uniform_kernel=True, uniform_kernel_px=41,
-                             strain_rate_per_yr=0.05)
-        assert set(frame["kernel_px"]) == {41}          # not clamped
+        frame, _ = _headless(
+            _session(),
+            uniform_kernel=True,
+            uniform_kernel_px=41,
+            strain_rate_per_yr=0.05,
+        )
+        assert set(frame["kernel_px"]) == {41}  # not clamped
         assert frame["flags"].str.contains("strain ceiling").any()
 
     def test_a_too_small_uniform_box_is_flagged(self):
-        frame, _ = _headless(_session(), velocity_m_yr=20.0, uniform_search=True,
-                             uniform_search_box="2", explicit_search_above_days=0)
+        frame, _ = _headless(
+            _session(),
+            velocity_m_yr=20.0,
+            uniform_search=True,
+            uniform_search_box="2",
+            explicit_search_above_days=0,
+        )
         assert frame["flags"].str.contains("rail at the box edge").any()
 
     def test_a_compatible_uniform_value_flags_nothing_new(self):
         # +/-10 px covers 30 m on 3 m pixels, far beyond 1 m/yr over 2500 d,
         # and costs 4x the ASP default -- inside the budget.
-        frame, _ = _headless(_session(), velocity_m_yr=1.0, uniform_kernel=True,
-                             uniform_kernel_px=21, uniform_search=True,
-                             uniform_search_box="10", explicit_search_above_days=0)
+        frame, _ = _headless(
+            _session(),
+            velocity_m_yr=1.0,
+            uniform_kernel=True,
+            uniform_kernel_px=21,
+            uniform_search=True,
+            uniform_search_box="10",
+            explicit_search_above_days=0,
+        )
         assert not frame["flags"].str.contains("uniform").any()
 
     def test_an_expensive_uniform_box_is_flagged_for_every_pair(self):
         """An oversized box costs the whole archive, not one pair."""
-        frame, _ = _headless(_session(), velocity_m_yr=1.0, uniform_search=True,
-                             uniform_search_box="40", explicit_search_above_days=0)
+        frame, _ = _headless(
+            _session(),
+            velocity_m_yr=1.0,
+            uniform_search=True,
+            uniform_search_box="40",
+            explicit_search_above_days=0,
+        )
         assert frame["flags"].str.contains("costs").all()
 
     def test_the_plan_records_why_the_groups_match(self):
@@ -735,11 +800,15 @@ class TestUniformOverrides:
     def test_checkbox_toggles_live(self):
         session = _session()
         box = self._drive(session, explicit_search_above_days=0)
-        before = {str(b["params"]["corr_kernel"])
-                  for b in session._last_corr_plan["groups"].values()}
+        before = {
+            str(b["params"]["corr_kernel"])
+            for b in session._last_corr_plan["groups"].values()
+        }
         _widget(box, "uniform kernel").value = True
-        after = {str(b["params"]["corr_kernel"])
-                 for b in session._last_corr_plan["groups"].values()}
+        after = {
+            str(b["params"]["corr_kernel"])
+            for b in session._last_corr_plan["groups"].values()
+        }
         assert len(before) > 1 and len(after) == 1
 
     def test_a_bad_box_in_the_widget_degrades_instead_of_raising(self):
@@ -749,5 +818,5 @@ class TestUniformOverrides:
         good = _widget(box, "box:")
         good.value = "30"
         n_before = len(session._last_corr_plan["groups"])
-        good.value = "not a box"          # must not propagate
+        good.value = "not a box"  # must not propagate
         assert len(session._last_corr_plan["groups"]) == n_before

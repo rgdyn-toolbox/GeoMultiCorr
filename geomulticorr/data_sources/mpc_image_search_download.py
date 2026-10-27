@@ -2,27 +2,27 @@
 # coding=utf-8
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # mpc_image_search_download.py
 # creation date: 2026-07-10.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -85,6 +85,7 @@ from geomulticorr.data_sources._layout import (
 # Optional progress bar
 try:
     from tqdm import tqdm as _tqdm
+
     _HAS_TQDM = True
 except Exception:
     _HAS_TQDM = False
@@ -189,28 +190,47 @@ class ImageCollectionCatalog:
         return cls(
             [
                 CollectionSpec(
-                    key="L9_SR", stac_collection="landsat-c2-l2", platform="landsat-9",
-                    nominal_scale_m=30, pretty_name="Landsat 9 SR (C2 L2)",
-                    bands=("nir08", "red", "green"), metadata_assets=landsat_meta,
+                    key="L9_SR",
+                    stac_collection="landsat-c2-l2",
+                    platform="landsat-9",
+                    nominal_scale_m=30,
+                    pretty_name="Landsat 9 SR (C2 L2)",
+                    bands=("nir08", "red", "green"),
+                    metadata_assets=landsat_meta,
                 ),
                 CollectionSpec(
-                    key="L8_SR", stac_collection="landsat-c2-l2", platform="landsat-8",
-                    nominal_scale_m=30, pretty_name="Landsat 8 SR (C2 L2)",
-                    bands=("nir08", "red", "green"), metadata_assets=landsat_meta,
+                    key="L8_SR",
+                    stac_collection="landsat-c2-l2",
+                    platform="landsat-8",
+                    nominal_scale_m=30,
+                    pretty_name="Landsat 8 SR (C2 L2)",
+                    bands=("nir08", "red", "green"),
+                    metadata_assets=landsat_meta,
                 ),
                 CollectionSpec(
-                    key="L7_SR", stac_collection="landsat-c2-l2", platform="landsat-7",
-                    nominal_scale_m=30, pretty_name="Landsat 7 SR (C2 L2)",
-                    bands=("nir08", "red", "green"), metadata_assets=landsat_meta,
+                    key="L7_SR",
+                    stac_collection="landsat-c2-l2",
+                    platform="landsat-7",
+                    nominal_scale_m=30,
+                    pretty_name="Landsat 7 SR (C2 L2)",
+                    bands=("nir08", "red", "green"),
+                    metadata_assets=landsat_meta,
                 ),
                 CollectionSpec(
-                    key="L5_SR", stac_collection="landsat-c2-l2", platform="landsat-5",
-                    nominal_scale_m=30, pretty_name="Landsat 5 SR (C2 L2)",
-                    bands=("nir08", "red", "green"), metadata_assets=landsat_meta,
+                    key="L5_SR",
+                    stac_collection="landsat-c2-l2",
+                    platform="landsat-5",
+                    nominal_scale_m=30,
+                    pretty_name="Landsat 5 SR (C2 L2)",
+                    bands=("nir08", "red", "green"),
+                    metadata_assets=landsat_meta,
                 ),
                 CollectionSpec(
-                    key="S2_SR", stac_collection="sentinel-2-l2a", platform=None,
-                    nominal_scale_m=10, pretty_name="Sentinel-2 L2A",
+                    key="S2_SR",
+                    stac_collection="sentinel-2-l2a",
+                    platform=None,
+                    nominal_scale_m=10,
+                    pretty_name="Sentinel-2 L2A",
                     bands=("B08", "B04", "B03", "B02"),
                     metadata_assets=("granule-metadata", "product-metadata"),
                 ),
@@ -280,7 +300,9 @@ class ImageFinder:
         self._item_cache: Dict[str, pystac.Item] = {}
 
     # ---- public API
-    def search_metadata(self, collection_keys: Optional[Sequence[str]] = None) -> gpd.GeoDataFrame:
+    def search_metadata(
+        self, collection_keys: Optional[Sequence[str]] = None
+    ) -> gpd.GeoDataFrame:
         """Search collections and build a GeoDataFrame of per-image metadata.
 
         Parameters
@@ -321,7 +343,9 @@ class ImageFinder:
             )
             for item in search.items():
                 dt = item.datetime
-                if dt is None or not (self.month_range[0] <= dt.month <= self.month_range[1]):
+                if dt is None or not (
+                    self.month_range[0] <= dt.month <= self.month_range[1]
+                ):
                     continue
                 footprint = _shape(item.geometry)
                 inter = footprint.intersection(self.aoi_geom)
@@ -336,7 +360,9 @@ class ImageFinder:
                         "collection_key": spec.key,
                         "collection_name": spec.pretty_name,
                         "acquisition_date": dt.strftime("%Y-%m-%d"),
-                        "cloud_percent": float(item.properties.get("eo:cloud_cover", np.nan)),
+                        "cloud_percent": float(
+                            item.properties.get("eo:cloud_cover", np.nan)
+                        ),
                         "nominal_scale_m": int(spec.nominal_scale_m),
                         "footprint_area_m2": footprint_area_m2,
                         "footprint_area_km2": footprint_area_m2 / 1e6,
@@ -349,11 +375,20 @@ class ImageFinder:
         if not rows:
             return gpd.GeoDataFrame(
                 columns=[
-                    "image_id", "collection_key", "collection_name", "acquisition_date",
-                    "cloud_percent", "nominal_scale_m", "footprint_area_m2",
-                    "footprint_area_km2", "aoi_coverage_percent", "overlap_ratio", "geometry",
+                    "image_id",
+                    "collection_key",
+                    "collection_name",
+                    "acquisition_date",
+                    "cloud_percent",
+                    "nominal_scale_m",
+                    "footprint_area_m2",
+                    "footprint_area_km2",
+                    "aoi_coverage_percent",
+                    "overlap_ratio",
+                    "geometry",
                 ],
-                geometry="geometry", crs="EPSG:4326",
+                geometry="geometry",
+                crs="EPSG:4326",
             )
 
         gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326")
@@ -455,7 +490,9 @@ class ImageFinder:
         required = {"image_id", "collection_key"}
         missing = required - set(images_gdf.columns)
         if missing:
-            raise ValueError(f"images_gdf is missing required columns: {sorted(missing)}")
+            raise ValueError(
+                f"images_gdf is missing required columns: {sorted(missing)}"
+            )
 
         out_root = Path(output_dir)
         out_root.mkdir(parents=True, exist_ok=True)
@@ -474,7 +511,11 @@ class ImageFinder:
             image_id: str = getattr(row, "image_id")
             collection_key: str = getattr(row, "collection_key")
             spec = self._catalog.get(collection_key)
-            bands = list(bands_override) if bands_override is not None else list(spec.bands or [])
+            bands = (
+                list(bands_override)
+                if bands_override is not None
+                else list(spec.bands or [])
+            )
 
             attempt = 0
             while True:
@@ -484,10 +525,16 @@ class ImageFinder:
                     if mode == "crop":
                         collection_dir = out_root / collection_key
                         collection_dir.mkdir(parents=True, exist_ok=True)
-                        date_str = item.datetime.strftime("%Y-%m-%d") if item.datetime else "nodate"
+                        date_str = (
+                            item.datetime.strftime("%Y-%m-%d")
+                            if item.datetime
+                            else "nodate"
+                        )
                         base = file_basename or collection_key
                         out_path = collection_dir / f"{base}_{date_str}_{item.id}.tif"
-                        p = self._download_crop(item, bands, out_path, overwrite=overwrite)
+                        p = self._download_crop(
+                            item, bands, out_path, overwrite=overwrite
+                        )
                         if p is not None:
                             scene_paths.append(p)
                         meta_dir = collection_dir
@@ -499,7 +546,9 @@ class ImageFinder:
                             scene_dir = out_root / collection_key / item.id
                         scene_dir.mkdir(parents=True, exist_ok=True)
                         for band in bands:
-                            p = self._download_asset_file(item, band, scene_dir, overwrite=overwrite)
+                            p = self._download_asset_file(
+                                item, band, scene_dir, overwrite=overwrite
+                            )
                             if p is not None:
                                 scene_paths.append(p)
                         meta_dir = scene_dir
@@ -508,18 +557,26 @@ class ImageFinder:
                         for meta_key in spec.metadata_assets:
                             if meta_key not in item.assets:
                                 LOGGER.warning(
-                                    "metadata asset %r not found on item %s", meta_key, item.id
+                                    "metadata asset %r not found on item %s",
+                                    meta_key,
+                                    item.id,
                                 )
                                 continue
                             prefix = None
                             if mode == "crop":
                                 # match the raster filename so scene and metadata pair up
                                 date_str = (
-                                    item.datetime.strftime("%Y-%m-%d") if item.datetime else "nodate"
+                                    item.datetime.strftime("%Y-%m-%d")
+                                    if item.datetime
+                                    else "nodate"
                                 )
                                 prefix = f"{file_basename or collection_key}_{date_str}_{item.id}"
                             p = self._download_asset_file(
-                                item, meta_key, meta_dir, overwrite=overwrite, rename_prefix=prefix
+                                item,
+                                meta_key,
+                                meta_dir,
+                                overwrite=overwrite,
+                                rename_prefix=prefix,
                             )
                             if p is not None:
                                 scene_paths.append(p)
@@ -537,7 +594,7 @@ class ImageFinder:
                             f"Failed to download {image_id} (collection {collection_key}). "
                             f"Last error: {e}"
                         ) from e
-                    _time.sleep(retry_backoff_s * (2 ** attempt))
+                    _time.sleep(retry_backoff_s * (2**attempt))
                     attempt += 1
 
         return written
@@ -652,7 +709,9 @@ class ImageFinder:
             raise KeyError(f"asset {asset_key!r} not found on item {item.id}")
         href = item.assets[asset_key].href
         original_name = Path(href.split("?", 1)[0]).name
-        filename = f"{rename_prefix}_{original_name}" if rename_prefix else original_name
+        filename = (
+            f"{rename_prefix}_{original_name}" if rename_prefix else original_name
+        )
         out_path = out_dir / filename
         if out_path.exists() and not overwrite:
             LOGGER.info("skip existing %s", out_path)
@@ -670,7 +729,7 @@ class ImageFinder:
 
     @staticmethod
     def _coerce_to_wgs84_geometry(
-        aoi: Union[gpd.GeoDataFrame, _BaseGeometry, Mapping]
+        aoi: Union[gpd.GeoDataFrame, _BaseGeometry, Mapping],
     ) -> _BaseGeometry:
         """Coerce AOI input (GeoDataFrame / shapely / GeoJSON-like) to a WGS84 shapely union."""
         if isinstance(aoi, gpd.GeoDataFrame):
@@ -696,23 +755,73 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Search and download Landsat/Sentinel-2 imagery from Microsoft Planetary Computer (no API key)."
     )
-    parser.add_argument("aoi_file", type=str, help="Path to AOI file (GeoPackage/GeoJSON/Shapefile)")
+    parser.add_argument(
+        "aoi_file", type=str, help="Path to AOI file (GeoPackage/GeoJSON/Shapefile)"
+    )
     parser.add_argument("out_dir", type=str, help="Output directory for downloads")
-    parser.add_argument("--years", type=int, nargs=2, default=(2020, 2025), help="Year range inclusive, e.g. 2019 2021")
-    parser.add_argument("--months", type=int, nargs=2, default=(1, 12), help="Month range inclusive, e.g. 6 9")
+    parser.add_argument(
+        "--years",
+        type=int,
+        nargs=2,
+        default=(2020, 2025),
+        help="Year range inclusive, e.g. 2019 2021",
+    )
+    parser.add_argument(
+        "--months",
+        type=int,
+        nargs=2,
+        default=(1, 12),
+        help="Month range inclusive, e.g. 6 9",
+    )
     parser.add_argument("--cloud", type=int, default=30, help="Max cloud percent")
-    parser.add_argument("--collections", nargs="+", default=None, help="Collection keys (e.g., S2_SR L8_SR). Default: all.")
-    parser.add_argument("--mode", choices=["crop", "full"], default="crop", help="Download mode: AOI crop or full original scenes")
-    parser.add_argument("--no-metadata", action="store_true", help="Skip vendor metadata (XML) download")
-    parser.add_argument("--bands", nargs="+", default=None, help="Override asset keys to download (applies to all images)")
-    parser.add_argument("--basename", type=str, default=None, help="Filename prefix for crop mode")
-    parser.add_argument("--limit", type=int, default=None, help="Max scenes to download")
-    parser.add_argument("--throttle", type=float, default=0.0, help="Seconds to sleep between scenes")
+    parser.add_argument(
+        "--collections",
+        nargs="+",
+        default=None,
+        help="Collection keys (e.g., S2_SR L8_SR). Default: all.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["crop", "full"],
+        default="crop",
+        help="Download mode: AOI crop or full original scenes",
+    )
+    parser.add_argument(
+        "--no-metadata", action="store_true", help="Skip vendor metadata (XML) download"
+    )
+    parser.add_argument(
+        "--bands",
+        nargs="+",
+        default=None,
+        help="Override asset keys to download (applies to all images)",
+    )
+    parser.add_argument(
+        "--basename", type=str, default=None, help="Filename prefix for crop mode"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Max scenes to download"
+    )
+    parser.add_argument(
+        "--throttle", type=float, default=0.0, help="Seconds to sleep between scenes"
+    )
     parser.add_argument("--retries", type=int, default=2, help="Max retries per scene")
-    parser.add_argument("--backoff", type=float, default=2.0, help="Base seconds for exponential backoff")
-    parser.add_argument("--overwrite", action="store_true", help="Re-download existing files")
-    parser.add_argument("--no-progress", action="store_true", help="Disable progress bar output")
-    parser.add_argument("--log-level", default="INFO", help="Logging level (DEBUG, INFO, WARNING, ERROR)")
+    parser.add_argument(
+        "--backoff",
+        type=float,
+        default=2.0,
+        help="Base seconds for exponential backoff",
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Re-download existing files"
+    )
+    parser.add_argument(
+        "--no-progress", action="store_true", help="Disable progress bar output"
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="Logging level (DEBUG, INFO, WARNING, ERROR)",
+    )
 
     args = parser.parse_args()
     _logging.basicConfig(level=getattr(_logging, args.log_level.upper(), _logging.INFO))
@@ -723,7 +832,9 @@ if __name__ == "__main__":
     if args.collections is not None:
         unknown = sorted(set(args.collections) - set(catalog.keys()))
         if unknown:
-            raise SystemExit(f"Unknown collection keys: {unknown}. Available: {catalog.keys()}")
+            raise SystemExit(
+                f"Unknown collection keys: {unknown}. Available: {catalog.keys()}"
+            )
 
     finder = ImageFinder(
         catalog,

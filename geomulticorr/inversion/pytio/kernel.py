@@ -42,20 +42,21 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .config import (EPS_ZERO, LINK_WEIGHT, NODATA_IN, NODATA_OUT, TIOConfig)
+from .config import EPS_ZERO, LINK_WEIGHT, NODATA_IN, NODATA_OUT, TIOConfig
 from .operators import laplacian
 
 
 @dataclass
 class Operators:
     """Static, per-run quantities shared by all pixels."""
-    J: np.ndarray            # (N, S-1) signed incidence matrix
-    pair_img: np.ndarray     # (N, 2) image indices of each pair
-    t: np.ndarray            # (S,) dates (decimal years)
-    w_fixed: np.ndarray      # (N,) globally-normalized weights (variance mode)
-    w_norm: np.ndarray       # (N,) weights renormalized per pixel subset
-    quality: np.ndarray      # (S,) link-row quality weights (iqual)
-    shift: np.ndarray        # (N,) referencing shift per pair
+
+    J: np.ndarray  # (N, S-1) signed incidence matrix
+    pair_img: np.ndarray  # (N, 2) image indices of each pair
+    t: np.ndarray  # (S,) dates (decimal years)
+    w_fixed: np.ndarray  # (N,) globally-normalized weights (variance mode)
+    w_norm: np.ndarray  # (N,) weights renormalized per pixel subset
+    quality: np.ndarray  # (S,) link-row quality weights (iqual)
+    shift: np.ndarray  # (N,) referencing shift per pair
     cfg: TIOConfig
 
     @property
@@ -89,24 +90,37 @@ def _select_images(valid, pair_img, n_dates, min_pairs):
 class _System:
     """Assembled least-squares system for one no-data pattern."""
 
-    __slots__ = ("keep_pairs", "keep_img", "img_pos", "col_idx", "Gd",
-                 "A", "pinv", "rank_defect", "w_row", "touch", "S_inv", "N_inv")
+    __slots__ = (
+        "keep_pairs",
+        "keep_img",
+        "img_pos",
+        "col_idx",
+        "Gd",
+        "A",
+        "pinv",
+        "rank_defect",
+        "w_row",
+        "touch",
+        "S_inv",
+        "N_inv",
+    )
 
     def __init__(self, valid, ops: Operators):
         cfg = ops.cfg
         S = len(ops.t)
         self.keep_pairs, self.keep_img = _select_images(
-            valid, ops.pair_img, S, cfg.min_pairs_per_image)
+            valid, ops.pair_img, S, cfg.min_pairs_per_image
+        )
         self.img_pos = np.flatnonzero(self.keep_img)
         self.S_inv = len(self.img_pos)
         self.N_inv = int(self.keep_pairs.sum())
         if self.S_inv < 3 or self.N_inv == 0:
-            self.A = None      # not invertible -> pixel masked
+            self.A = None  # not invertible -> pixel masked
             return
 
         S_inv, N_inv = self.S_inv, self.N_inv
         # increment columns: retained images among 0..S-2, first S_inv-1 of them
-        self.col_idx = np.flatnonzero(self.keep_img[:S - 1])[:S_inv - 1]
+        self.col_idx = np.flatnonzero(self.keep_img[: S - 1])[: S_inv - 1]
         pk = np.flatnonzero(self.keep_pairs)
         self.Gd = ops.J[np.ix_(pk, self.col_idx)]
 
@@ -124,19 +138,20 @@ class _System:
             ncol = S_inv - 1
             nrow = N_inv + S_inv
         A = np.zeros((nrow, ncol))
-        A[:N_inv, :S_inv - 1] = self.Gd * w[:, None]
+        A[:N_inv, : S_inv - 1] = self.Gd * w[:, None]
 
         # link rows: eps*quality * (cumsum of increments - phi_s) = 0
         for s in range(S_inv):
             q = LINK_WEIGHT * ops.quality[self.img_pos[s]]
-            A[N_inv + s, :S_inv - 1] = q * (self.col_idx < self.img_pos[s])
+            A[N_inv + s, : S_inv - 1] = q * (self.col_idx < self.img_pos[s])
             if cfg.smoothing:
                 A[N_inv + s, S_inv - 1 + s] = -q
 
         if cfg.smoothing:
-            D = laplacian(ops.t[self.keep_img], cfg.scheme, cfg.pond_liss,
-                          cfg.first_deriv_zero)
-            A[N_inv + S_inv:, S_inv - 1:] = cfg.gamma * D
+            D = laplacian(
+                ops.t[self.keep_img], cfg.scheme, cfg.pond_liss, cfg.first_deriv_zero
+            )
+            A[N_inv + S_inv :, S_inv - 1 :] = cfg.gamma * D
 
         self.A = A
         U, sv, Vt = np.linalg.svd(A, full_matrices=False)
@@ -146,16 +161,21 @@ class _System:
 
         # (S_inv, N_inv) bool: pair k touches image s (for per-date RMS)
         pi = ops.pair_img[pk]
-        self.touch = (pi[:, 0][None, :] == self.img_pos[:, None]) | \
-                     (pi[:, 1][None, :] == self.img_pos[:, None])
+        self.touch = (pi[:, 0][None, :] == self.img_pos[:, None]) | (
+            pi[:, 1][None, :] == self.img_pos[:, None]
+        )
 
     def solve(self, d):
         """Batch solve; d is (N_inv, npix). Returns (m, phi, resid)."""
         b = np.zeros((self.A.shape[0], d.shape[1]))
-        b[:self.N_inv] = d * self.w_row[:, None]
+        b[: self.N_inv] = d * self.w_row[:, None]
         x = self.pinv @ b
-        m = x[:self.S_inv - 1]
-        phi = x[self.S_inv - 1:2 * self.S_inv - 1] if self.A.shape[1] > self.S_inv - 1 else None
+        m = x[: self.S_inv - 1]
+        phi = (
+            x[self.S_inv - 1 : 2 * self.S_inv - 1]
+            if self.A.shape[1] > self.S_inv - 1
+            else None
+        )
         resid = self.Gd @ m - d
         return x, m, phi, resid
 
@@ -185,11 +205,11 @@ def _robust_resolve(sys_: _System, d, x0, resid0, cfg: TIOConfig):
             w[np.abs(resid) > cfg.mask_residual_threshold] /= 1000.0
         w /= w.mean()
         A = sys_.A.copy()
-        A[:sys_.N_inv] *= w[:, None]
+        A[: sys_.N_inv] *= w[:, None]
         b = np.zeros(A.shape[0])
-        b[:sys_.N_inv] = d * sys_.w_row * w
+        b[: sys_.N_inv] = d * sys_.w_row * w
         x, *_ = np.linalg.lstsq(A, b, rcond=cfg.rcond)
-        m = x[:sys_.S_inv - 1]
+        m = x[: sys_.S_inv - 1]
         resid = sys_.Gd @ m - d
     return x, resid
 
@@ -226,8 +246,18 @@ def invert_block(data: np.ndarray, ops: Operators):
     # common mask: pixel kept if #invalid <= int(N * frac_discard)
     pix_ok = (N - valid.sum(axis=1)) <= int(N * cfg.frac_discard)
     if not pix_ok.any():
-        outs = (cum, cum_s, resid_out, rms, rms_date, n_date, n_img, n_pair,
-                rankd, var_ini)
+        outs = (
+            cum,
+            cum_s,
+            resid_out,
+            rms,
+            rms_date,
+            n_date,
+            n_img,
+            n_pair,
+            rankd,
+            var_ini,
+        )
         return tuple(o.reshape(shp + o.shape[1:]) for o in outs)
 
     idx_ok = np.flatnonzero(pix_ok)
@@ -241,15 +271,16 @@ def invert_block(data: np.ndarray, ops: Operators):
         if sys_.A is None:
             continue
         pk = np.flatnonzero(sys_.keep_pairs)
-        d = flat[np.ix_(pix, pk)].T                      # (N_inv, npix_p)
+        d = flat[np.ix_(pix, pk)].T  # (N_inv, npix_p)
         x, m, phi, resid = sys_.solve(d)
 
         if iterate:
             for c in range(len(pix)):
                 x[:, c], resid[:, c] = _robust_resolve(
-                    sys_, d[:, c], x[:, c], resid[:, c], cfg)
-            m = x[:sys_.S_inv - 1]
-            phi = x[sys_.S_inv - 1:2 * sys_.S_inv - 1] if cfg.smoothing else None
+                    sys_, d[:, c], x[:, c], resid[:, c], cfg
+                )
+            m = x[: sys_.S_inv - 1]
+            phi = x[sys_.S_inv - 1 : 2 * sys_.S_inv - 1] if cfg.smoothing else None
 
         # solver failure guard (Fortran: NaN or |x| > 10000 -> nodata)
         bad = ~np.isfinite(x).all(axis=0) | (np.abs(x) > 1e4).any(axis=0)
@@ -264,12 +295,12 @@ def invert_block(data: np.ndarray, ops: Operators):
         n_img[gpix] = sys_.S_inv
         n_pair[gpix] = sys_.N_inv
         rankd[gpix] = sys_.rank_defect
-        var_ini[gpix] = np.sqrt((d[:, good]**2).mean(axis=0))
+        var_ini[gpix] = np.sqrt((d[:, good] ** 2).mean(axis=0))
         rms[gpix] = rmsout[good]
         resid_out[np.ix_(gpix, pk)] = resid[:, good].T.astype(np.float32)
 
-        counts = sys_.touch.sum(axis=1).astype(np.float64)   # pairs per image
-        rd = np.sqrt((sys_.touch @ resid[:, good]**2) / counts[:, None])
+        counts = sys_.touch.sum(axis=1).astype(np.float64)  # pairs per image
+        rd = np.sqrt((sys_.touch @ resid[:, good] ** 2) / counts[:, None])
         rms_date[np.ix_(gpix, sys_.img_pos)] = rd.T.astype(np.float32)
         n_date[np.ix_(gpix, sys_.img_pos)] = counts.astype(np.float32)
 
@@ -280,6 +311,5 @@ def invert_block(data: np.ndarray, ops: Operators):
         if phi is not None:
             cum_s[np.ix_(kpix, sys_.img_pos)] = phi[:, keep].T.astype(np.float32)
 
-    outs = (cum, cum_s, resid_out, rms, rms_date, n_date, n_img, n_pair,
-            rankd, var_ini)
+    outs = (cum, cum_s, resid_out, rms, rms_date, n_date, n_img, n_pair, rankd, var_ini)
     return tuple(o.reshape(shp + o.shape[1:]) for o in outs)

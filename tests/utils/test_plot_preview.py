@@ -7,6 +7,7 @@ well under 1000 px.  ``_preview`` decimates for display; these tests lock down
 that it preserves georeferencing, costs nothing on small rasters, and that the
 public ``plot_*`` functions still produce complete, leak-free figures with it.
 """
+
 from __future__ import annotations
 
 import numpy as np

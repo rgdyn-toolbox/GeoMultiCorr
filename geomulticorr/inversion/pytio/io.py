@@ -42,8 +42,8 @@ import xarray as xr
 
 from .config import NODATA_OUT
 
-
 # ---------------------------------------------------------------- list files
+
 
 def read_image_list(path):
     """`liste_image_inv`: date YYYYMMDD, decimal year, elapsed, bperp [, qual].
@@ -61,9 +61,13 @@ def read_image_list(path):
             elapsed.append(float(parts[2]) if len(parts) > 2 else np.nan)
             bperp.append(float(parts[3]) if len(parts) > 3 else 0.0)
             qual.append(float(parts[4]) if len(parts) > 4 else 1.0)
-    return dict(dates=np.array(dates), t=np.array(t),
-                elapsed=np.array(elapsed), bperp=np.array(bperp),
-                quality=np.array(qual))
+    return dict(
+        dates=np.array(dates),
+        t=np.array(t),
+        elapsed=np.array(elapsed),
+        bperp=np.array(bperp),
+        quality=np.array(qual),
+    )
 
 
 def read_pair_list(path):
@@ -81,6 +85,7 @@ def read_pair_list(path):
 
 
 # ------------------------------------------------------------- binary rasters
+
 
 def read_rsc(path):
     """Parse a ROI_PAC-style .rsc file into a dict of strings."""
@@ -115,8 +120,14 @@ def load_r4(path, shape=None):
     return np.memmap(path, dtype="<f4", mode="r", shape=tuple(shape))
 
 
-def load_pair_stack(directory, date1, date2, template="{d1}-{d2}.r4",
-                    shape=None, chunks={"y": 128, "x": -1}):
+def load_pair_stack(
+    directory,
+    date1,
+    date2,
+    template="{d1}-{d2}.r4",
+    shape=None,
+    chunks={"y": 128, "x": -1},
+):
     """Lazy (pair, y, x) DataArray from flat float32 binaries.
 
     directory/template.format(d1=..., d2=...) must exist for every pair
@@ -128,34 +139,44 @@ def load_pair_stack(directory, date1, date2, template="{d1}-{d2}.r4",
     which is fine for small scenes but loads every pair map into memory.
     Chunk only in ``y``/``x`` — the kernel needs the whole pair axis per pixel.
     """
-    paths = [os.path.join(directory, template.format(d1=a, d2=b))
-             for a, b in zip(date1, date2)]
+    paths = [
+        os.path.join(directory, template.format(d1=a, d2=b))
+        for a, b in zip(date1, date2)
+    ]
     if shape is None:
         shape = guess_shape(paths[0])
     try:
         import dask.array as da
     except ImportError:  # pragma: no cover - exercised only without dask
         from geomulticorr._logging import logger
+
         logger.warning(
             "dask is not installed — loading the pair stack eagerly "
             f"({len(paths)} maps of {shape[0]}x{shape[1]} px)."
         )
         stack = np.stack([np.asarray(load_r4(p, shape)) for p in paths], axis=0)
     else:
-        arrs = [da.from_array(load_r4(p, shape), chunks=(chunks.get("y", 128),
-                                                         chunks.get("x", -1)))
-                for p in paths]
+        arrs = [
+            da.from_array(
+                load_r4(p, shape), chunks=(chunks.get("y", 128), chunks.get("x", -1))
+            )
+            for p in paths
+        ]
         stack = da.stack(arrs, axis=0)
     return xr.DataArray(
-        stack, dims=("pair", "y", "x"),
+        stack,
+        dims=("pair", "y", "x"),
         coords={"date1": ("pair", list(date1)), "date2": ("pair", list(date2))},
-        name="displacement")
+        name="displacement",
+    )
 
 
 # ------------------------------------------------------------------- writers
 
-def write_envi_hdr(path, samples, lines, bands, band_names=None,
-                   nodata=NODATA_OUT, interleave="bip"):
+
+def write_envi_hdr(
+    path, samples, lines, bands, band_names=None, nodata=NODATA_OUT, interleave="bip"
+):
     with open(path + ".hdr", "w") as f:
         f.write("ENVI\n")
         f.write(f"samples = {samples}\nlines = {lines}\nbands = {bands}\n")
@@ -169,30 +190,36 @@ def write_envi_hdr(path, samples, lines, bands, band_names=None,
 
 def write_depl_cumule(cum, path, nodata_in=None):
     """Write a (date, y, x) DataArray/array in the exact Fortran format."""
-    arr = np.asarray(cum.transpose("y", "x", "date").data
-                     if isinstance(cum, xr.DataArray) else np.moveaxis(cum, 0, -1))
+    arr = np.asarray(
+        cum.transpose("y", "x", "date").data
+        if isinstance(cum, xr.DataArray)
+        else np.moveaxis(cum, 0, -1)
+    )
     arr = np.ascontiguousarray(arr, dtype="<f4")
     arr[~np.isfinite(arr)] = NODATA_OUT
     if nodata_in is not None:
         arr[arr == nodata_in] = NODATA_OUT
     arr.tofile(path)
-    names = ([str(d) for d in cum["date"].values]
-             if isinstance(cum, xr.DataArray) and "date" in cum.coords else None)
+    names = (
+        [str(d) for d in cum["date"].values]
+        if isinstance(cum, xr.DataArray) and "date" in cum.coords
+        else None
+    )
     write_envi_hdr(path, arr.shape[1], arr.shape[0], arr.shape[2], names)
 
 
-def read_depl_cumule(path, width, length, n_dates, dates=None,
-                     mask_nodata=True):
+def read_depl_cumule(path, width, length, n_dates, dates=None, mask_nodata=True):
     """Read a Fortran `depl_cumule` file into a (date, y, x) DataArray."""
     arr = np.fromfile(path, dtype="<f4")
-    length_eff = arr.size // (width * n_dates)   # Fortran may skip last row
-    arr = arr[:length_eff * width * n_dates].reshape(length_eff, width, n_dates)
+    length_eff = arr.size // (width * n_dates)  # Fortran may skip last row
+    arr = arr[: length_eff * width * n_dates].reshape(length_eff, width, n_dates)
     arr = np.moveaxis(arr, -1, 0).astype(np.float32)
     if mask_nodata:
         arr = np.where(arr < 9990.0, arr, np.nan)
     coords = {"date": list(dates)} if dates is not None else {}
-    return xr.DataArray(arr, dims=("date", "y", "x"), coords=coords,
-                        name="cumulative_displacement")
+    return xr.DataArray(
+        arr, dims=("date", "y", "x"), coords=coords, name="cumulative_displacement"
+    )
 
 
 def write_r4(arr2d, path, hdr=True):

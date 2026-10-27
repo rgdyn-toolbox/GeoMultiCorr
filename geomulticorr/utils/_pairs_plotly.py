@@ -56,6 +56,7 @@ Public API:
 - :func:`figure_dt_hist` — distribution of temporal baselines.
 - :data:`VIEW_BUILDERS` / :data:`VIEW_LABELS` — dispatch tables for the explorer.
 """
+
 from __future__ import annotations
 
 from typing import Callable
@@ -84,7 +85,15 @@ from geomulticorr.utils._pairs_geometry import (
 DIRECTION_COLORS: dict[str, str] = {"forward": "#1f77b4", "backward": "#ff7f0e"}
 
 #: Customdata columns carried by every per-pair hover.
-_CUSTOM_COLS = ("pz", "date_i", "date_j", "sensor_i", "sensor_j", "dt_days", "direction")
+_CUSTOM_COLS = (
+    "pz",
+    "date_i",
+    "date_j",
+    "sensor_i",
+    "sensor_j",
+    "dt_days",
+    "direction",
+)
 
 #: Hover body shared by the baseline view — kept verbatim from the original explorer.
 _BASELINE_HOVER = (
@@ -139,14 +148,24 @@ def _empty_figure(message: str, *, title: str = "", height: int = 460) -> go.Fig
     fig = go.Figure()
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False)
-    fig.add_annotation(text=message, showarrow=False, xref="paper", yref="paper",
-                       x=0.5, y=0.5, font=dict(size=13, color="#888"))
+    fig.add_annotation(
+        text=message,
+        showarrow=False,
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.5,
+        font=dict(size=13, color="#888"),
+    )
     return _base_layout(fig, title, height)
 
 
 # ── baseline: Δt vs midpoint date ───────────────────────────────────────────────
 
-def figure_baseline(frame: pd.DataFrame, *, title: str = "", height: int = 460) -> go.Figure:
+
+def figure_baseline(
+    frame: pd.DataFrame, *, title: str = "", height: int = 460
+) -> go.Figure:
     """Scatter of temporal baseline against pair midpoint date, split by direction.
 
     Answers "how many pairs, at which baselines, and when" — the view to check
@@ -157,15 +176,21 @@ def figure_baseline(frame: pd.DataFrame, *, title: str = "", height: int = 460) 
     :param height: Figure height in pixels.
     """
     if len(frame) == 0:
-        return _empty_figure("No pairs match the current filters.", title=title, height=height)
+        return _empty_figure(
+            "No pairs match the current filters.", title=title, height=height
+        )
 
     fig = go.Figure()
     for name, symbol in (("forward", "circle"), ("backward", "diamond")):
         sub = frame[frame["direction"] == name]
         fig.add_trace(
             go.Scatter(
-                x=sub["mid_dec"], y=sub["dt_days"], mode="markers", name=name,
-                customdata=_customdata(sub), opacity=0.75,
+                x=sub["mid_dec"],
+                y=sub["dt_days"],
+                mode="markers",
+                name=name,
+                customdata=_customdata(sub),
+                opacity=0.75,
                 marker=dict(size=9, symbol=symbol, color=DIRECTION_COLORS[name]),
                 hovertemplate=f"dir={name}<br>" + _BASELINE_HOVER,
             )
@@ -178,6 +203,7 @@ def figure_baseline(frame: pd.DataFrame, *, title: str = "", height: int = 460) 
 
 
 # ── chord: time-proportional circle ─────────────────────────────────────────────
+
 
 def figure_chord(
     frame: pd.DataFrame,
@@ -229,12 +255,17 @@ def figure_chord(
     if dedupe:
         frame = unique_couples(frame)
     if len(frame) == 0:
-        return _empty_figure("No pairs match the current filters.", title=title, height=height)
+        return _empty_figure(
+            "No pairs match the current filters.", title=title, height=height
+        )
 
     dates = unique_dates(frame)
     if len(dates) < 2:
-        return _empty_figure("A chord diagram needs at least two acquisition dates.",
-                             title=title, height=height)
+        return _empty_figure(
+            "A chord diagram needs at least two acquisition dates.",
+            title=title,
+            height=height,
+        )
 
     scale = CircularTimeScale.from_dates(dates)
     if link_radius is None:
@@ -244,32 +275,58 @@ def figure_chord(
     fig = go.Figure()
 
     # 1. time ring — plotly cannot gradient *within* a line, so a dense marker ring it is
-    rx, ry, rfrac = ring_centerline(n_ring_points, outer_radius=outer_radius,
-                                    ring_width=ring_width)
+    rx, ry, rfrac = ring_centerline(
+        n_ring_points, outer_radius=outer_radius, ring_width=ring_width
+    )
     fig.add_trace(
         go.Scatter(
-            x=rx, y=ry, mode="markers", showlegend=False, hoverinfo="skip",
-            marker=dict(color=rfrac, colorscale=colorscale, cmin=0, cmax=1,
-                        size=max(ring_width * height * 0.6, 4), showscale=False),
+            x=rx,
+            y=ry,
+            mode="markers",
+            showlegend=False,
+            hoverinfo="skip",
+            marker=dict(
+                color=rfrac,
+                colorscale=colorscale,
+                cmin=0,
+                cmax=1,
+                size=max(ring_width * height * 0.6, 4),
+                showscale=False,
+            ),
         )
     )
 
     # 2. all chords in ONE trace
-    curves = chord_polylines(scale.angle(frame["t_i"]), scale.angle(frame["t_j"]),
-                             link_radius=link_radius, curvature=curvature, n_points=n_pts)
+    curves = chord_polylines(
+        scale.angle(frame["t_i"]),
+        scale.angle(frame["t_j"]),
+        link_radius=link_radius,
+        curvature=curvature,
+        n_points=n_pts,
+    )
     cx, cy = _flatten_with_gaps(curves)
     fig.add_trace(
-        go.Scatter(x=cx, y=cy, mode="lines", showlegend=False, hoverinfo="skip",
-                   line=dict(color=link_color, width=link_width))
+        go.Scatter(
+            x=cx,
+            y=cy,
+            mode="lines",
+            showlegend=False,
+            hoverinfo="skip",
+            line=dict(color=link_color, width=link_width),
+        )
     )
 
     # 3. invisible per-chord anchor carrying the pair hover
     mid = curves[:, n_pts // 2, :]
     fig.add_trace(
         go.Scatter(
-            x=mid[:, 0], y=mid[:, 1], mode="markers", showlegend=False,
+            x=mid[:, 0],
+            y=mid[:, 1],
+            mode="markers",
+            showlegend=False,
             marker=dict(size=7, color="rgba(0,0,0,0)"),
-            customdata=_customdata(frame), hovertemplate=_PAIR_HOVER,
+            customdata=_customdata(frame),
+            hovertemplate=_PAIR_HOVER,
         )
     )
 
@@ -278,9 +335,18 @@ def figure_chord(
     nx, ny = polar_to_xy(link_radius, scale.angle(dates))
     fig.add_trace(
         go.Scatter(
-            x=nx, y=ny, mode="markers", showlegend=False,
-            marker=dict(size=6, color=scale.fraction(dates), colorscale=colorscale,
-                        cmin=0, cmax=1, line=dict(color="black", width=0.5)),
+            x=nx,
+            y=ny,
+            mode="markers",
+            showlegend=False,
+            marker=dict(
+                size=6,
+                color=scale.fraction(dates),
+                colorscale=colorscale,
+                cmin=0,
+                cmax=1,
+                line=dict(color="black", width=0.5),
+            ),
             customdata=summary[["date", "sensor", "n_pairs"]].to_numpy(),
             hovertemplate=_NODE_HOVER,
         )
@@ -288,11 +354,19 @@ def figure_chord(
 
     # 5. year ticks
     if show_year_ticks:
-        segs = year_tick_segments(scale, outer_radius=outer_radius, ring_width=ring_width)
+        segs = year_tick_segments(
+            scale, outer_radius=outer_radius, ring_width=ring_width
+        )
         tx, ty = _flatten_with_gaps(segs)
         fig.add_trace(
-            go.Scatter(x=tx, y=ty, mode="lines", showlegend=False, hoverinfo="skip",
-                       line=dict(color="black", width=1.4))
+            go.Scatter(
+                x=tx,
+                y=ty,
+                mode="lines",
+                showlegend=False,
+                hoverinfo="skip",
+                line=dict(color="black", width=1.4),
+            )
         )
 
     # 6. arrowheads — appended LAST so trace indices 0-4 stay stable
@@ -305,10 +379,18 @@ def figure_chord(
         )
         fig.add_trace(
             go.Scatter(
-                x=tips[:, 0], y=tips[:, 1], mode="markers", showlegend=False,
+                x=tips[:, 0],
+                y=tips[:, 1],
+                mode="markers",
+                showlegend=False,
                 hoverinfo="skip",
-                marker=dict(symbol="triangle-up", size=size, color=arrow_color,
-                            angle=tangent_marker_angles(tangents), angleref="up"),
+                marker=dict(
+                    symbol="triangle-up",
+                    size=size,
+                    color=arrow_color,
+                    angle=tangent_marker_angles(tangents),
+                    angleref="up",
+                ),
             )
         )
 
@@ -316,15 +398,25 @@ def figure_chord(
         lx, ly, rot, ha = year_label_placement(scale, label_radius=label_radius)
         for x, y, r, a, year in zip(lx, ly, rot, ha, scale.years):
             fig.add_annotation(
-                x=float(x), y=float(y), text=str(int(year)), showarrow=False,
-                textangle=float(-r), xanchor={"left": "left", "right": "right"}[a],
-                yanchor="middle", font=dict(size=10),
+                x=float(x),
+                y=float(y),
+                text=str(int(year)),
+                showarrow=False,
+                textangle=float(-r),
+                xanchor={"left": "left", "right": "right"}[a],
+                yanchor="middle",
+                font=dict(size=10),
             )
 
     fig.update_layout(
         xaxis=dict(visible=False, range=[-xylim, xylim], fixedrange=True),
-        yaxis=dict(visible=False, range=[-xylim, xylim], scaleanchor="x", scaleratio=1,
-                   fixedrange=True),
+        yaxis=dict(
+            visible=False,
+            range=[-xylim, xylim],
+            scaleanchor="x",
+            scaleratio=1,
+            fixedrange=True,
+        ),
         showlegend=False,
     )
     return _base_layout(fig, title, height)
@@ -332,7 +424,10 @@ def figure_chord(
 
 # ── network: timeline + arcs ────────────────────────────────────────────────────
 
-def _network_groups(frame: pd.DataFrame, color_by: str, n_dt_classes: int) -> list[tuple]:
+
+def _network_groups(
+    frame: pd.DataFrame, color_by: str, n_dt_classes: int
+) -> list[tuple]:
     """``[(label, mask, color)]`` for the arc traces."""
     if color_by == "direction":
         return [
@@ -344,7 +439,10 @@ def _network_groups(frame: pd.DataFrame, color_by: str, n_dt_classes: int) -> li
         col = "sensor_i" if color_by == "sensor" else "pz"
         levels = sorted(frame[col].unique())
         palette = _qualitative_colors(len(levels))
-        return [(str(lv), (frame[col] == lv).to_numpy(), palette[i]) for i, lv in enumerate(levels)]
+        return [
+            (str(lv), (frame[col] == lv).to_numpy(), palette[i])
+            for i, lv in enumerate(levels)
+        ]
     if color_by == "dt":
         # Plotly cannot vary colour within a line trace, so Δt is binned into
         # quantile classes — one trace each. (The matplotlib view is continuous.)
@@ -357,8 +455,13 @@ def _network_groups(frame: pd.DataFrame, color_by: str, n_dt_classes: int) -> li
             mask = (dt >= edges[k]) & (dt < edges[k + 1])
             if mask.any():
                 shade = k / max(n_cls - 1, 1)
-                groups.append((f"{edges[k]:.2f}–{edges[k + 1]:.2f} yr", mask,
-                               _sample_colorscale("Plasma_r", shade)))
+                groups.append(
+                    (
+                        f"{edges[k]:.2f}–{edges[k + 1]:.2f} yr",
+                        mask,
+                        _sample_colorscale("Plasma_r", shade),
+                    )
+                )
         return groups
     raise ValueError(
         f"Unknown color_by '{color_by}'. Valid options: 'direction', 'sensor', 'pzone', 'dt'."
@@ -409,52 +512,91 @@ def figure_network(
     if dedupe:
         frame = unique_couples(frame)
     if len(frame) == 0:
-        return _empty_figure("No pairs match the current filters.", title=title, height=height)
+        return _empty_figure(
+            "No pairs match the current filters.", title=title, height=height
+        )
 
     n_pts = _auto_bezier_points(len(frame), n_bezier_points)
     x1 = frame["dec_i"].to_numpy()
     x2 = frame["dec_j"].to_numpy()
     backward = (frame["direction"] == "backward").to_numpy()
-    heights = arc_heights(frame["dt_years"].to_numpy(), backward=backward,
-                          mirror=mirror_direction)
+    heights = arc_heights(
+        frame["dt_years"].to_numpy(), backward=backward, mirror=mirror_direction
+    )
     curves = timeline_arc_polylines(x1, x2, heights, n_points=n_pts)
 
     fig = go.Figure()
     for label, mask, color in _network_groups(frame, color_by, n_dt_classes):
         gx, gy = _flatten_with_gaps(curves[mask])
         fig.add_trace(
-            go.Scatter(x=gx, y=gy, mode="lines", name=label, hoverinfo="skip",
-                       line=dict(color=color, width=1.4), opacity=0.75)
+            go.Scatter(
+                x=gx,
+                y=gy,
+                mode="lines",
+                name=label,
+                hoverinfo="skip",
+                line=dict(color=color, width=1.4),
+                opacity=0.75,
+            )
         )
 
     # invisible per-arc anchor at the apex, carrying the pair hover
     apex = curves[:, n_pts // 2, :]
     fig.add_trace(
-        go.Scatter(x=apex[:, 0], y=apex[:, 1], mode="markers", showlegend=False,
-                   marker=dict(size=7, color="rgba(0,0,0,0)"),
-                   customdata=_customdata(frame), hovertemplate=_PAIR_HOVER)
+        go.Scatter(
+            x=apex[:, 0],
+            y=apex[:, 1],
+            mode="markers",
+            showlegend=False,
+            marker=dict(size=7, color="rgba(0,0,0,0)"),
+            customdata=_customdata(frame),
+            hovertemplate=_PAIR_HOVER,
+        )
     )
 
     # acquisition nodes on the timeline
     summary = date_summary(frame)
     node_dec = to_decimal_year(pd.DatetimeIndex(summary["t"]))
     fig.add_trace(
-        go.Scatter(x=node_dec, y=np.zeros_like(node_dec), mode="markers", showlegend=False,
-                   marker=dict(size=8, color="black", line=dict(color="white", width=0.5)),
-                   customdata=summary[["date", "sensor", "n_pairs"]].to_numpy(),
-                   hovertemplate=_NODE_HOVER)
+        go.Scatter(
+            x=node_dec,
+            y=np.zeros_like(node_dec),
+            mode="markers",
+            showlegend=False,
+            marker=dict(size=8, color="black", line=dict(color="white", width=0.5)),
+            customdata=summary[["date", "sensor", "n_pairs"]].to_numpy(),
+            hovertemplate=_NODE_HOVER,
+        )
     )
 
     pad = (node_dec.max() - node_dec.min()) * 0.03 if len(node_dec) > 1 else 0.1
     y_bottom, y_top = arc_ylim(heights)
     fig.update_layout(
-        xaxis=dict(title="Acquisition date (decimal year)",
-                   range=[node_dec.min() - pad, node_dec.max() + pad]),
+        xaxis=dict(
+            title="Acquisition date (decimal year)",
+            range=[node_dec.min() - pad, node_dec.max() + pad],
+        ),
         yaxis=dict(visible=False, range=[y_bottom, y_top]),
-        legend=dict(title=color_by, orientation="h", yanchor="bottom", y=1.0,
-                    xanchor="left", x=0),
-        shapes=[dict(type="line", xref="paper", x0=0, x1=1, yref="y", y0=0, y1=0,
-                     line=dict(color="black", width=1))],
+        legend=dict(
+            title=color_by,
+            orientation="h",
+            yanchor="bottom",
+            y=1.0,
+            xanchor="left",
+            x=0,
+        ),
+        shapes=[
+            dict(
+                type="line",
+                xref="paper",
+                x0=0,
+                x1=1,
+                yref="y",
+                y0=0,
+                y1=0,
+                line=dict(color="black", width=1),
+            )
+        ],
     )
 
     # Direction legend as annotations (not traces), so trace counts stay stable.
@@ -462,25 +604,39 @@ def figure_network(
         # Forward-only pair sets have nothing to put below the axis — say so, or
         # the mirror looks broken rather than simply inapplicable.
         forward_label = (
-            "▲ above: forward (i → j)" if backward.any()
+            "▲ above: forward (i → j)"
+            if backward.any()
             else "▲ forward-only pair set — no backward pairs to mirror"
         )
         if (~backward).any():
             fig.add_annotation(
-                xref="paper", yref="paper", x=0.004, y=0.99, xanchor="left",
-                yanchor="top", showarrow=False, text=forward_label,
+                xref="paper",
+                yref="paper",
+                x=0.004,
+                y=0.99,
+                xanchor="left",
+                yanchor="top",
+                showarrow=False,
+                text=forward_label,
                 font=dict(size=10, color=DIRECTION_COLORS["forward"]),
             )
         if backward.any():
             fig.add_annotation(
-                xref="paper", yref="paper", x=0.004, y=0.01, xanchor="left",
-                yanchor="bottom", showarrow=False, text="▼ below: backward (j → i)",
+                xref="paper",
+                yref="paper",
+                x=0.004,
+                y=0.01,
+                xanchor="left",
+                yanchor="bottom",
+                showarrow=False,
+                text="▼ below: backward (j → i)",
                 font=dict(size=10, color=DIRECTION_COLORS["backward"]),
             )
     return _base_layout(fig, title, height)
 
 
 # ── Δt histogram ────────────────────────────────────────────────────────────────
+
 
 def figure_dt_hist(
     frame: pd.DataFrame,
@@ -499,7 +655,9 @@ def figure_dt_hist(
     :param split_direction: Overlay forward and backward separately.
     """
     if len(frame) == 0:
-        return _empty_figure("No pairs match the current filters.", title=title, height=height)
+        return _empty_figure(
+            "No pairs match the current filters.", title=title, height=height
+        )
 
     fig = go.Figure()
     if split_direction:
@@ -508,21 +666,38 @@ def figure_dt_hist(
             if len(sub) == 0:
                 continue
             fig.add_trace(
-                go.Histogram(x=sub["dt_days"], name=name, nbinsx=nbins, opacity=0.7,
-                             marker=dict(color=color),
-                             hovertemplate="Δt %{x} d<br>%{y} pairs<extra>%{fullData.name}</extra>")
+                go.Histogram(
+                    x=sub["dt_days"],
+                    name=name,
+                    nbinsx=nbins,
+                    opacity=0.7,
+                    marker=dict(color=color),
+                    hovertemplate="Δt %{x} d<br>%{y} pairs<extra>%{fullData.name}</extra>",
+                )
             )
     else:
         fig.add_trace(
-            go.Histogram(x=frame["dt_days"], name="all pairs", nbinsx=nbins, opacity=0.8,
-                         marker=dict(color="#7f7f7f"),
-                         hovertemplate="Δt %{x} d<br>%{y} pairs<extra></extra>")
+            go.Histogram(
+                x=frame["dt_days"],
+                name="all pairs",
+                nbinsx=nbins,
+                opacity=0.8,
+                marker=dict(color="#7f7f7f"),
+                hovertemplate="Δt %{x} d<br>%{y} pairs<extra></extra>",
+            )
         )
 
     dt = frame["dt_days"].to_numpy()
-    for value, label, dash in ((np.median(dt), "median", "dash"), (dt.mean(), "mean", "dot")):
-        fig.add_vline(x=float(value), line=dict(color="black", width=1.2, dash=dash),
-                      annotation_text=f"{label} {value:.0f} d", annotation_position="top")
+    for value, label, dash in (
+        (np.median(dt), "median", "dash"),
+        (dt.mean(), "mean", "dot"),
+    ):
+        fig.add_vline(
+            x=float(value),
+            line=dict(color="black", width=1.2, dash=dash),
+            annotation_text=f"{label} {value:.0f} d",
+            annotation_position="top",
+        )
 
     fig.update_layout(
         barmode="overlay",

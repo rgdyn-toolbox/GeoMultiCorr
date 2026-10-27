@@ -8,6 +8,7 @@ YYYYMMDD date keys across EW/NS/magn — a stray "_EW"/"_NS" left in the key
 would silently break every date alignment downstream (available_dates,
 compute_stats, extract's wide-format pivot).
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -92,8 +93,10 @@ class TestDirectoryInput:
 
     def test_module_helper_equals_the_method(self, extractor):
         from geomulticorr.stats.inversion_extractor import discover_tot_rasters
+
         assert extractor._discover_tif_paths(None) == discover_tot_rasters(
-            extractor.inversion.inversion_dir)
+            extractor.inversion.inversion_dir
+        )
 
     def test_empty_directory_names_both_ways_to_produce_rasters(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="launch\\(mode='python'\\)"):
@@ -107,7 +110,11 @@ import numpy as np  # noqa: E402
 from shapely.geometry import LineString, Point, box  # noqa: E402
 
 from geomulticorr.stats import inversion_extractor as ie  # noqa: E402
-from tests.inversion.conftest import DEFAULT_CRS, DEFAULT_ORIGIN, write_tot_stack  # noqa: E402
+from tests.inversion.conftest import (
+    DEFAULT_CRS,
+    DEFAULT_ORIGIN,
+    write_tot_stack,
+)  # noqa: E402
 
 _X0, _Y0 = DEFAULT_ORIGIN
 
@@ -149,12 +156,16 @@ class TestComputeStats:
         df = real_extractor.compute_stats(components=["NS"])
         assert set(df["component"]) == {"NS"}
 
-    def test_unavailable_component_warns_and_is_skipped(self, real_extractor, caplog_gmc):
+    def test_unavailable_component_warns_and_is_skipped(
+        self, real_extractor, caplog_gmc
+    ):
         df = real_extractor.compute_stats(components=["EW", "magn"])
         assert set(df["component"]) == {"EW"}
         assert "magn" in caplog_gmc.text
 
-    def test_unreadable_raster_gives_empty_frame(self, real_extractor, monkeypatch, caplog_gmc):
+    def test_unreadable_raster_gives_empty_frame(
+        self, real_extractor, monkeypatch, caplog_gmc
+    ):
         monkeypatch.setattr(ie, "compute_raster_stats", lambda *a, **k: None)
         df = real_extractor.compute_stats()
         assert df.empty
@@ -215,7 +226,9 @@ class TestExtractZonal:
 
 class TestWideFormat:
     def test_wide_columns_and_values(self, real_extractor, tmp_path):
-        gpkg = _write_gpkg(tmp_path, [_center(1, 2), _center(0, 0)], point_id=["a", "b"])
+        gpkg = _write_gpkg(
+            tmp_path, [_center(1, 2), _center(0, 0)], point_id=["a", "b"]
+        )
         wide = real_extractor.extract(gpkg, output_format="wide")
         assert len(wide) == 2
         assert "EW_2021-09-01_mean" in wide.columns
@@ -231,10 +244,15 @@ class TestWideFormat:
                 "point_id": ["p", "p"],
                 "date": ["2020-01-01", "2020-02-01"],
                 "component": ["EW", "EW"],
-                "mean": [1.0, 2.0], "median": [1.0, 2.0], "min": [1.0, 2.0],
-                "max": [1.0, 2.0], "std": [0.0, 0.0], "count": [1, 1],
+                "mean": [1.0, 2.0],
+                "median": [1.0, 2.0],
+                "min": [1.0, 2.0],
+                "max": [1.0, 2.0],
+                "std": [0.0, 0.0],
+                "count": [1, 1],
             },
-            geometry=[Point(0, 0), Point(0, 0)], crs="EPSG:32632",
+            geometry=[Point(0, 0), Point(0, 0)],
+            crs="EPSG:32632",
         )
         wide = ie._to_wide(long)
         assert len(wide) == 1
@@ -245,12 +263,15 @@ class TestHelpers:
     def test_fmt_date(self):
         assert ie._fmt_date("20210901") == "2021-09-01"
 
-    @pytest.mark.parametrize("cols,expected", [
-        ({"point_id": ["a"], "id": ["z"]}, ["a"]),
-        ({"id": ["z"], "name": ["n"]}, ["z"]),
-        ({"Name": ["N"]}, ["N"]),
-        ({}, [0]),
-    ])
+    @pytest.mark.parametrize(
+        "cols,expected",
+        [
+            ({"point_id": ["a"], "id": ["z"]}, ["a"]),
+            ({"id": ["z"], "name": ["n"]}, ["z"]),
+            ({"Name": ["N"]}, ["N"]),
+            ({}, [0]),
+        ],
+    )
     def test_extract_ids_priority(self, cols, expected):
         gdf = gpd.GeoDataFrame(cols, geometry=[Point(0, 0)])
         assert ie._extract_ids(gdf) == expected

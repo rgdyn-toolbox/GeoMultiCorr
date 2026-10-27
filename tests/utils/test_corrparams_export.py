@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Unit tests for correlation-parameter figure naming and writing."""
+
 from __future__ import annotations
 
 import pathlib
@@ -21,15 +22,19 @@ from geomulticorr.utils._corrparams_frame import (  # noqa: E402
 )
 from geomulticorr.utils._corrparams_plotly import VIEW_BUILDERS  # noqa: E402
 
-ASSUMPTIONS = dict(velocity_m_yr=5.0, footprint_m=60.0, c_px=0.15, k=3.0,
-                   coreg_px=2.0, margin_px=2.0)
+ASSUMPTIONS = dict(
+    velocity_m_yr=5.0, footprint_m=60.0, c_px=0.15, k=3.0, coreg_px=2.0, margin_px=2.0
+)
 
 
 @pytest.fixture
 def frame():
     return corrparams_frame_from_pairs(
-        ["a", "b", "c"], [30.0, 400.0, 2000.0], [3.0, 3.0, 3.0],
-        sensor_i=["ps"] * 3, velocity_m_yr=2.0,
+        ["a", "b", "c"],
+        [30.0, 400.0, 2000.0],
+        [3.0, 3.0, 3.0],
+        sensor_i=["ps"] * 3,
+        velocity_m_yr=2.0,
     )
 
 
@@ -59,16 +64,21 @@ class TestStem:
 
     def test_irrelevant_parameters_are_pruned(self):
         """SGM forces 9x9, so a footprint in the stem would name a no-op."""
-        stem = corrparams_figure_stem("design_map", corr_algorithm="asp_mgm",
-                                      **ASSUMPTIONS)
+        stem = corrparams_figure_stem(
+            "design_map", corr_algorithm="asp_mgm", **ASSUMPTIONS
+        )
         assert "L60" not in stem
 
     def test_unset_optional_refinements_leave_no_fragment(self):
-        stem = corrparams_figure_stem("design_map", flow_azimuth_deg=None, **ASSUMPTIONS)
+        stem = corrparams_figure_stem(
+            "design_map", flow_azimuth_deg=None, **ASSUMPTIONS
+        )
         assert "az" not in stem
 
     def test_set_optional_refinements_appear(self):
-        stem = corrparams_figure_stem("design_map", flow_azimuth_deg=90.0, **ASSUMPTIONS)
+        stem = corrparams_figure_stem(
+            "design_map", flow_azimuth_deg=90.0, **ASSUMPTIONS
+        )
         assert "az90" in stem
 
     def test_floats_are_trimmed(self):
@@ -83,34 +93,39 @@ class TestStem:
 
 class TestSave:
     def test_writes_every_requested_format(self, frame, tmp_path):
-        out = save_corrparams_figure(frame, tmp_path, view="design_map",
-                                     formats=("html", "png"), stem="s")
+        out = save_corrparams_figure(
+            frame, tmp_path, view="design_map", formats=("html", "png"), stem="s"
+        )
         assert set(out) == {"html", "png"}
         for path in out.values():
             assert path.exists() and path.stat().st_size > 0
 
     @pytest.mark.parametrize("view", list(VIEW_BUILDERS))
     def test_every_view_saves(self, view, frame, tmp_path):
-        out = save_corrparams_figure(frame, tmp_path, view=view,
-                                     formats=("png",), stem=f"s_{view}")
+        out = save_corrparams_figure(
+            frame, tmp_path, view=view, formats=("png",), stem=f"s_{view}"
+        )
         assert out["png"].exists()
 
     def test_html_is_self_contained(self, frame, tmp_path):
-        out = save_corrparams_figure(frame, tmp_path, view="snr",
-                                     formats=("html",), stem="s")
+        out = save_corrparams_figure(
+            frame, tmp_path, view="snr", formats=("html",), stem="s"
+        )
         # inlined plotly.js, so the page works offline
         assert out["html"].stat().st_size > 100_000
 
     def test_rerunning_refreshes_rather_than_accumulates(self, frame, tmp_path):
         for _ in range(3):
-            save_corrparams_figure(frame, tmp_path, view="snr",
-                                   formats=("png",), stem="s")
+            save_corrparams_figure(
+                frame, tmp_path, view="snr", formats=("png",), stem="s"
+            )
         assert len(list(tmp_path.glob("*.png"))) == 1
 
     def test_overwrite_false_keeps_every_version(self, frame, tmp_path):
         for _ in range(3):
-            save_corrparams_figure(frame, tmp_path, view="snr", formats=("png",),
-                                   stem="s", overwrite=False)
+            save_corrparams_figure(
+                frame, tmp_path, view="snr", formats=("png",), stem="s", overwrite=False
+            )
         assert len(list(tmp_path.glob("*.png"))) == 3
 
     def test_creates_the_directory(self, frame, tmp_path):
@@ -136,7 +151,11 @@ class TestSave:
 
     def test_unknown_view_kwargs_are_dropped_not_raised(self, frame, tmp_path):
         out = save_corrparams_figure(
-            frame, tmp_path, view="cost", formats=("png",), stem="s",
+            frame,
+            tmp_path,
+            view="cost",
+            formats=("png",),
+            stem="s",
             view_kwargs={"tau_days": 900.0, "nonsense": 1},
         )
         assert out["png"].exists()
@@ -145,15 +164,22 @@ class TestSave:
         """The explorer's save button would otherwise leak one per click."""
         before = len(plt.get_fignums())
         for view in VIEW_BUILDERS:
-            save_corrparams_figure(frame, tmp_path, view=view,
-                                   formats=("png",), stem=f"s_{view}")
+            save_corrparams_figure(
+                frame, tmp_path, view=view, formats=("png",), stem=f"s_{view}"
+            )
         assert len(plt.get_fignums()) == before
 
     def test_closes_the_figure_even_when_saving_fails(self, frame, tmp_path):
         before = len(plt.get_fignums())
         with pytest.raises(Exception):
-            save_corrparams_figure(frame, tmp_path / "x", view="snr",
-                                   formats=("png",), stem="s", dpi="not-a-dpi")
+            save_corrparams_figure(
+                frame,
+                tmp_path / "x",
+                view="snr",
+                formats=("png",),
+                stem="s",
+                dpi="not-a-dpi",
+            )
         assert len(plt.get_fignums()) == before
 
     def test_default_stem_is_used_when_omitted(self, frame, tmp_path):

@@ -2,27 +2,27 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # session.py
 # creation date: 2026-05-07.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -32,6 +32,7 @@ Session management for GeoMultiCorr
 This module defines the Session class, which encapsulates the data and operations related to a GeoMultiCorr project.
 It provides methods to initialize a session, access project data such as processing zones, thumbnails, pairs, geomorphs, xzones, and spines, and interact with the associated QGIS project.
 """
+
 from __future__ import annotations
 
 import collections
@@ -40,7 +41,17 @@ import pathlib
 import warnings
 from collections import abc
 from contextlib import ExitStack
-from typing import IO, TYPE_CHECKING, Any, Callable, Iterable, Mapping, Optional, Sequence, overload
+from typing import (
+    IO,
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Iterable,
+    Mapping,
+    Optional,
+    Sequence,
+    overload,
+)
 
 import re
 from shapely.geometry import Polygon, MultiPolygon
@@ -52,6 +63,7 @@ from datetime import datetime
 # Importing third-party libraries
 import itertools
 import numpy as np
+
 # from osgeo import gdal
 import geoutils as gu
 import pandas as pd
@@ -66,8 +78,12 @@ from alive_progress import alive_bar
 from rich.console import Group as _RichGroup
 from rich.live import Live as _RichLive
 from rich.progress import (
-    Progress, TextColumn, BarColumn,
-    MofNCompleteColumn, TimeElapsedColumn, TimeRemainingColumn,
+    Progress,
+    TextColumn,
+    BarColumn,
+    MofNCompleteColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
 )
 from rich.text import Text as _RichText
 
@@ -119,13 +135,7 @@ from geomulticorr.utils._durations import (
     format_dt_days,
     parse_dt_days,
 )
-from geomulticorr._typing import (
-    DTypeLike,
-    MArrayNum,
-    NDArrayBool,
-    NDArrayNum,
-    Number
-    )
+from geomulticorr._typing import DTypeLike, MArrayNum, NDArrayBool, NDArrayNum, Number
 
 file_location = pathlib.Path(__file__)
 package_root = file_location.parent.parent  # geomulticorr/core/ -> geomulticorr/
@@ -170,7 +180,7 @@ _parse_dt_days = parse_dt_days
 # pass to measure the bounding box, and every figure already calls tight_layout().
 PLOT_LEVELS: dict[str, dict] = {
     "light": {"preview_px": 1400, "dpi": 110, "hexbin_gridsize": 200},
-    "full":  {"preview_px": None, "dpi": 150, "hexbin_gridsize": 1000},
+    "full": {"preview_px": None, "dpi": 150, "hexbin_gridsize": 1000},
 }
 
 # Metric maps for syncing per-pair stats JSON into the Pairs geodatabase layer.
@@ -184,11 +194,31 @@ PLOT_LEVELS: dict[str, dict] = {
 #: Elevation products carry an explicit nodata (see ``sieve_bulk``'s encoding)
 #: and are normalised per image: slope and shading ranges differ between dates.
 CORR_INPUT_DEFAULTS: dict[str, dict[str, Any]] = {
-    "opt": {"nodata_value": None, "individual_normalization": False, "pre_normalization": False},
-    "hillshade": {"nodata_value": 0, "individual_normalization": True, "pre_normalization": False},
-    "mdhillshade": {"nodata_value": 0, "individual_normalization": True, "pre_normalization": False},
-    "slope": {"nodata_value": -9999.0, "individual_normalization": True, "pre_normalization": False},
-    "dem": {"nodata_value": -9999.0, "individual_normalization": True, "pre_normalization": False},
+    "opt": {
+        "nodata_value": None,
+        "individual_normalization": False,
+        "pre_normalization": False,
+    },
+    "hillshade": {
+        "nodata_value": 0,
+        "individual_normalization": True,
+        "pre_normalization": False,
+    },
+    "mdhillshade": {
+        "nodata_value": 0,
+        "individual_normalization": True,
+        "pre_normalization": False,
+    },
+    "slope": {
+        "nodata_value": -9999.0,
+        "individual_normalization": True,
+        "pre_normalization": False,
+    },
+    "dem": {
+        "nodata_value": -9999.0,
+        "individual_normalization": True,
+        "pre_normalization": False,
+    },
 }
 
 
@@ -223,6 +253,7 @@ CORR_STATS_SYNC: dict[str, tuple[str, str]] = {
     "pa_ns_nmad_corr": ("ns", "nmad"),
 }
 
+
 def is_conform_to_gmc_template(target_root_path: str | pathlib.Path) -> bool:
     """Check GeoMultiCorr structure (both new and legacy layouts).
 
@@ -240,16 +271,21 @@ def is_conform_to_gmc_template(target_root_path: str | pathlib.Path) -> bool:
     target_name = target_root_path.name
 
     # Check for the QGIS mapset file
-    target_map_expected_path = pathlib.Path(target_root_path, f"GMC_mapset_{target_name}.qgz")
+    target_map_expected_path = pathlib.Path(
+        target_root_path, f"GMC_mapset_{target_name}.qgz"
+    )
     if not target_map_expected_path.exists():
         return False
 
     # Check for the geodatabase file
-    target_geodb_expected_path = pathlib.Path(target_root_path, f"GMC_geodatabase_{target_name}.gpkg")
+    target_geodb_expected_path = pathlib.Path(
+        target_root_path, f"GMC_geodatabase_{target_name}.gpkg"
+    )
     if not target_geodb_expected_path.exists():
         return False
 
     return True
+
 
 # * Works properly
 def re_searcher(string: str, pattern: str) -> str:
@@ -266,13 +302,18 @@ def re_searcher(string: str, pattern: str) -> str:
         return re.search(re.compile(pattern), string).group()
     except AttributeError:
         return "unknown"
-    #END try
-#END def
+    # END try
+
+
+# END def
+
 
 # * Works properly
-def open_gmc_session(target_directory_path: str | pathlib.Path,
-                     epsg_code: str | int | None = None,
-                     empty_geodatabase: str | pathlib.Path = None) -> "Session":
+def open_gmc_session(
+    target_directory_path: str | pathlib.Path,
+    epsg_code: str | int | None = None,
+    empty_geodatabase: str | pathlib.Path = None,
+) -> "Session":
     """
     Open or create a GeoMultiCorr (GMC) session at the specified directory.
 
@@ -295,22 +336,26 @@ def open_gmc_session(target_directory_path: str | pathlib.Path,
     """
     if epsg_code is None:
         epsg_code = 4326
-    #END if
+    # END if
 
     if not isinstance(target_directory_path, pathlib.Path):
         target_directory_path = pathlib.Path(target_directory_path)
-    #END if
+    # END if
     return Session(target_directory_path, epsg_code, empty_geodatabase)
+
 
 class Session:
     """
     Manipulate data specific to a sample of sites related to an earth surface displacement study.
     """
+
     # * It works properly
-    def __init__(self,
-                 target_root_path: str | pathlib.Path,
-                 epsg_code: str | int | None = None,
-                 empty_geodatabase: bool | str | pathlib.Path = None):
+    def __init__(
+        self,
+        target_root_path: str | pathlib.Path,
+        epsg_code: str | int | None = None,
+        empty_geodatabase: bool | str | pathlib.Path = None,
+    ):
         """Initialize a new Session.
 
         Args:
@@ -345,23 +390,33 @@ class Session:
                 if empty_geodatabase:
                     # Copy GMC-geodatabase template
                     logger.file(f"Empty geodatabase template created")
-                    raw_gdb_path = project_template_location / "GMC_geodatabase_empty.gpkg"
+                    raw_gdb_path = (
+                        project_template_location / "GMC_geodatabase_empty.gpkg"
+                    )
                     shutil.copy(raw_gdb_path, target_root_path)
                     new_gdb = target_root_path / "GMC_geodatabase_empty.gpkg"
-                    new_gdb.rename(target_root_path / f"GMC_geodatabase_{project_name}.gpkg")
+                    new_gdb.rename(
+                        target_root_path / f"GMC_geodatabase_{project_name}.gpkg"
+                    )
                 else:
-                    logger.file(f"Default GMC-geodatabase template copied into {target_root_path}")
-                    raw_gdb_path = project_template_location / "GMC_geodatabase_project.gpkg"
+                    logger.file(
+                        f"Default GMC-geodatabase template copied into {target_root_path}"
+                    )
+                    raw_gdb_path = (
+                        project_template_location / "GMC_geodatabase_project.gpkg"
+                    )
                     shutil.copy(raw_gdb_path, target_root_path)
                     new_gdb = target_root_path / "GMC_geodatabase_project.gpkg"
-                    new_gdb.rename(target_root_path / f"GMC_geodatabase_{project_name}.gpkg")
+                    new_gdb.rename(
+                        target_root_path / f"GMC_geodatabase_{project_name}.gpkg"
+                    )
 
                 logger.info(f"Setting GMC folder structure")
             elif is_conform_to_gmc_template(target_root_path):
                 logger.success("GMC project structure found")
                 pass
             else:
-                msg = (f"Something else exists at {target_root_path}. Please clean it or choose another path.")
+                msg = f"Something else exists at {target_root_path}. Please clean it or choose another path."
                 raise ValueError(msg)
         else:
             # Folder does not exist: create and initialize GMC structure
@@ -376,16 +431,26 @@ class Session:
                 raw_gdb_path = project_template_location / "GMC_geodatabase_empty.gpkg"
                 shutil.copy(raw_gdb_path, target_root_path)
                 new_gdb = target_root_path / "GMC_geodatabase_empty.gpkg"
-                new_gdb.rename(target_root_path / f"GMC_geodatabase_{project_name}.gpkg")
+                new_gdb.rename(
+                    target_root_path / f"GMC_geodatabase_{project_name}.gpkg"
+                )
             else:
-                logger.file(f"Default GMC-geodatabase template copied into {target_root_path}")
-                raw_gdb_path = project_template_location / "GMC_geodatabase_project.gpkg"
+                logger.file(
+                    f"Default GMC-geodatabase template copied into {target_root_path}"
+                )
+                raw_gdb_path = (
+                    project_template_location / "GMC_geodatabase_project.gpkg"
+                )
                 shutil.copy(raw_gdb_path, target_root_path)
                 new_gdb = target_root_path / "GMC_geodatabase_project.gpkg"
-                new_gdb.rename(target_root_path / f"GMC_geodatabase_{project_name}.gpkg")
-        
+                new_gdb.rename(
+                    target_root_path / f"GMC_geodatabase_{project_name}.gpkg"
+                )
+
             # Copy GMC-Mapset template
-            logger.file(f"Making a copy of 'GMC-QGIS-Mapset' template into {target_root_path}")
+            logger.file(
+                f"Making a copy of 'GMC-QGIS-Mapset' template into {target_root_path}"
+            )
             raw_mapset_path = project_template_location / "GMC_mapset_project.qgz"
             shutil.copy(raw_mapset_path, target_root_path)
             new_mapset = target_root_path / "GMC_mapset_project.qgz"
@@ -398,31 +463,54 @@ class Session:
         self.path_root = target_root_path
         self.project_name = target_root_path.name
         self.path_geodb = target_root_path / f"GMC_geodatabase_{self.project_name}.gpkg"
-        self.path_qgis_project = target_root_path / f"GMC_mapset_{self.project_name}.qgz"
+        self.path_qgis_project = (
+            target_root_path / f"GMC_mapset_{self.project_name}.qgz"
+        )
         self.epsg = epsg_code
 
         # Detect layout: legacy if raster_data_<project_name> wrapper folder exists
-        self._legacy_layout = (target_root_path / f"raster_data_{self.project_name}").is_dir()
+        self._legacy_layout = (
+            target_root_path / f"raster_data_{self.project_name}"
+        ).is_dir()
 
         # Backward-compatibility path attributes (same for both layouts, computed here)
         self.path_raster_data = target_root_path / f"raster_data_{self.project_name}"
-        self.path_img_correlation_outs = target_root_path / f"img_correlation_outs_{self.project_name}"
-        self.path_tio_inversion_outs = target_root_path / f"tio_inversion_outs_{self.project_name}"
+        self.path_img_correlation_outs = (
+            target_root_path / f"img_correlation_outs_{self.project_name}"
+        )
+        self.path_tio_inversion_outs = (
+            target_root_path / f"tio_inversion_outs_{self.project_name}"
+        )
         # For new layout: figures live in project root; for legacy: figures_<project_name>
-        self.path_figures = target_root_path / (f"figures_{self.project_name}" if self._legacy_layout else "figures")
+        self.path_figures = target_root_path / (
+            f"figures_{self.project_name}" if self._legacy_layout else "figures"
+        )
 
         # There is underscore before the attribute name because user have to access to this data from the getters to ensure that the data is up to date
-        self._pzones = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Pzones").to_crs(epsg=epsg_code)
-        self._thumbs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Thumbs").to_crs(epsg=epsg_code)
-        self._geomorphs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Geomorphs").to_crs(epsg=epsg_code)
-        self._pairs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Pairs").to_crs(epsg=epsg_code)
-        self._xzones = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Xzones").to_crs(epsg=epsg_code)
-        self._spines = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Spines").to_crs(epsg=epsg_code)
+        self._pzones = gpd.read_file(
+            self.path_geodb, engine="pyogrio", layer="Pzones"
+        ).to_crs(epsg=epsg_code)
+        self._thumbs = gpd.read_file(
+            self.path_geodb, engine="pyogrio", layer="Thumbs"
+        ).to_crs(epsg=epsg_code)
+        self._geomorphs = gpd.read_file(
+            self.path_geodb, engine="pyogrio", layer="Geomorphs"
+        ).to_crs(epsg=epsg_code)
+        self._pairs = gpd.read_file(
+            self.path_geodb, engine="pyogrio", layer="Pairs"
+        ).to_crs(epsg=epsg_code)
+        self._xzones = gpd.read_file(
+            self.path_geodb, engine="pyogrio", layer="Xzones"
+        ).to_crs(epsg=epsg_code)
+        self._spines = gpd.read_file(
+            self.path_geodb, engine="pyogrio", layer="Spines"
+        ).to_crs(epsg=epsg_code)
 
         # List the processing zones names
         self.pz_names = list(self._pzones.pz_name.unique())
         logger.launch(f"Session '{self.project_name}' initialized.")
-    #END def
+
+    # END def
 
     def pz_dir(self, pz_name: str, kind: str | None = None) -> pathlib.Path:
         """Directory for `kind` inside a pzone, resolved per this session's layout.
@@ -483,7 +571,9 @@ class Session:
             else:
                 raise ValueError(f"Unknown pzone subdirectory kind: {kind}")
 
-    def thumb_dir(self, pz_name: str, image_type: str = IMAGE_TYPE_OPTICAL) -> pathlib.Path:
+    def thumb_dir(
+        self, pz_name: str, image_type: str = IMAGE_TYPE_OPTICAL
+    ) -> pathlib.Path:
         """Folder holding the thumbs of *image_type* in pzone *pz_name*.
 
         ``"opt"`` → ``pz_dir(pz, "optical")`` (both layouts); an elevation type
@@ -495,7 +585,9 @@ class Session:
             return self.pz_dir(pz_name, PZ_KIND_OPTICAL)
         return self.pz_dir(pz_name, PZ_KIND_ELEVATION) / t
 
-    def pair_dir(self, pz_name: str, image_type: str = IMAGE_TYPE_OPTICAL) -> pathlib.Path:
+    def pair_dir(
+        self, pz_name: str, image_type: str = IMAGE_TYPE_OPTICAL
+    ) -> pathlib.Path:
         """Folder holding the pair directories of *image_type* in pzone *pz_name*.
 
         ``"opt"`` → ``image_correlation/`` (unchanged); any other type →
@@ -507,8 +599,7 @@ class Session:
         return self.pz_dir(pz_name, PZ_KIND_IMAGE_CORRELATION) / pair_subdir(t)
 
     # * Works properly
-    def find_qgis_binary(self,
-                        qgis_binary_path: str | None = None) -> str:
+    def find_qgis_binary(self, qgis_binary_path: str | None = None) -> str:
         """Find the QGIS binary executable.
 
         Args:
@@ -533,13 +624,17 @@ class Session:
         for path in common_paths:
             if pathlib.Path(path).exists():
                 return path
-        raise FileNotFoundError("QGIS binary not found. Please install QGIS or specify its path.")
-    
+        raise FileNotFoundError(
+            "QGIS binary not found. Please install QGIS or specify its path."
+        )
+
     # * Works properly
     # ! This function may overload the system if the project as QGIs is invoked from terminal. We can add a warning in the docstring to inform the user about this point. We can also add an optional argument to choose if the project should be opened or not.
-    def open_qgis_project(self,
-                          project_path: str | pathlib.Path | None = None,
-                          qgis_binary_path: str | None = None) -> None:
+    def open_qgis_project(
+        self,
+        project_path: str | pathlib.Path | None = None,
+        qgis_binary_path: str | None = None,
+    ) -> None:
         """Open the QGIS project
 
         Args:
@@ -553,11 +648,15 @@ class Session:
             qgis_binary_path = self.find_qgis_binary()
 
         if not qgis_binary_path:
-            raise FileNotFoundError("QGIS binary not found. Please install QGIS or specify its path.")
+            raise FileNotFoundError(
+                "QGIS binary not found. Please install QGIS or specify its path."
+            )
         else:
             call = []
             call.extend([f"{qgis_binary_path}"])
-            call.extend(["--nologo", "--noplugins", '--noversioncheck', '--hide-browser'])
+            call.extend(
+                ["--nologo", "--noplugins", "--noversioncheck", "--hide-browser"]
+            )
             if project_path is not None:
                 call.extend(["--project", f"{project_path}"])
             else:
@@ -567,10 +666,9 @@ class Session:
         logger.info(f"Opening QGIS project {self.path_qgis_project}.")
 
     ###################################################
-    #-------------------- GETTERS --------------------#
+    # -------------------- GETTERS --------------------#
     # * Works properly
-    def get_thumbs_overview(self,
-                            criterias: str | list[str] = "") -> gpd.GeoDataFrame:
+    def get_thumbs_overview(self, criterias: str | list[str] = "") -> gpd.GeoDataFrame:
         """Get thumbnails overview informations
 
         Args:
@@ -581,9 +679,9 @@ class Session:
         # TODO: Implement unittests.
         """
         return self._search_engine("Thumbs", criterias)
-    
+
     #! ask Thibaut for homogenesation.
-    def get_thumbs(self, criterias: str | list[str] = "") -> list[gmc_thumb.Thumb]: 
+    def get_thumbs(self, criterias: str | list[str] = "") -> list[gmc_thumb.Thumb]:
         """Get thumbnails
 
         Args:
@@ -596,10 +694,11 @@ class Session:
         return [gmc_thumb.Thumb(x.th_path) for x in selected_thumbs.iloc]
         # selected_thumbs = self.get_thumbs_overview(criterias)
         # return [gmc_thumb.Thumb(r.th_path) for r in selected_thumbs.itertuples(index=False)]
-    
+
     # * Works properly
-    def get_pairs_overview(self, criterias: str | list[str] = "",
-                           image_type: str | None = None) -> gpd.GeoDataFrame:
+    def get_pairs_overview(
+        self, criterias: str | list[str] = "", image_type: str | None = None
+    ) -> gpd.GeoDataFrame:
         """Get pairs overview informations
 
         Args:
@@ -614,12 +713,15 @@ class Session:
         """
         overview = self._search_engine("Pairs", criterias)
         if image_type is not None and overview is not None:
-            overview = overview[type_column(overview, "pa_type") == normalise_image_type(image_type)]
+            overview = overview[
+                type_column(overview, "pa_type") == normalise_image_type(image_type)
+            ]
         return overview
-    
+
     # * Works properly
-    def get_pairs(self, criterias: str | list[str] = "",
-                  image_type: str | None = None) -> list[gmc_pair.Pair]:
+    def get_pairs(
+        self, criterias: str | list[str] = "", image_type: str | None = None
+    ) -> list[gmc_pair.Pair]:
         """Get pairs informations
 
         Args:
@@ -629,17 +731,21 @@ class Session:
 
         Returns:
             pd.DataFrame: Send a list of pair.Pairs objects meeting the criterias
-        # TODO: solve issue regarding order of return pairs. When session.get_pairs(['ribon', '2014', '2018']), pair 2018-2014 is returned first. 
+        # TODO: solve issue regarding order of return pairs. When session.get_pairs(['ribon', '2014', '2018']), pair 2018-2014 is returned first.
 
         """
         # selected_pairs = self.get_pairs_overview(criterias)
         # return [gmc_pair.Pair(self, target_path=x.pa_path) for x in selected_pairs.iloc]
         selected_pairs = self.get_pairs_overview(criterias, image_type=image_type)
         # return [gmc_pair.Pair(self, target_path=x.pa_path) for x in selected_pairs]
-        return [gmc_pair.Pair(self, target_path=row['pa_path']) for _, row in selected_pairs.iterrows()]
+        return [
+            gmc_pair.Pair(self, target_path=row["pa_path"])
+            for _, row in selected_pairs.iterrows()
+        ]
 
-    def get_failed_pairs(self, criterias: str | list[str] = "",
-                         image_type: str | None = None) -> list[gmc_pair.Pair]:
+    def get_failed_pairs(
+        self, criterias: str | list[str] = "", image_type: str | None = None
+    ) -> list[gmc_pair.Pair]:
         """Return pairs where one or more ASP output files are missing.
 
         Checks all files listed in ``ASP._KEEP_SUFFIXES`` inside each pair's
@@ -692,7 +798,10 @@ class Session:
         # selected_pzones = self.get_pzones_overview(pz_name)
         selected_pzones = self.get_pzones_overview(pz_name)
         # return [gmc_pzone.Pzone(x.pz_name, self) for x in selected_pzones.iloc]
-        return [gmc_pzone.Pzone(x.pz_name, self) for x in selected_pzones.itertuples(index=False)]
+        return [
+            gmc_pzone.Pzone(x.pz_name, self)
+            for x in selected_pzones.itertuples(index=False)
+        ]
 
     def get_geomorphs_overview(self, criterias: str | list[str] = "") -> pd.DataFrame:
         """Get geomorphos overview informations
@@ -705,7 +814,9 @@ class Session:
         """
         return self._search_engine("Geomorphs", criterias)
 
-    def get_geomorphs(self, criterias: str | list[str] = "") -> list[gmc_geomorph.Geomorph]:
+    def get_geomorphs(
+        self, criterias: str | list[str] = ""
+    ) -> list[gmc_geomorph.Geomorph]:
         """Get geomorphs informations
 
         Args:
@@ -715,7 +826,10 @@ class Session:
             list: Send a list of geomorph.Geomorphs objects.
         """
         selected_geomorphs = self.get_geomorphs_overview(criterias)
-        return [gmc_geomorph.Geomorph(self, x.ge_frogi_id) for x in selected_geomorphs.itertuples(index=False)]
+        return [
+            gmc_geomorph.Geomorph(self, x.ge_frogi_id)
+            for x in selected_geomorphs.itertuples(index=False)
+        ]
 
     def get_xzone(self, xz_id: str | int | float) -> gmc_xzone.Xzone:
         """Get a xzone
@@ -728,10 +842,12 @@ class Session:
         """
         return gmc_xzone.Xzone(self, xz_id)
 
-    def get_pairs_overview_on_period(self,
-                                     ymin: str | pd.Timestamp,
-                                     ymax: str | pd.Timestamp,
-                                     criterias: str | list[str] = "") -> pd.DataFrame:
+    def get_pairs_overview_on_period(
+        self,
+        ymin: str | pd.Timestamp,
+        ymax: str | pd.Timestamp,
+        criterias: str | list[str] = "",
+    ) -> pd.DataFrame:
         """Get pairs overview informations on a given period
 
         Args:
@@ -756,17 +872,29 @@ class Session:
 
         pairs = self.get_pairs_overview(criterias).copy()
         pairs["chrono_min"] = pairs.apply(
-            lambda row: min(int(row.pa_left_date.split("-")[0]), int(row.pa_right_date.split("-")[0])), axis=1)
+            lambda row: min(
+                int(row.pa_left_date.split("-")[0]),
+                int(row.pa_right_date.split("-")[0]),
+            ),
+            axis=1,
+        )
         pairs["chrono_max"] = pairs.apply(
-            lambda row: max(int(row.pa_left_date.split("-")[0]), int(row.pa_right_date.split("-")[0])), axis=1)
+            lambda row: max(
+                int(row.pa_left_date.split("-")[0]),
+                int(row.pa_right_date.split("-")[0]),
+            ),
+            axis=1,
+        )
         # Possible error on text and number
         pairs = pairs[(pairs.chrono_min >= ymin) & (pairs.chrono_max <= ymax)]
         return pairs
 
-    def get_pairs_on_period(self,
-                            ymin: str | pd.Timestamp,
-                            ymax: str | pd.Timestamp,
-                            criterias: str | list[str] = "") -> list[gmc_pair.Pair]:
+    def get_pairs_on_period(
+        self,
+        ymin: str | pd.Timestamp,
+        ymax: str | pd.Timestamp,
+        criterias: str | list[str] = "",
+    ) -> list[gmc_pair.Pair]:
         """Get pairs on a given period
 
         Args:
@@ -884,12 +1012,20 @@ class Session:
                 if bounds is not None:
                     import pyogrio
                     from rasterio.warp import transform_bounds
+
                     info = pyogrio.read_info(str(path), layer=layer)
                     src_crs = info.get("crs")
                     read_kwargs["bbox"] = (
-                        tuple(transform_bounds(rio_crs.CRS.from_epsg(self.epsg), src_crs,
-                                               *bounds, densify_pts=21))
-                        if src_crs else tuple(bounds)
+                        tuple(
+                            transform_bounds(
+                                rio_crs.CRS.from_epsg(self.epsg),
+                                src_crs,
+                                *bounds,
+                                densify_pts=21,
+                            )
+                        )
+                        if src_crs
+                        else tuple(bounds)
                     )
                 vec = gu.Vector(gpd.read_file(str(path), **read_kwargs))
                 bounds = None  # already applied on read
@@ -902,10 +1038,13 @@ class Session:
         if bounds is not None and not vec.ds.empty:
             from rasterio.warp import transform_bounds
             from shapely.geometry import box
+
             src_bounds = (
-                transform_bounds(rio_crs.CRS.from_epsg(self.epsg), vec.crs,
-                                 *bounds, densify_pts=21)
-                if vec.crs is not None else tuple(bounds)
+                transform_bounds(
+                    rio_crs.CRS.from_epsg(self.epsg), vec.crs, *bounds, densify_pts=21
+                )
+                if vec.crs is not None
+                else tuple(bounds)
             )
             hit = vec.ds.sindex.query(box(*src_bounds), predicate="intersects")
             vec = gu.Vector(vec.ds.iloc[np.sort(hit)])
@@ -929,9 +1068,7 @@ class Session:
 
     def reference_grid_path(self, pz_name: str) -> pathlib.Path:
         """Path of a pzone's reference-grid raster (may not exist yet)."""
-        return (
-            self.pz_dir(pz_name, PZ_KIND_REFERENCE_RASTER) / f"{pz_name}_grid.tif"
-        )
+        return self.pz_dir(pz_name, PZ_KIND_REFERENCE_RASTER) / f"{pz_name}_grid.tif"
 
     def build_reference_grid(
         self,
@@ -1112,7 +1249,12 @@ class Session:
         # Reject a disjoint source up front — reprojecting it would otherwise
         # produce a full grid of nodata with no explanation.
         gxmin, gymin, gxmax, gymax = grid.get_bounds_projected(out_crs=dem.crs)
-        dxmin, dymin, dxmax, dymax = dem.bounds.left, dem.bounds.bottom, dem.bounds.right, dem.bounds.top
+        dxmin, dymin, dxmax, dymax = (
+            dem.bounds.left,
+            dem.bounds.bottom,
+            dem.bounds.right,
+            dem.bounds.top,
+        )
         if gxmax <= dxmin or gxmin >= dxmax or gymax <= dymin or gymin >= dymax:
             raise ValueError(
                 f"DEM source does not overlap pzone {pz_name!r}.\n"
@@ -1262,8 +1404,11 @@ class Session:
         read unchanged; ``"dem"`` gets ``Protomap_dem``, so mapping a DEM bank no
         longer overwrites the optical map.
         """
-        types = ({str(image_type).lower()} if isinstance(image_type, str)
-                 else {str(t).lower() for t in image_type})
+        types = (
+            {str(image_type).lower()}
+            if isinstance(image_type, str)
+            else {str(t).lower() for t in image_type}
+        )
         if types == {"dem"}:
             return "Protomap_dem"
         if types <= {"opt"}:
@@ -1273,25 +1418,30 @@ class Session:
             f"(hillshade/slope are derived from 'dem' by sieve_bulk)"
         )
 
-    def get_georasters_map(self,
-                           image_type: str | list[str] = "opt",
-                           suffix: str = "") -> gpd.GeoDataFrame:
+    def get_georasters_map(
+        self, image_type: str | list[str] = "opt", suffix: str = ""
+    ) -> gpd.GeoDataFrame:
         layername = self._protomap_layer(image_type)
         try:
             return gpd.read_file(self.path_geodb, layer=layername, engine="pyogrio")
         except ValueError:
-            logger.error(f"No georasters map named {layername} in the session geodatabase")
+            logger.error(
+                f"No georasters map named {layername} in the session geodatabase"
+            )
             return None
-    #------------------ END GETTERS ------------------#
+
+    # ------------------ END GETTERS ------------------#
     ###################################################
 
     ###################################################
-    #-------------------- SETTERS --------------------#
-    def insert_pzone(self,
-                     coordinates: list[tuple[float, float]] | Polygon,
-                     pz_name: str,
-                     pz_shortname: str,
-                     crs: str | int | None = None) -> gmc_pzone.Pzone:
+    # -------------------- SETTERS --------------------#
+    def insert_pzone(
+        self,
+        coordinates: list[tuple[float, float]] | Polygon,
+        pz_name: str,
+        pz_shortname: str,
+        crs: str | int | None = None,
+    ) -> gmc_pzone.Pzone:
         """Insert a new processing zone in the session geodatabase.
 
         Args:
@@ -1309,7 +1459,9 @@ class Session:
         if pz_name in self.pz_names:
             raise ValueError(f"Pzone '{pz_name}' already exists in the session.")
 
-        polygon = coordinates if isinstance(coordinates, Polygon) else Polygon(coordinates)
+        polygon = (
+            coordinates if isinstance(coordinates, Polygon) else Polygon(coordinates)
+        )
 
         # Read current Pzones layer and build new row
         gdf = gpd.read_file(self.path_geodb, layer="Pzones", engine="pyogrio")
@@ -1320,8 +1472,7 @@ class Session:
 
         input_crs = crs if crs is not None else self.epsg
         new_row = gpd.GeoDataFrame(
-            [row],
-            crs=f"EPSG:{input_crs}" if isinstance(input_crs, int) else input_crs
+            [row], crs=f"EPSG:{input_crs}" if isinstance(input_crs, int) else input_crs
         )
 
         if gdf.crs is not None and new_row.crs != gdf.crs:
@@ -1351,13 +1502,15 @@ class Session:
 
         return gmc_pzone.Pzone(pz_name, self)
 
-    def insert_pzone_from_file(self,
-                               source: str | pathlib.Path | gu.Vector | gu.Raster,
-                               pz_name: str,
-                               pz_shortname: str,
-                               layer: str | None = None,
-                               index: int = 0,
-                               dissolve: bool = False) -> gmc_pzone.Pzone:
+    def insert_pzone_from_file(
+        self,
+        source: str | pathlib.Path | gu.Vector | gu.Raster,
+        pz_name: str,
+        pz_shortname: str,
+        layer: str | None = None,
+        index: int = 0,
+        dissolve: bool = False,
+    ) -> gmc_pzone.Pzone:
         """Insert a processing zone from an existing AOI instead of drawing it by hand.
 
         The *source* is normalized through geoutils so the AOI stays consistent with the
@@ -1432,11 +1585,13 @@ class Session:
         self._spines = gpd.read_file(self.path_geodb, layer="Spines", engine="pyogrio")
         self._pzones = gpd.read_file(self.path_geodb, layer="Pzones", engine="pyogrio")
         self._thumbs = gpd.read_file(self.path_geodb, layer="Thumbs", engine="pyogrio")
-        self._geomorphs = gpd.read_file(self.path_geodb, layer="Geomorphs", engine="pyogrio")
+        self._geomorphs = gpd.read_file(
+            self.path_geodb, layer="Geomorphs", engine="pyogrio"
+        )
         self._xzones = gpd.read_file(self.path_geodb, layer="Xzones", engine="pyogrio")
         logger.success("Vector data updated in the session.")
         return None
-    
+
     # * Works properly
     def update_thumbs(self) -> gmc_thumb.Thumb:
         """Update the Thumbs layer in the geodatabase.
@@ -1469,8 +1624,9 @@ class Session:
             for target_path in opt_root.glob(pattern=pattern)
             if gmc_thumb.THUMBNAME_PATTERN.match(target_path.name)
         ]
-        new = gpd.GeoDataFrame([gmc_thumb.Thumb(target_path).to_pdserie()
-                                for target_path in candidates])
+        new = gpd.GeoDataFrame(
+            [gmc_thumb.Thumb(target_path).to_pdserie() for target_path in candidates]
+        )
 
         # Rows written before th_type existed are optical by construction.
         old = old.copy()
@@ -1485,8 +1641,9 @@ class Session:
                 f"found under {opt_root} ({', '.join(glob_patterns)}); pzone names "
                 f"may not contain '_'"
             )
-            new = gpd.GeoDataFrame(columns=list(old.columns), geometry="geometry",
-                                   crs=old.crs)
+            new = gpd.GeoDataFrame(
+                columns=list(old.columns), geometry="geometry", crs=old.crs
+            )
         common = new.merge(old, on=["th_path"])
         stables = old[old.th_path.isin(common.th_path)]
         addeds = new[~new.th_path.isin(common.th_path)]
@@ -1502,14 +1659,16 @@ class Session:
         # self.update_pairs()
         return updated
 
-    def register_existing_thumbs(self,
-                                 sources: str | pathlib.Path | list[str | pathlib.Path],
-                                 pz_name: str,
-                                 glob_pattern: str = "*.tif",
-                                 move: bool = False,
-                                 overwrite: bool = False,
-                                 register: bool = True,
-                                 print_summary: bool = True) -> list[pathlib.Path]:
+    def register_existing_thumbs(
+        self,
+        sources: str | pathlib.Path | list[str | pathlib.Path],
+        pz_name: str,
+        glob_pattern: str = "*.tif",
+        move: bool = False,
+        overwrite: bool = False,
+        register: bool = True,
+        print_summary: bool = True,
+    ) -> list[pathlib.Path]:
         """Register already-cropped images as thumbs without re-cropping or resampling.
 
         Use this when your images are already cropped to the pzone AOI and share the
@@ -1544,7 +1703,9 @@ class Session:
             FileNotFoundError: If a source path does not exist.
         """
         if pz_name not in self.pz_names:
-            raise ValueError(f"Pzone '{pz_name}' is not registered. Known pzones: {self.pz_names}")
+            raise ValueError(
+                f"Pzone '{pz_name}' is not registered. Known pzones: {self.pz_names}"
+            )
         if "_" in pz_name:
             raise ValueError(
                 f"pz_name '{pz_name}' must not contain '_' — it breaks the thumb "
@@ -1563,7 +1724,9 @@ class Session:
             else:
                 raise FileNotFoundError(f"Source path not found: {p}")
         if not files:
-            raise ValueError(f"No images found in sources (glob_pattern={glob_pattern!r}).")
+            raise ValueError(
+                f"No images found in sources (glob_pattern={glob_pattern!r})."
+            )
 
         dest_dir = self.pz_dir(pz_name, PZ_KIND_OPTICAL)
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -1602,7 +1765,9 @@ class Session:
             dest_path = dest_dir / thumb_name
             if dest_path.exists() and not overwrite:
                 logger.warning(f"Thumb already exists, skipping: {thumb_name}")
-                summary_rows.append({"src": src.name, "thumb": thumb_name, "status": "↷ skipped"})
+                summary_rows.append(
+                    {"src": src.name, "thumb": thumb_name, "status": "↷ skipped"}
+                )
                 written.append(dest_path)
                 continue
 
@@ -1611,14 +1776,18 @@ class Session:
             else:
                 shutil.copy2(str(src), str(dest_path))
             written.append(dest_path)
-            summary_rows.append({"src": src.name, "thumb": thumb_name, "status": "✓ copied"})
+            summary_rows.append(
+                {"src": src.name, "thumb": thumb_name, "status": "✓ copied"}
+            )
 
         # Register the new thumbs in the geodatabase
         if register and written:
             self.update_thumbs()
 
         if print_summary and summary_rows:
-            print_register_thumbs_summary(summary_rows, pz_name, print_summary=print_summary)
+            print_register_thumbs_summary(
+                summary_rows, pz_name, print_summary=print_summary
+            )
 
         logger.success(
             f"Registered {len(written)} thumb(s) into pzone '{pz_name}'"
@@ -1626,9 +1795,9 @@ class Session:
         )
         return written
 
-    def validate_all_thumbs(self,
-                            pzone_filter: list[str] | None = None
-                            ) -> gpd.GeoDataFrame:
+    def validate_all_thumbs(
+        self, pzone_filter: list[str] | None = None
+    ) -> gpd.GeoDataFrame:
         """Mark all thumbs as valid for correlation (th_valid = '1').
 
         Args:
@@ -1693,8 +1862,10 @@ class Session:
         if "th_res" not in thumbs.columns:
             thumbs["th_res"] = float("nan")
 
-        mask = thumbs["th_pz_name"] == pz_name if pz_name else pd.Series(
-            True, index=thumbs.index
+        mask = (
+            thumbs["th_pz_name"] == pz_name
+            if pz_name
+            else pd.Series(True, index=thumbs.index)
         )
         if not overwrite:
             mask &= ~pd.to_numeric(thumbs["th_res"], errors="coerce").notna()
@@ -1781,9 +1952,7 @@ class Session:
         if n:
             self._pairs.to_file(self.path_geodb, layer="Pairs")
             synced = list(metric_map) + list(extra_cols or {})
-            logger.save(
-                f"Geodatabase updated: synced {synced} for {n} pair(s)."
-            )
+            logger.save(f"Geodatabase updated: synced {synced} for {n} pair(s).")
         return self._pairs
 
     def sync_raw_stats(
@@ -1831,8 +2000,11 @@ class Session:
             )
         }
         return self.sync_pairs_stats(
-            CORR_STATS_SYNC, "final_corrected_stats",
-            pairs=pairs, criterias=criterias, extra_cols=extra_cols,
+            CORR_STATS_SYNC,
+            "final_corrected_stats",
+            pairs=pairs,
+            criterias=criterias,
+            extra_cols=extra_cols,
         )
 
     def sync_pairs_weights(
@@ -1854,6 +2026,7 @@ class Session:
             pairs: Pairs to sync. Defaults to ``get_pairs(criterias)``.
             criterias: Filter used when *pairs* is not given.
         """
+
         def _ew(js):
             return js.get("weight", {}).get("ew", float("nan"))
 
@@ -1862,7 +2035,9 @@ class Session:
 
         def _max(js):
             w = js.get("weight", {})
-            vals = [v for v in (w.get("ew"), w.get("ns")) if isinstance(v, (int, float))]
+            vals = [
+                v for v in (w.get("ew"), w.get("ns")) if isinstance(v, (int, float))
+            ]
             return max(vals) if vals else float("nan")
 
         extra_cols = {
@@ -1872,7 +2047,11 @@ class Session:
             "pa_weight_mode": (lambda js: js.get("weight", {}).get("mode")),
         }
         return self.sync_pairs_stats(
-            {}, "weight", pairs=pairs, criterias=criterias, extra_cols=extra_cols,
+            {},
+            "weight",
+            pairs=pairs,
+            criterias=criterias,
+            extra_cols=extra_cols,
         )
 
     def update_pairs(
@@ -1922,8 +2101,12 @@ class Session:
         for pz in self.get_pzones(pz_name):
             logger.info(f"Updating pairs for PZone: '{pz.pz_name}'")
             pairs_gdf = pz.get_valid_pairs_with_strategy_overview(
-                strategy, max_step, max_dt_days, min_dt_days=min_dt_days,
-                sensor_filter=sensor_filter, image_type=image_type,
+                strategy,
+                max_step,
+                max_dt_days,
+                min_dt_days=min_dt_days,
+                sensor_filter=sensor_filter,
+                image_type=image_type,
             )
             if not pairs_gdf.empty:
                 updated_frames.append(pairs_gdf)
@@ -1940,7 +2123,9 @@ class Session:
             existing = self._pairs.copy()
             existing["pa_type"] = type_column(existing, "pa_type")
             combined = pd.concat([existing, new_pairs], ignore_index=True)
-            combined = combined.drop_duplicates(subset=["pa_path"]).reset_index(drop=True)
+            combined = combined.drop_duplicates(subset=["pa_path"]).reset_index(
+                drop=True
+            )
             updated = gpd.GeoDataFrame(combined, geometry="geometry", crs=self.epsg)
         else:
             updated = new_pairs
@@ -1950,8 +2135,7 @@ class Session:
         return updated
 
     def copy_geodb(self) -> bool:
-        """Quickly create a copy of the project geopackage named GMC_geodatabase_backup.gpkg
-        """
+        """Quickly create a copy of the project geopackage named GMC_geodatabase_backup.gpkg"""
         backup_path = pathlib.Path(self.path_root, "GMC_geodatabase_backup.gpkg")
         shutil.copy2(self.path_geodb, backup_path)
         return pathlib.Path(self.path_root, "GMC_geodatabase_backup.gpkg").exists()
@@ -1990,7 +2174,11 @@ class Session:
         skipped: list[pathlib.Path] = []
         warnings: list[str] = []
 
-        logger.launch("Dry run: analyzing legacy structure..." if dry_run else "Migrating to new structure...")
+        logger.launch(
+            "Dry run: analyzing legacy structure..."
+            if dry_run
+            else "Migrating to new structure..."
+        )
 
         # Step 1: Back up the geodatabase
         if not dry_run:
@@ -2015,13 +2203,18 @@ class Session:
             # Map legacy subfolders → new subdirectories
             moves = [
                 (legacy_pz_root / "opticals", new_pz_root / PZ_KIND_OPTICAL),
-                (legacy_pz_root / "image_correlation", new_pz_root / PZ_KIND_IMAGE_CORRELATION),
+                (
+                    legacy_pz_root / "image_correlation",
+                    new_pz_root / PZ_KIND_IMAGE_CORRELATION,
+                ),
             ]
 
             # DEM file (if exists)
             dem_file = legacy_pz_root / f"{pz_name}_dem.tif"
             if dem_file.exists():
-                moves.append((dem_file, new_pz_root / PZ_KIND_REFERENCE_DEM / dem_file.name))
+                moves.append(
+                    (dem_file, new_pz_root / PZ_KIND_REFERENCE_DEM / dem_file.name)
+                )
 
             # Moving-areas files (raster and gpkg)
             for suffix in ["_moving-areas_round-0.tif", "_moving-areas_round-0.gpkg"]:
@@ -2048,7 +2241,9 @@ class Session:
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(src), str(dst))
                     moved.append((src, dst))
-                    logger.info(f"Moved: {src.relative_to(self.path_root)} → {dst.relative_to(self.path_root)}")
+                    logger.info(
+                        f"Moved: {src.relative_to(self.path_root)} → {dst.relative_to(self.path_root)}"
+                    )
 
             # Warn about leftover files in legacy pzone root
             remaining = list(legacy_pz_root.glob("*"))
@@ -2067,7 +2262,9 @@ class Session:
             if not dry_run:
                 shutil.move(str(legacy_figures), str(new_figures))
                 moved.append((legacy_figures, new_figures))
-                logger.success(f"Moved figures folder: {legacy_figures.name} → {new_figures.name}")
+                logger.success(
+                    f"Moved figures folder: {legacy_figures.name} → {new_figures.name}"
+                )
             else:
                 moved.append((legacy_figures, new_figures))
 
@@ -2084,20 +2281,33 @@ class Session:
                 logger.success(f"Removed empty: {legacy_raster_data.name}")
 
             # Remove empty dead folders if they exist
-            for dead_folder in [self.path_img_correlation_outs, self.path_tio_inversion_outs]:
+            for dead_folder in [
+                self.path_img_correlation_outs,
+                self.path_tio_inversion_outs,
+            ]:
                 if dead_folder.exists() and not list(dead_folder.iterdir()):
                     dead_folder.rmdir()
                     logger.info(f"Removed empty: {dead_folder.name}")
 
             # Recompute layout detection and compat paths
-            self._legacy_layout = (self.path_root / f"raster_data_{self.project_name}").is_dir()
-            self.path_figures = self.path_root / (f"figures_{self.project_name}" if self._legacy_layout else "figures")
+            self._legacy_layout = (
+                self.path_root / f"raster_data_{self.project_name}"
+            ).is_dir()
+            self.path_figures = self.path_root / (
+                f"figures_{self.project_name}" if self._legacy_layout else "figures"
+            )
 
             # Refresh in-memory geodatabase layers
-            self._thumbs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Thumbs").to_crs(epsg=self.epsg)
-            self._pairs = gpd.read_file(self.path_geodb, engine="pyogrio", layer="Pairs").to_crs(epsg=self.epsg)
+            self._thumbs = gpd.read_file(
+                self.path_geodb, engine="pyogrio", layer="Thumbs"
+            ).to_crs(epsg=self.epsg)
+            self._pairs = gpd.read_file(
+                self.path_geodb, engine="pyogrio", layer="Pairs"
+            ).to_crs(epsg=self.epsg)
 
-            logger.success("Migration complete. Session re-initialized with new structure.")
+            logger.success(
+                "Migration complete. Session re-initialized with new structure."
+            )
 
         return {"moved": moved, "skipped": skipped, "warnings": warnings}
 
@@ -2164,14 +2374,14 @@ class Session:
             "geometry": None,
         }
         return geo_meta
-    
+
     # * Works properly
     def map_single_georaster(
-            self,
-            ta: pathlib.Path | list[str] | str | None,
-            target_crs: str,
-            image_types: set[str]
-            ) -> dict | None:
+        self,
+        ta: pathlib.Path | list[str] | str | None,
+        target_crs: str,
+        image_types: set[str],
+    ) -> dict | None:
         """Map a single georaster to the target CRS and image types.
 
         Args:
@@ -2196,17 +2406,22 @@ class Session:
         try:
             # Filling metadata with georaster information
             r = gu.Raster(ta, load_data=False)
-            georaster_metadata['filename'] = ta.name
-            georaster_metadata['file_path'] = str(ta)
-            georaster_metadata['xRes'] = r.res[0]
-            georaster_metadata['yRes'] = r.res[1]
-            georaster_metadata['bands'] = r.count
-            georaster_metadata['rows'] = r.shape[0]
-            georaster_metadata['cols'] = r.shape[1]
+            georaster_metadata["filename"] = ta.name
+            georaster_metadata["file_path"] = str(ta)
+            georaster_metadata["xRes"] = r.res[0]
+            georaster_metadata["yRes"] = r.res[1]
+            georaster_metadata["bands"] = r.count
+            georaster_metadata["rows"] = r.shape[0]
+            georaster_metadata["cols"] = r.shape[1]
             if "opt" in image_types:
-                sensor = re_searcher(ta.name.lower(), gmc_sensors.sensors(gmc_sensors.supported_sensors))
+                sensor = re_searcher(
+                    ta.name.lower(), gmc_sensors.sensors(gmc_sensors.supported_sensors)
+                )
                 if sensor == "unknown":
-                    sensor = re_searcher(ta.parent.name.lower(), gmc_sensors.sensors(gmc_sensors.supported_sensors))
+                    sensor = re_searcher(
+                        ta.parent.name.lower(),
+                        gmc_sensors.sensors(gmc_sensors.supported_sensors),
+                    )
                 sensor_normalized = gmc_sensors.sensor_normalize(sensor)
             elif "dem" in image_types:
                 # A DEM carries no readable sensor metadata: the source
@@ -2215,14 +2430,20 @@ class Session:
                 # becomes the thumb's filename field, so it must stay free of
                 # "_" and "-", which sensor_normalize would not guarantee.
                 sensor = gmc_sensors.infer_dem_sensor(ta)
-                sensor_normalized = {"sensor": sensor, "platform": sensor, "family": "dem"}
+                sensor_normalized = {
+                    "sensor": sensor,
+                    "platform": sensor,
+                    "family": "dem",
+                }
             else:
                 sensor = "unknown"
                 sensor_normalized = gmc_sensors.sensor_normalize(sensor)
-            georaster_metadata['image_type'] = "dem" if "dem" in image_types and "opt" not in image_types else "opt"
-            georaster_metadata['sensor'] = sensor_normalized['sensor']
-            georaster_metadata['sensor_platform'] = sensor_normalized['platform']
-            georaster_metadata['sensor_family'] = sensor_normalized['family']
+            georaster_metadata["image_type"] = (
+                "dem" if "dem" in image_types and "opt" not in image_types else "opt"
+            )
+            georaster_metadata["sensor"] = sensor_normalized["sensor"]
+            georaster_metadata["sensor_platform"] = sensor_normalized["platform"]
+            georaster_metadata["sensor_family"] = sensor_normalized["family"]
 
             # Struggling to extract acquisition date, may be due to sensor-specific formats or missing metadata
             acq_datetime = gmc_sensors.extract_acquisition_date(ta, sensor=sensor)
@@ -2234,8 +2455,8 @@ class Session:
                     "a multi-temporal DEM needs its acquisition date in the file "
                     "name (e.g. 'site_2019-08-14_pleiades_dem.tif') — undated "
                     "mosaics such as Copernicus or SRTM cannot be placed in time."
-                    if georaster_metadata['image_type'] == "dem" else
-                    "for a band-scoped filename (e.g. Sentinel-2 'B08.tif') the date "
+                    if georaster_metadata["image_type"] == "dem"
+                    else "for a band-scoped filename (e.g. Sentinel-2 'B08.tif') the date "
                     "can only come from the metadata, so check it was downloaded."
                 )
                 logger.warning(
@@ -2256,11 +2477,17 @@ class Session:
             else:
                 shp = raster_footprint
                 src_crs = getattr(raster_footprint, "crs", None)
-            georaster_metadata["src_crs"] = (src_crs.to_string() if hasattr(src_crs, "to_string") else str(src_crs)) if src_crs else None
+            georaster_metadata["src_crs"] = (
+                (src_crs.to_string() if hasattr(src_crs, "to_string") else str(src_crs))
+                if src_crs
+                else None
+            )
             geom_proj = shp
             try:
                 if target_crs and src_crs and str(src_crs) != target_crs:
-                    geom_proj = gpd.GeoSeries([shp], crs=src_crs).to_crs(target_crs).iloc[0]
+                    geom_proj = (
+                        gpd.GeoSeries([shp], crs=src_crs).to_crs(target_crs).iloc[0]
+                    )
             except Exception:
                 pass
             # Assign the projected geometry to the metadata dictionary
@@ -2269,17 +2496,19 @@ class Session:
         except Exception as e:
             logger.warning(f"Skip {ta.name}: {e}")
             return None
-    
+
     # * Works properly
-    def map_georasters_bank(self,
-                            georasters_bank_path: str | pathlib.Path,
-                            extensions: str | Sequence[str] = None,
-                            image_type: str = "opt",
-                            epsg_code: str | int | None = None,
-                            suffix: str = "",
-                            max_workers: int = None,
-                            save_georaster_bank: bool = False,
-                            exclude_patterns: list[str] | None = None) -> gpd.GeoDataFrame:
+    def map_georasters_bank(
+        self,
+        georasters_bank_path: str | pathlib.Path,
+        extensions: str | Sequence[str] = None,
+        image_type: str = "opt",
+        epsg_code: str | int | None = None,
+        suffix: str = "",
+        max_workers: int = None,
+        save_georaster_bank: bool = False,
+        exclude_patterns: list[str] | None = None,
+    ) -> gpd.GeoDataFrame:
         """Map georasters in the specified bank directory using parallel processing.
 
         Args:
@@ -2322,21 +2551,31 @@ class Session:
         # Normalize extensions (case-insensitive)
         targets = []
         for x in (extensions if isinstance(extensions, tuple) else extensions):
-                targets += georasters_bank_path.glob(f"**/*.{x.lower()}")
-                targets += georasters_bank_path.glob(f"**/*.{x.upper()}")
+            targets += georasters_bank_path.glob(f"**/*.{x.lower()}")
+            targets += georasters_bank_path.glob(f"**/*.{x.upper()}")
         # targets = list({p for x in extensions
         #         for p in [*georasters_bank_path.glob(f"**/*.{x.lower()}"), *georasters_bank_path.glob(f"**/*.{x.upper()}")]})
 
         if exclude_patterns:
-            targets = [t for t in targets if not any(pat in t.name for pat in exclude_patterns)]
+            targets = [
+                t for t in targets if not any(pat in t.name for pat in exclude_patterns)
+            ]
 
         if not targets:
-            raise FileNotFoundError(f"No raster files with extensions {extensions} found in {georasters_bank_path}")
-        _image_types = {image_type.lower()} if isinstance(image_type, str) else {str(t).lower() for t in image_type}
+            raise FileNotFoundError(
+                f"No raster files with extensions {extensions} found in {georasters_bank_path}"
+            )
+        _image_types = (
+            {image_type.lower()}
+            if isinstance(image_type, str)
+            else {str(t).lower() for t in image_type}
+        )
         protomap_layer = self._protomap_layer(image_type)  # validates early
         # Choose a project/target CRS (prefer your session's EPSG)
-        target_crs = f"EPSG:{epsg_code}" if epsg_code is not None else f"EPSG:{self.epsg}"
-        
+        target_crs = (
+            f"EPSG:{epsg_code}" if epsg_code is not None else f"EPSG:{self.epsg}"
+        )
+
         file_name = _RichText("Mapping georasters: ", style="cyan")
         progress = Progress(
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
@@ -2348,7 +2587,10 @@ class Session:
         )
 
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = [ex.submit(self.map_single_georaster, ta, target_crs, _image_types) for ta in targets]
+            futures = [
+                ex.submit(self.map_single_georaster, ta, target_crs, _image_types)
+                for ta in targets
+            ]
             rows = []
             errors = []
             task = progress.add_task("", total=len(futures))
@@ -2362,7 +2604,9 @@ class Session:
                     try:
                         rec = future.result()
                         if rec:
-                            file_name.plain = f"Mapping georasters: {rec.get('filename', '')}"
+                            file_name.plain = (
+                                f"Mapping georasters: {rec.get('filename', '')}"
+                            )
                             rows.append(rec)
                     except Exception as e:
                         errors.append(str(e))
@@ -2373,24 +2617,26 @@ class Session:
         if not rows:
             error_msg = "No features collected."
             if errors:
-                error_msg += f"\nErrors encountered:\n" + "\n".join(errors[:5])  # Show first 5 errors
+                error_msg += f"\nErrors encountered:\n" + "\n".join(
+                    errors[:5]
+                )  # Show first 5 errors
             raise RuntimeError(error_msg)
 
         # Rebuild geometries and GeoDataFrame
         df = pd.DataFrame(rows)
-        layer_crs = target_crs or (df["src_crs"].dropna().iloc[0] if not df["src_crs"].dropna().empty else None)
+        layer_crs = target_crs or (
+            df["src_crs"].dropna().iloc[0] if not df["src_crs"].dropna().empty else None
+        )
         features_gdf = gpd.GeoDataFrame(df, geometry="geometry", crs=layer_crs)
         features_gdf.to_file(self.path_geodb, layer=protomap_layer)
         if save_georaster_bank:
             self.save_georaster_bank(features_gdf)
         return features_gdf
-    
+
     # * Works properly
-    def insert_pzone_to_gdb(self,
-                            polygon: gpd.GeoDataFrame,
-                            pz_name: str,
-                            pz_shortname: str,
-                            **attributes):
+    def insert_pzone_to_gdb(
+        self, polygon: gpd.GeoDataFrame, pz_name: str, pz_shortname: str, **attributes
+    ):
         """Insert a new polygon into the Pzones layer of the session geodatabase.
         Args:
             polygon (shapely.geometry.Polygon): The polygon geometry to insert.
@@ -2407,7 +2653,7 @@ class Session:
         # Read the current Pzones layer
         gdf = gpd.read_file(self.path_geodb, layer="Pzones", engine="pyogrio")
         # Prepare new row with all required columns
-        row = {"pz_name": pz_name, "pz_shortname": pz_shortname,"geometry": polygon}
+        row = {"pz_name": pz_name, "pz_shortname": pz_shortname, "geometry": polygon}
         # Add any extra attributes provided
         for k, v in attributes.items():
             row[k] = v
@@ -2422,7 +2668,7 @@ class Session:
         # Optionally update the session's _pzones attribute
         self._pzones = gdf
         return gdf
-    
+
     # * Works properly
     def draw_polygon_manually(
         self,
@@ -2465,11 +2711,11 @@ class Session:
         from ipyleaflet import GeoData, LayersControl
 
         _SENSOR_COLORS = {
-            "spot":      "#e6194b",
+            "spot": "#e6194b",
             "sentinel2": "#3cb44b",
-            "landsat":   "#4363d8",
-            "pleiades":  "#f58231",
-            "planet":    "#911eb4",
+            "landsat": "#4363d8",
+            "pleiades": "#f58231",
+            "planet": "#911eb4",
             "worldview": "#42d4f4",
         }
 
@@ -2493,49 +2739,62 @@ class Session:
             if "sensor_family" in rb_4326.columns:
                 for sensor, group in rb_4326.groupby("sensor_family"):
                     color = _SENSOR_COLORS.get(str(sensor).lower(), "#aaaaaa")
-                    m.add_layer(GeoData(
-                        geo_dataframe=_json_safe(group.reset_index(drop=True)),
-                        style={
-                            "color": color, "weight": 1.5,
-                            "fillColor": color, "fillOpacity": 0.1,
-                        },
-                        hover_style={"fillOpacity": 0.4},
-                        name=str(sensor),
-                    ))
+                    m.add_layer(
+                        GeoData(
+                            geo_dataframe=_json_safe(group.reset_index(drop=True)),
+                            style={
+                                "color": color,
+                                "weight": 1.5,
+                                "fillColor": color,
+                                "fillOpacity": 0.1,
+                            },
+                            hover_style={"fillOpacity": 0.4},
+                            name=str(sensor),
+                        )
+                    )
             else:
-                m.add_layer(GeoData(
-                    geo_dataframe=_json_safe(rb_4326),
-                    style={"color": "#3388ff", "weight": 1.5, "fillOpacity": 0.1},
-                    hover_style={"fillOpacity": 0.4},
-                    name="Raster Bank",
-                ))
+                m.add_layer(
+                    GeoData(
+                        geo_dataframe=_json_safe(rb_4326),
+                        style={"color": "#3388ff", "weight": 1.5, "fillOpacity": 0.1},
+                        hover_style={"fillOpacity": 0.4},
+                        name="Raster Bank",
+                    )
+                )
 
             m.add_control(LayersControl())
 
-            bounds = rb_4326.total_bounds  # [minx, miny, maxx, maxy] = [lon_min, lat_min, lon_max, lat_max]
+            bounds = (
+                rb_4326.total_bounds
+            )  # [minx, miny, maxx, maxy] = [lon_min, lat_min, lon_max, lat_max]
             m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
 
         draw_control = DrawControl(
-            polyline={}, circlemarker={}, marker={}, circle={},
+            polyline={},
+            circlemarker={},
+            marker={},
+            circle={},
             rectangle={"shapeOptions": {"color": "#3388ff", "weight": 3}},
         )
         m.add_control(draw_control)
         drawn_polygons = []
 
         def handle_draw(target, action, geo_json):
-            if action == 'created' and geo_json['geometry']['type'] == 'Polygon':
-                poly = shape(geo_json['geometry'])
+            if action == "created" and geo_json["geometry"]["type"] == "Polygon":
+                poly = shape(geo_json["geometry"])
                 drawn_polygons.append(poly)
-                print('Polygon drawn! Coordinates:', poly.exterior.coords[:])
+                print("Polygon drawn! Coordinates:", poly.exterior.coords[:])
 
         draw_control.on_draw(handle_draw)
         display(m)
-        print("Draw your polygon(s) on the map above. When done, run the next cell to get the GeoDataFrame.")
+        print(
+            "Draw your polygon(s) on the map above. When done, run the next cell to get the GeoDataFrame."
+        )
 
         def get_gdf():
             if drawn_polygons:
                 gdf = gpd.GeoDataFrame(geometry=drawn_polygons, crs=default_crs)
-                target_crs = getattr(self, 'epsg', None)
+                target_crs = getattr(self, "epsg", None)
                 if target_crs and str(gdf.crs) != f"EPSG:{target_crs}":
                     try:
                         gdf = gdf.to_crs(epsg=int(target_crs))
@@ -2543,8 +2802,9 @@ class Session:
                         print(f"CRS conversion failed: {e}")
                 return gdf
             else:
-                print('No polygons drawn.')
+                print("No polygons drawn.")
                 return None
+
         return get_gdf
 
     def _pairs_frame(self, criterias: str | list[str] = "") -> pd.DataFrame:
@@ -2604,8 +2864,11 @@ class Session:
         from geomulticorr.utils import gmc_functions as gmc_fn
 
         return gmc_fn.plot_pairs_network(
-            self._pairs_frame(criterias), figsize=figsize, color_by=color_by,
-            ax=ax, **style,
+            self._pairs_frame(criterias),
+            figsize=figsize,
+            color_by=color_by,
+            ax=ax,
+            **style,
         )
 
     def plot_pairs_chord(
@@ -2648,7 +2911,9 @@ class Session:
         from geomulticorr.utils import gmc_functions as gmc_fn
 
         return gmc_fn.plot_pairs_chord(
-            self._pairs_frame(criterias), figsize=figsize, **style,
+            self._pairs_frame(criterias),
+            figsize=figsize,
+            **style,
         )
 
     def save_pairs_figure(
@@ -2708,7 +2973,10 @@ class Session:
         Returns:
             ``{format: Path}`` for every file written.
         """
-        from geomulticorr.utils._pairs_export import pairs_figure_stem, save_pairs_figure
+        from geomulticorr.utils._pairs_export import (
+            pairs_figure_stem,
+            save_pairs_figure,
+        )
 
         if frame is None:
             frame = self._pairs_frame(criterias)
@@ -2717,7 +2985,9 @@ class Session:
         if pz_name is not None:
             # Explicit pz_name: always route to that pzone's figures folder (new layout only)
             if self._legacy_layout:
-                logger.warning(f"pz_name={pz_name!r} ignored for legacy-layout session; using project-wide figures folder")
+                logger.warning(
+                    f"pz_name={pz_name!r} ignored for legacy-layout session; using project-wide figures folder"
+                )
                 out_dir = self.path_figures / subdir
             else:
                 out_dir = self.pz_dir(pz_name, PZ_KIND_FIGURES) / subdir
@@ -2736,12 +3006,22 @@ class Session:
         if stem is None:
             # _last_pairs_params holds exactly the seven keys pairs_figure_stem takes
             # (and that update_pairs accepts) — see the note in _stash().
-            params = getattr(self, "_last_pairs_params", None) or {"strategy": "committed"}
+            params = getattr(self, "_last_pairs_params", None) or {
+                "strategy": "committed"
+            }
             stem = pairs_figure_stem(view, **params)
 
         paths = save_pairs_figure(
-            frame, out_dir, view=view, formats=formats, stem=stem, title=title,
-            dpi=dpi, figsize=figsize, plotlyjs=plotlyjs, view_kwargs=view_kwargs,
+            frame,
+            out_dir,
+            view=view,
+            formats=formats,
+            stem=stem,
+            title=title,
+            dpi=dpi,
+            figsize=figsize,
+            plotlyjs=plotlyjs,
+            view_kwargs=view_kwargs,
             overwrite=overwrite,
         )
         logger.success(f"Saved {view} figure to {out_dir} ({', '.join(paths)}).")
@@ -2783,7 +3063,11 @@ class Session:
     #: Keyword arguments ``explore_pairs_strategy`` accepts through ``**defaults``.
     #: Anything else is a typo and raises, rather than being silently ignored.
     _EXPLORER_DEFAULTS: set[str] = {
-        "max_step", "max_dt_days", "min_dt_days", "sensor_filter", "image_type",
+        "max_step",
+        "max_dt_days",
+        "min_dt_days",
+        "sensor_filter",
+        "image_type",
     }
 
     # ------------------------------------------------------------------ #
@@ -2820,13 +3104,27 @@ class Session:
     #: silently ignored — ``velocity=5`` used to be a no-op in the pairs
     #: explorer's equivalent.
     _CORRPARAMS_EXPLORER_DEFAULTS: set[str] = {
-        "velocity_m_yr", "footprint_m", "c_px", "k", "coreg_px", "margin_px",
-        "flow_azimuth_deg", "strain_rate_per_yr", "corr_algorithm",
-        "subpixel_mode", "tau_days", "dt_bin_ratio",
-        "explicit_search", "explicit_search_above_days",
-        "uniform_kernel", "uniform_kernel_px",
-        "uniform_search", "uniform_search_box",
-        "sensor_filter", "max_dt_days", "min_dt_days",
+        "velocity_m_yr",
+        "footprint_m",
+        "c_px",
+        "k",
+        "coreg_px",
+        "margin_px",
+        "flow_azimuth_deg",
+        "strain_rate_per_yr",
+        "corr_algorithm",
+        "subpixel_mode",
+        "tau_days",
+        "dt_bin_ratio",
+        "explicit_search",
+        "explicit_search_above_days",
+        "uniform_kernel",
+        "uniform_kernel_px",
+        "uniform_search",
+        "uniform_search_box",
+        "sensor_filter",
+        "max_dt_days",
+        "min_dt_days",
         "color_by",
     }
 
@@ -2843,10 +3141,20 @@ class Session:
     #: JSON rather than splatted into ``prepare_pairs_correlation`` (which knows
     #: nothing about velocities).
     _CORR_ASSUMPTION_KEYS: tuple[str, ...] = (
-        "velocity_m_yr", "footprint_m", "c_px", "k", "coreg_px", "margin_px",
-        "flow_azimuth_deg", "strain_rate_per_yr", "corr_algorithm",
-        "subpixel_mode", "tau_days", "dt_bin_ratio",
-        "explicit_search", "explicit_search_above_days",
+        "velocity_m_yr",
+        "footprint_m",
+        "c_px",
+        "k",
+        "coreg_px",
+        "margin_px",
+        "flow_azimuth_deg",
+        "strain_rate_per_yr",
+        "corr_algorithm",
+        "subpixel_mode",
+        "tau_days",
+        "dt_bin_ratio",
+        "explicit_search",
+        "explicit_search_above_days",
     )
 
     #: Uniform overrides. Kept apart from :attr:`_CORR_ASSUMPTION_KEYS` because
@@ -2854,7 +3162,10 @@ class Session:
     #: full, producing the warnings that say where the uniform value is wrong —
     #: they replace its result afterwards, as the group parameters.
     _CORR_UNIFORM_KEYS: tuple[str, ...] = (
-        "uniform_kernel", "uniform_kernel_px", "uniform_search", "uniform_search_box",
+        "uniform_kernel",
+        "uniform_kernel_px",
+        "uniform_search",
+        "uniform_search_box",
     )
 
     def _thumb_resolution(self, path: str | pathlib.Path) -> float:
@@ -2890,11 +3201,16 @@ class Session:
         cache[key] = value
         return value
 
-    def explore_pairs_strategy(self, strategy: str = "consecutive", pz_name: str = "",
-                               view: str = "baseline", interactive: bool = True,
-                               savefig: bool = True,
-                               formats: str | list[str] | tuple[str, ...] = ("html", "png"),
-                               **defaults):
+    def explore_pairs_strategy(
+        self,
+        strategy: str = "consecutive",
+        pz_name: str = "",
+        view: str = "baseline",
+        interactive: bool = True,
+        savefig: bool = True,
+        formats: str | list[str] | tuple[str, ...] = ("html", "png"),
+        **defaults,
+    ):
         """Interactive Plotly + ipywidgets tool to preview pairing strategies.
 
         Recomputes the candidate pairs on every control change *without* touching
@@ -2996,18 +3312,25 @@ class Session:
         for pz in pzones:
             # Every image type is read once here; the type is then a pure
             # in-memory filter, like the sensor substring.
-            ths = sorted(pz.get_valid_thumbs(image_type=None), key=lambda t: t.th_date_datetime)
+            ths = sorted(
+                pz.get_valid_thumbs(image_type=None), key=lambda t: t.th_date_datetime
+            )
             thumbs_by_pz[pz.pz_name] = ths
         pz_options = ["<all>"] + list(thumbs_by_pz.keys())
         init_type = normalise_image_type(defaults.get("image_type"))
         type_options = sorted(
-            {getattr(t, "th_type", IMAGE_TYPE_OPTICAL) for ths in thumbs_by_pz.values() for t in ths}
+            {
+                getattr(t, "th_type", IMAGE_TYPE_OPTICAL)
+                for ths in thumbs_by_pz.values()
+                for t in ths
+            }
             | {init_type},
             key=IMAGE_TYPES.index,
         )
 
-        def _selected_thumbs(sel_pz: str, sfilter: str,
-                             itype: str = IMAGE_TYPE_OPTICAL) -> list[tuple[str, list]]:
+        def _selected_thumbs(
+            sel_pz: str, sfilter: str, itype: str = IMAGE_TYPE_OPTICAL
+        ) -> list[tuple[str, list]]:
             """``(pzone name, thumbs)`` per pzone under the current filters.
 
             The sensor filter is a substring match on the thumb path — the same
@@ -3020,15 +3343,23 @@ class Session:
                 if sel_pz != "<all>" and pzn != sel_pz:
                     continue
                 out.append(
-                    (pzn,
-                     [t for t in ths
-                      if getattr(t, "th_type", IMAGE_TYPE_OPTICAL) == itype
-                      and (not sfilter or sfilter.lower() in t.th_path.lower())])
+                    (
+                        pzn,
+                        [
+                            t
+                            for t in ths
+                            if getattr(t, "th_type", IMAGE_TYPE_OPTICAL) == itype
+                            and (not sfilter or sfilter.lower() in t.th_path.lower())
+                        ],
+                    )
                 )
             return out
 
-        def _max_useful_step(sel_pz: str | None = None, sfilter: str | None = None,
-                             itype: str | None = None) -> int:
+        def _max_useful_step(
+            sel_pz: str | None = None,
+            sfilter: str | None = None,
+            itype: str | None = None,
+        ) -> int:
             """Largest ``max_step`` that still adds pairs for the current selection.
 
             Pairing runs per pzone, so with ``"<all>"`` the bound comes from the
@@ -3054,9 +3385,15 @@ class Session:
                 f"(≤ {ceiling} — pairs every acquisition with every other)"
             )
 
-        def _build_frame(strat: str, max_step: int | None, max_dt: int | None,
-                         min_dt: int | None, sfilter: str, sel_pz: str,
-                         itype: str = IMAGE_TYPE_OPTICAL) -> pd.DataFrame:
+        def _build_frame(
+            strat: str,
+            max_step: int | None,
+            max_dt: int | None,
+            min_dt: int | None,
+            sfilter: str,
+            sel_pz: str,
+            itype: str = IMAGE_TYPE_OPTICAL,
+        ) -> pd.DataFrame:
             """Candidate pairs for an explicit parameter set.
 
             Pure — no I/O, no ``Thumb``/``Pair`` construction — so it is equally
@@ -3067,12 +3404,16 @@ class Session:
                 idx_pairs = gmc_pzone._strategy_pair_indices(len(sel), strat, max_step)
                 frames.append(
                     pairs_frame_from_indices(
-                        [t.th_date_datetime for t in sel], idx_pairs,
-                        sensors=[t.th_sensor for t in sel], pz=pzn,
+                        [t.th_date_datetime for t in sel],
+                        idx_pairs,
+                        sensors=[t.th_sensor for t in sel],
+                        pz=pzn,
                     )
                 )
 
-            frame = pd.concat(frames, ignore_index=True) if frames else empty_pairs_frame()
+            frame = (
+                pd.concat(frames, ignore_index=True) if frames else empty_pairs_frame()
+            )
             if len(frame):  # Δt filters, vectorised
                 keep = np.ones(len(frame), dtype=bool)
                 if max_dt is not None:
@@ -3086,11 +3427,16 @@ class Session:
             """Figure options for a view — the values the widgets also start from,
             so both modes render the same figure for the same pairs."""
             if view_key == "network":
-                return dict(color_by="dt", mirror_direction=True,
-                            dedupe=self._VIEW_DEDUPE_DEFAULT.get("network", False))
+                return dict(
+                    color_by="dt",
+                    mirror_direction=True,
+                    dedupe=self._VIEW_DEDUPE_DEFAULT.get("network", False),
+                )
             if view_key == "chord":
-                return dict(show_arrows=False,
-                            dedupe=self._VIEW_DEDUPE_DEFAULT.get("chord", True))
+                return dict(
+                    show_arrows=False,
+                    dedupe=self._VIEW_DEDUPE_DEFAULT.get("chord", True),
+                )
             if view_key == "dt_hist":
                 return dict(nbins=40)
             return {}
@@ -3101,15 +3447,23 @@ class Session:
                 return len(unique_couples(frame))
             return len(frame)
 
-        def _title_for(frame: pd.DataFrame, view_key: str, strat: str, dedupe: bool) -> str:
+        def _title_for(
+            frame: pd.DataFrame, view_key: str, strat: str, dedupe: bool
+        ) -> str:
             n_drawn, n_pairs = _drawn_len(frame, view_key, dedupe), len(frame)
             noun = self._DRAWN_NOUN[view_key]
             suffix = "" if n_drawn == n_pairs else f" of {n_pairs} pairs"
             return f"Pairing preview — {n_drawn} {noun}{suffix} [{strat}]"
 
-        def _stash_params(strat: str, max_step: int | None, max_dt: int | None,
-                          min_dt: int | None, sfilter: str | None, pzn: str,
-                          itype: str = IMAGE_TYPE_OPTICAL):
+        def _stash_params(
+            strat: str,
+            max_step: int | None,
+            max_dt: int | None,
+            min_dt: int | None,
+            sfilter: str | None,
+            pzn: str,
+            itype: str = IMAGE_TYPE_OPTICAL,
+        ):
             # NOTE: exactly the seven keys update_pairs(**params) accepts — adding
             # any view/style key here would raise TypeError at that call.
             self._last_pairs_params = dict(
@@ -3135,9 +3489,15 @@ class Session:
             frame = _build_frame(
                 strategy,
                 max_step if strategy in ("step", "redundancy") else None,
-                max_dt, min_dt, sfilter, "<all>", init_type,
+                max_dt,
+                min_dt,
+                sfilter,
+                "<all>",
+                init_type,
             )
-            _stash_params(strategy, max_step, max_dt, min_dt, sfilter, pz_name, init_type)
+            _stash_params(
+                strategy, max_step, max_dt, min_dt, sfilter, pz_name, init_type
+            )
 
             view_kwargs = _view_defaults(view)
             title = _title_for(frame, view, strategy, view_kwargs.get("dedupe", False))
@@ -3145,7 +3505,10 @@ class Session:
 
             if savefig and len(frame):
                 self.save_pairs_figure(
-                    view=view, frame=frame, formats=formats, title=title,
+                    view=view,
+                    frame=frame,
+                    formats=formats,
+                    title=title,
                     **view_kwargs,
                 )
             elif savefig:
@@ -3160,10 +3523,14 @@ class Session:
         # ── controls ──
         c_view = widgets.Dropdown(
             options=[(label, key) for key, label in gmc_plotly.VIEW_LABELS.items()],
-            value=view, description="plot")
+            value=view,
+            description="plot",
+        )
         c_strategy = widgets.Dropdown(
             options=["consecutive", "step", "redundancy", "forward-backward"],
-            value=strategy, description="strategy")
+            value=strategy,
+            description="strategy",
+        )
         # The ceiling is the data's, not an arbitrary constant: with n acquisitions
         # every couple is already paired at max_step = n - 1, and anything beyond
         # is a no-op.  It is re-fitted by _sync_step_range() when the pzone or
@@ -3173,53 +3540,80 @@ class Session:
         )
         c_step = widgets.IntSlider(
             value=min(max(int(defaults.get("max_step", 2)), 1), _step_ceiling),
-            min=1, max=_step_ceiling, step=1, description="max_step",
+            min=1,
+            max=_step_ceiling,
+            step=1,
+            description="max_step",
             tooltip=_step_tooltip(_step_ceiling),
         )
         # Text, not IntText: "1Y"/"6M"/"30D" as well as a bare number of days.
         c_maxdt = widgets.Text(
             value=format_dt_days(parse_dt_days(defaults.get("max_dt_days"))),
-            description="max_dt", placeholder="e.g. 1Y, 6M, 200",
+            description="max_dt",
+            placeholder="e.g. 1Y, 6M, 200",
             style={"description_width": "initial"},
-            layout=widgets.Layout(width="180px"))
+            layout=widgets.Layout(width="180px"),
+        )
         c_mindt = widgets.Text(
             value=format_dt_days(parse_dt_days(defaults.get("min_dt_days"))),
-            description="min_dt", placeholder="e.g. 1Y, 6M, 60",
+            description="min_dt",
+            placeholder="e.g. 1Y, 6M, 60",
             style={"description_width": "initial"},
-            layout=widgets.Layout(width="180px"))
-        c_sensor = widgets.Text(value=str(defaults.get("sensor_filter", "") or ""),
-                                description="sensor")
+            layout=widgets.Layout(width="180px"),
+        )
+        c_sensor = widgets.Text(
+            value=str(defaults.get("sensor_filter", "") or ""), description="sensor"
+        )
         c_pz = widgets.Dropdown(options=pz_options, value="<all>", description="pzone")
         # Image type: only worth showing when there is a choice to make.
-        c_type = widgets.Dropdown(options=type_options, value=init_type, description="type")
+        c_type = widgets.Dropdown(
+            options=type_options, value=init_type, description="type"
+        )
         c_type.layout.display = None if len(type_options) > 1 else "none"
         # view-specific controls (hidden unless the active view uses them)
-        c_colorby = widgets.Dropdown(options=["dt", "direction", "sensor", "pzone"],
-                                     value="dt", description="colour")
-        c_bins = widgets.IntSlider(value=40, min=10, max=100, step=5, description="bins")
+        c_colorby = widgets.Dropdown(
+            options=["dt", "direction", "sensor", "pzone"],
+            value="dt",
+            description="colour",
+        )
+        c_bins = widgets.IntSlider(
+            value=40, min=10, max=100, step=5, description="bins"
+        )
         # Same per-view default the dropdown applies on switch — without it,
         # opening straight onto the network view would dedupe away every backward
         # pair and make "mirror directions" look broken.
-        c_dedupe = widgets.Checkbox(value=self._VIEW_DEDUPE_DEFAULT.get(view, True),
-                                    description="dedupe couples", indent=False)
+        c_dedupe = widgets.Checkbox(
+            value=self._VIEW_DEDUPE_DEFAULT.get(view, True),
+            description="dedupe couples",
+            indent=False,
+        )
         c_arrows = widgets.Checkbox(value=False, description="arrowheads", indent=False)
-        c_mirror = widgets.Checkbox(value=True, description="mirror directions",
-                                    indent=False)
+        c_mirror = widgets.Checkbox(
+            value=True, description="mirror directions", indent=False
+        )
         # save row — the file name is derived from the pairing parameters, so the
         # only choices left are which formats to write.
-        c_formats = widgets.SelectMultiple(options=list(FIGURE_FORMATS),
-                                           value=("html", "png"),
-                                           rows=len(FIGURE_FORMATS),
-                                           description="formats")
+        c_formats = widgets.SelectMultiple(
+            options=list(FIGURE_FORMATS),
+            value=("html", "png"),
+            rows=len(FIGURE_FORMATS),
+            description="formats",
+        )
         b_save = widgets.Button(description="Save figure", icon="save")
 
         def _apply_visibility():
             """Show only the controls the current strategy *and* view actually use."""
-            relevant = (self._STRATEGY_CONTROLS.get(c_strategy.value, set())
-                        | self._VIEW_CONTROLS.get(c_view.value, set()))
-            for widget, key in ((c_step, "max_step"), (c_colorby, "color_by"),
-                                (c_bins, "bins"), (c_dedupe, "dedupe"),
-                                (c_arrows, "arrows"), (c_mirror, "mirror")):
+            relevant = self._STRATEGY_CONTROLS.get(
+                c_strategy.value, set()
+            ) | self._VIEW_CONTROLS.get(c_view.value, set())
+            for widget, key in (
+                (c_step, "max_step"),
+                (c_colorby, "color_by"),
+                (c_bins, "bins"),
+                (c_dedupe, "dedupe"),
+                (c_arrows, "arrows"),
+                (c_mirror, "mirror"),
+            ):
                 widget.layout.display = None if key in relevant else "none"
 
         def _read_dt(widget, label: str) -> int | None:
@@ -3239,9 +3633,7 @@ class Session:
             try:
                 days = parse_dt_days(text if not text.isdigit() else int(text))
             except ValueError as exc:
-                status.value = (
-                    f"<span style='color:#c33'>✘ {label}: {exc}</span>"
-                )
+                status.value = f"<span style='color:#c33'>✘ {label}: {exc}</span>"
                 return state.get(f"dt_{label}")
             state[f"dt_{label}"] = days
             return days
@@ -3264,9 +3656,12 @@ class Session:
             # what was actually applied, and update_pairs(**params) is pinned by
             # test to accept exactly these seven keys.
             _stash_params(
-                c_strategy.value, c_step.value,
-                _read_dt(c_maxdt, "max_dt"), _read_dt(c_mindt, "min_dt"),
-                c_sensor.value, "" if c_pz.value == "<all>" else c_pz.value,
+                c_strategy.value,
+                c_step.value,
+                _read_dt(c_maxdt, "max_dt"),
+                _read_dt(c_mindt, "min_dt"),
+                c_sensor.value,
+                "" if c_pz.value == "<all>" else c_pz.value,
                 c_type.value,
             )
 
@@ -3284,8 +3679,11 @@ class Session:
             """View options, shared by the figure on screen and the saved one."""
             view_key = c_view.value
             if view_key == "network":
-                return dict(color_by=c_colorby.value, dedupe=c_dedupe.value,
-                            mirror_direction=c_mirror.value)
+                return dict(
+                    color_by=c_colorby.value,
+                    dedupe=c_dedupe.value,
+                    mirror_direction=c_mirror.value,
+                )
             if view_key == "chord":
                 return dict(dedupe=c_dedupe.value, show_arrows=c_arrows.value)
             if view_key == "dt_hist":
@@ -3319,9 +3717,12 @@ class Session:
             c_mirror.disabled = not has_backward
             if has_backward:
                 c_mirror.tooltip = "Draw backward (j → i) pairs below the timeline"
-            elif c_view.value in ("chord", "network") and c_dedupe.value and len(
-                state["frame"]
-            ) and (state["frame"]["direction"] == "backward").any():
+            elif (
+                c_view.value in ("chord", "network")
+                and c_dedupe.value
+                and len(state["frame"])
+                and (state["frame"]["direction"] == "backward").any()
+            ):
                 c_mirror.tooltip = (
                     "Nothing to mirror: 'dedupe couples' merged each couple down to "
                     "its forward pair. Untick it to see both directions."
@@ -3334,8 +3735,9 @@ class Session:
                 )
 
         def _fig_title() -> str:
-            return _title_for(state["frame"], c_view.value, c_strategy.value,
-                              c_dedupe.value)
+            return _title_for(
+                state["frame"], c_view.value, c_strategy.value, c_dedupe.value
+            )
 
         def _draw():
             """Render the cached frame with the active view builder."""
@@ -3349,7 +3751,8 @@ class Session:
         def _render_summary():
             summary.value = format_pairs_summary(
                 pairs_stats(state["frame"], strategy=c_strategy.value),
-                drawn=_n_drawn(), drawn_label=self._DRAWN_NOUN[c_view.value],
+                drawn=_n_drawn(),
+                drawn_label=self._DRAWN_NOUN[c_view.value],
             )
 
         def _redraw(change=None):
@@ -3411,18 +3814,24 @@ class Session:
             status.value = "<i>saving…</i>"
             try:
                 paths = self.save_pairs_figure(
-                    view=c_view.value, frame=state["frame"],
+                    view=c_view.value,
+                    frame=state["frame"],
                     formats=tuple(c_formats.value) or ("html",),
-                    title=_fig_title(), **_view_kwargs(),
+                    title=_fig_title(),
+                    **_view_kwargs(),
                 )
                 names = " ".join(f"<code>{p.name}</code>" for p in paths.values())
                 folder = next(iter(paths.values())).parent
-                status.value = (f"<span style='color:#2a7'>✔ saved to</span> "
-                                f"<code>{folder}</code><br>{names}")
+                status.value = (
+                    f"<span style='color:#2a7'>✔ saved to</span> "
+                    f"<code>{folder}</code><br>{names}"
+                )
             except Exception as exc:
                 logger.error(f"save_pairs_figure failed: {exc!r}")
-                status.value = (f"<span style='color:#c33'>✘ save failed — "
-                                f"{type(exc).__name__}: {exc}</span>")
+                status.value = (
+                    f"<span style='color:#c33'>✘ save failed — "
+                    f"{type(exc).__name__}: {exc}</span>"
+                )
             finally:
                 b_save.disabled = False
 
@@ -3452,14 +3861,20 @@ class Session:
         """
         import math
         import rasterio.coords as rio_coords
-        xmin, ymin, xmax, ymax = pz_vec.get_bounds_projected(out_crs=f"EPSG:{target_epsg}")
+
+        xmin, ymin, xmax, ymax = pz_vec.get_bounds_projected(
+            out_crs=f"EPSG:{target_epsg}"
+        )
         xmin = math.floor(xmin / target_resolution) * target_resolution
         ymin = math.floor(ymin / target_resolution) * target_resolution
-        xmax = math.ceil(xmax  / target_resolution) * target_resolution
-        ymax = math.ceil(ymax  / target_resolution) * target_resolution
+        xmax = math.ceil(xmax / target_resolution) * target_resolution
+        ymax = math.ceil(ymax / target_resolution) * target_resolution
         w = round((xmax - xmin) / target_resolution)
         h = round((ymax - ymin) / target_resolution)
-        return rio_coords.BoundingBox(left=xmin, bottom=ymin, right=xmax, top=ymax), (w, h)
+        return rio_coords.BoundingBox(left=xmin, bottom=ymin, right=xmax, top=ymax), (
+            w,
+            h,
+        )
 
     def sieve_single_mosaic(
         self,
@@ -3516,17 +3931,33 @@ class Session:
         elif isinstance(pzone_vector, gpd.GeoDataFrame):
             pz_vec = gu.Vector(pzone_vector)
         elif isinstance(pzone_vector, gpd.GeoSeries):
-            pz_vec = gu.Vector(gpd.GeoDataFrame(geometry=pzone_vector, crs=pzone_vector.crs))
+            pz_vec = gu.Vector(
+                gpd.GeoDataFrame(geometry=pzone_vector, crs=pzone_vector.crs)
+            )
         else:
-            raise TypeError(f"pzone_vector must be gu.Vector, GeoDataFrame, or GeoSeries (got {type(pzone_vector)}).")
+            raise TypeError(
+                f"pzone_vector must be gu.Vector, GeoDataFrame, or GeoSeries (got {type(pzone_vector)})."
+            )
 
         # Open the source raster lazily. Do NOT call set_nodata — it triggers a full load.
         rst = gu.Raster(mosaic_path, bands=selected_band, nodata=source_nodata)
 
         # Early-out: disjoint bounds → no work to do.
-        src_xmin, src_ymin, src_xmax, src_ymax = pz_vec.get_bounds_projected(out_crs=rst.crs)
-        rxmin, rymin, rxmax, rymax = rst.bounds.left, rst.bounds.bottom, rst.bounds.right, rst.bounds.top
-        if (src_xmax <= rxmin) or (src_xmin >= rxmax) or (src_ymax <= rymin) or (src_ymin >= rymax):
+        src_xmin, src_ymin, src_xmax, src_ymax = pz_vec.get_bounds_projected(
+            out_crs=rst.crs
+        )
+        rxmin, rymin, rxmax, rymax = (
+            rst.bounds.left,
+            rst.bounds.bottom,
+            rst.bounds.right,
+            rst.bounds.top,
+        )
+        if (
+            (src_xmax <= rxmin)
+            or (src_xmin >= rxmax)
+            or (src_ymax <= rymin)
+            or (src_ymin >= rymax)
+        ):
             return None
 
         # Windowed crop in the source CRS (reads only the overlap from disk)
@@ -3540,9 +3971,9 @@ class Session:
         if m_crop is None or 0 in m_crop.shape[-2:]:
             return None
 
-        shape_mismatch = (
-            canonical_grid_size is not None
-            and m_crop.shape[-2:] != (canonical_grid_size[1], canonical_grid_size[0])
+        shape_mismatch = canonical_grid_size is not None and m_crop.shape[-2:] != (
+            canonical_grid_size[1],
+            canonical_grid_size[0],
         )
         needs_reproject = (
             (m_crop.crs.to_epsg() != target_epsg)
@@ -3553,7 +3984,9 @@ class Session:
             return m_crop
 
         # Estimate output array size to decide between in-memory and multiproc warp
-        tgt_xmin, tgt_ymin, tgt_xmax, tgt_ymax = pz_vec.get_bounds_projected(out_crs=f"EPSG:{target_epsg}")
+        tgt_xmin, tgt_ymin, tgt_xmax, tgt_ymax = pz_vec.get_bounds_projected(
+            out_crs=f"EPSG:{target_epsg}"
+        )
         est_w = max(1, int((tgt_xmax - tgt_xmin) / target_resolution))
         est_h = max(1, int((tgt_ymax - tgt_ymin) / target_resolution))
         bytes_per_px = np.dtype(out_dtype).itemsize
@@ -3579,10 +4012,16 @@ class Session:
         if est_mb > use_multiproc_threshold_mb:
             from geoutils.raster.distributed_computing import MultiprocConfig
             import tempfile
+
             tmp = tempfile.NamedTemporaryFile(suffix=".tif", delete=False)
             tmp.close()
             try:
-                chunk = max(512, int((use_multiproc_threshold_mb * 1024 * 1024 / bytes_per_px) ** 0.5))
+                chunk = max(
+                    512,
+                    int(
+                        (use_multiproc_threshold_mb * 1024 * 1024 / bytes_per_px) ** 0.5
+                    ),
+                )
                 cfg = MultiprocConfig(chunk_size=chunk, outfile=tmp.name)
                 m_crop.reproject(**reproject_kwargs, multiproc_config=cfg)
                 m_final = gu.Raster(tmp.name)
@@ -3705,7 +4144,9 @@ class Session:
         After sieving, run :meth:`update_thumbs` to register the thumbs, then
         :meth:`update_pairs` with ``image_type=<product>``.
         """
-        assert len(self.get_pzones_overview()) > 0, "no pzone registered for this project"
+        assert (
+            len(self.get_pzones_overview()) > 0
+        ), "no pzone registered for this project"
 
         image_type = str(image_type).lower()
         if image_type not in ("opt", "dem", "reference_dem"):
@@ -3720,7 +4161,9 @@ class Session:
                     f"Unknown terrain product(s) {sorted(bad)}; expected any of {TERRAIN_PRODUCTS}"
                 )
             if not terrain_products and not keep_dem:
-                raise ValueError("Nothing to write: terrain_products is empty and keep_dem=False")
+                raise ValueError(
+                    "Nothing to write: terrain_products is empty and keep_dem=False"
+                )
             logger.info(
                 "image_type='dem' writes dated DEM thumbs and their terrain products "
                 "under elevation/; use 'reference_dem' (or build_reference_dem) for "
@@ -3731,8 +4174,12 @@ class Session:
             if not np.issubdtype(np.dtype(out_dtype), np.floating):
                 logger.settings(f"out_dtype {out_dtype!r} → 'float32' for DEM sieving")
                 out_dtype = "float32"
-            terrain_params = dict(azimuth=hillshade_azimuth, altitude=hillshade_altitude,
-                                  md_azimuths=tuple(md_azimuths), z_factor=z_factor)
+            terrain_params = dict(
+                azimuth=hillshade_azimuth,
+                altitude=hillshade_altitude,
+                md_azimuths=tuple(md_azimuths),
+                z_factor=z_factor,
+            )
 
         if georasters_map is None:
             georasters_map = self.get_georasters_map(
@@ -3754,7 +4201,11 @@ class Session:
             logger.warning("mask_vector is ignored for image_type='reference_dem'")
             mask_vector = None
 
-        res_tag = f"_{target_resolution:g}".replace(".", "p") + "m" if resolution_in_name else ""
+        res_tag = (
+            f"_{target_resolution:g}".replace(".", "p") + "m"
+            if resolution_in_name
+            else ""
+        )
 
         for pz in self.get_pzones_overview().iloc:
             if pzone_filter is not None and pz["pz_name"] not in pzone_filter:
@@ -3763,7 +4214,9 @@ class Session:
             logger.info(f"Pzone: {pz['pz_name']}")
 
             pz_vec = gu.Vector(
-                gpd.GeoDataFrame([pz], crs=self.get_pzones_overview().crs, geometry="geometry")
+                gpd.GeoDataFrame(
+                    [pz], crs=self.get_pzones_overview().crs, geometry="geometry"
+                )
             )
 
             # Use provided canonical grid if given, otherwise compute per pzone
@@ -3782,38 +4235,51 @@ class Session:
                 # inventory costs what the pzone costs.  The buffer is applied after
                 # reprojection, in metres, so the crop margin is only a pre-filter.
                 mask_vec = self._normalize_vector_source(
-                    mask_vector, layer=mask_layer,
-                    bounds=(canon_bounds.left - mask_buffer_value,
-                            canon_bounds.bottom - mask_buffer_value,
-                            canon_bounds.right + mask_buffer_value,
-                            canon_bounds.top + mask_buffer_value),
+                    mask_vector,
+                    layer=mask_layer,
+                    bounds=(
+                        canon_bounds.left - mask_buffer_value,
+                        canon_bounds.bottom - mask_buffer_value,
+                        canon_bounds.right + mask_buffer_value,
+                        canon_bounds.top + mask_buffer_value,
+                    ),
                 )
                 if len(mask_vec.ds) and mask_buffer_value:
                     mask_vec = mask_vec.buffer(mask_buffer_value)
                 _tmpl = gu.Raster.from_array(
                     np.zeros((canon_size[1], canon_size[0]), dtype="uint8"),
                     transform=rio_transform.from_bounds(
-                        canon_bounds.left, canon_bounds.bottom, canon_bounds.right,
-                        canon_bounds.top, canon_size[0], canon_size[1]),
+                        canon_bounds.left,
+                        canon_bounds.bottom,
+                        canon_bounds.right,
+                        canon_bounds.top,
+                        canon_size[0],
+                        canon_size[1],
+                    ),
                     crs=rio_crs.CRS.from_epsg(self.epsg),
                     nodata=None,
                 )
                 if len(mask_vec.ds) == 0:
                     pz_mask = np.zeros((canon_size[1], canon_size[0]), dtype=bool)
                 else:
-                    pz_mask = np.asarray(np.ma.getdata(mask_vec.create_mask(_tmpl).data),
-                                         dtype=bool).reshape(canon_size[1], canon_size[0])
+                    pz_mask = np.asarray(
+                        np.ma.getdata(mask_vec.create_mask(_tmpl).data), dtype=bool
+                    ).reshape(canon_size[1], canon_size[0])
                 del mask_vec, _tmpl  # free the cropped polygons before the next pzone
                 frac = float(pz_mask.mean())
                 logger.info(f"Polygon mask on {pz['pz_name']}: {frac:.1%} of the grid")
                 if frac == 0:
-                    logger.info(f"No mask polygon intersects {pz['pz_name']}: nothing masked")
+                    logger.info(
+                        f"No mask polygon intersects {pz['pz_name']}: nothing masked"
+                    )
                     pz_mask = None
                 elif frac > 0.8:
                     logger.warning(f"mask_vector covers {frac:.0%} of the pzone grid")
                 if skip_existing:
-                    logger.info("mask_vector: existing thumbs are skipped, not re-masked "
-                                "(use skip_existing=False)")
+                    logger.info(
+                        "mask_vector: existing thumbs are skipped, not re-masked "
+                        "(use skip_existing=False)"
+                    )
 
             pz_name = pz["pz_name"]
             if image_type == "opt":
@@ -3824,9 +4290,9 @@ class Session:
                         p.mkdir(parents=True)
             elif image_type == "dem":
                 # (image type, folder) of every file one DEM group produces.
-                dem_outputs = ([("dem", self.thumb_dir(pz_name, "dem"))] if keep_dem else []) + [
-                    (prod, self.thumb_dir(pz_name, prod)) for prod in terrain_products
-                ]
+                dem_outputs = (
+                    [("dem", self.thumb_dir(pz_name, "dem"))] if keep_dem else []
+                ) + [(prod, self.thumb_dir(pz_name, prod)) for prod in terrain_products]
                 for t, folder in dem_outputs:
                     folder.mkdir(parents=True, exist_ok=True)
                     self.pair_dir(pz_name, t).mkdir(parents=True, exist_ok=True)
@@ -3835,7 +4301,9 @@ class Session:
                 if not pz_dem_dir.exists():
                     pz_dem_dir.mkdir(parents=True)
 
-            selection = georasters_map[georasters_map["geometry"].intersects(pz["geometry"])]
+            selection = georasters_map[
+                georasters_map["geometry"].intersects(pz["geometry"])
+            ]
             logger.info(f"Intersecting rasters: {len(selection)}")
             if len(selection) == 0:
                 written[pz["pz_name"]] = []
@@ -3868,28 +4336,44 @@ class Session:
 
                     if image_type == "opt":
                         thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}{res_tag}.tif"
-                        outputs = [(IMAGE_TYPE_OPTICAL, pathlib.Path(pz_opticals, thumb_name))]
+                        outputs = [
+                            (IMAGE_TYPE_OPTICAL, pathlib.Path(pz_opticals, thumb_name))
+                        ]
                     elif image_type == "dem":
                         # Same <pz>_<date>_<sensor> name in every product folder:
                         # the folder carries the type.
                         thumb_name = f"{pz['pz_name']}_{acq_date}_{sensor}{res_tag}.tif"
-                        outputs = [(t, pathlib.Path(folder, thumb_name)) for t, folder in dem_outputs]
+                        outputs = [
+                            (t, pathlib.Path(folder, thumb_name))
+                            for t, folder in dem_outputs
+                        ]
                     else:  # reference_dem
                         thumb_name = f"{pz['pz_name']}_dem.tif"
-                        outputs = [("reference_dem", pathlib.Path(pz_dem_dir, thumb_name))]
+                        outputs = [
+                            ("reference_dem", pathlib.Path(pz_dem_dir, thumb_name))
+                        ]
 
                     thumb_name_text.plain = thumb_name
                     live.refresh()
 
                     # skip_existing is judged per output file: an existing DEM
                     # whose slope is missing only computes the slope.
-                    todo = [(t, path) for t, path in outputs
-                            if not (skip_existing and path.exists())]
+                    todo = [
+                        (t, path)
+                        for t, path in outputs
+                        if not (skip_existing and path.exists())
+                    ]
                     for t, path in outputs:
                         if (t, path) not in todo:
                             pz_written.append(path)
                     if not todo:
-                        _summary_rows.append({"name": thumb_name, "sensor": sensor, "status": "↷ skipped"})
+                        _summary_rows.append(
+                            {
+                                "name": thumb_name,
+                                "sensor": sensor,
+                                "status": "↷ skipped",
+                            }
+                        )
                         progress.advance(task)
                         live.refresh()
                         continue
@@ -3919,7 +4403,13 @@ class Session:
 
                     if len(fully) == 0:
                         logger.warning(f"No usable data for {thumb_name}")
-                        _summary_rows.append({"name": thumb_name, "sensor": sensor, "status": "✗ no data"})
+                        _summary_rows.append(
+                            {
+                                "name": thumb_name,
+                                "sensor": sensor,
+                                "status": "✗ no data",
+                            }
+                        )
                         progress.advance(task)
                         live.refresh()
                         continue
@@ -3935,11 +4425,18 @@ class Session:
 
                     if image_type == "dem":
                         pz_written.extend(
-                            self._write_dem_products(thumb, todo, terrain_params, mask=pz_mask)
+                            self._write_dem_products(
+                                thumb, todo, terrain_params, mask=pz_mask
+                            )
                         )
                         done = ", ".join(t for t, _ in todo)
-                        _summary_rows.append({"name": thumb_name, "sensor": sensor,
-                                              "status": f"✓ {done}"})
+                        _summary_rows.append(
+                            {
+                                "name": thumb_name,
+                                "sensor": sensor,
+                                "status": f"✓ {done}",
+                            }
+                        )
                     else:
                         thumb_path = todo[0][1]
                         if pz_mask is not None:
@@ -3947,12 +4444,18 @@ class Session:
                             data = np.ma.getdata(thumb.data).copy()
                             data[..., pz_mask] = 0
                             thumb = gu.Raster.from_array(
-                                np.ma.masked_array(data, mask=np.ma.getmaskarray(thumb.data) | pz_mask),
-                                transform=thumb.transform, crs=thumb.crs, nodata=0,
+                                np.ma.masked_array(
+                                    data, mask=np.ma.getmaskarray(thumb.data) | pz_mask
+                                ),
+                                transform=thumb.transform,
+                                crs=thumb.crs,
+                                nodata=0,
                             )
                         thumb.to_file(thumb_path, dtype=out_dtype)
                         pz_written.append(thumb_path)
-                        _summary_rows.append({"name": thumb_name, "sensor": sensor, "status": "✓ done"})
+                        _summary_rows.append(
+                            {"name": thumb_name, "sensor": sensor, "status": "✓ done"}
+                        )
                     del thumb, fully
                     progress.advance(task)
                     live.refresh()
@@ -3960,18 +4463,24 @@ class Session:
             written[pz["pz_name"]] = pz_written
 
         if print_summary and _summary_rows:
-            print_sieve_bulk_summary(_summary_rows, target_resolution, print_summary=print_summary)
+            print_sieve_bulk_summary(
+                _summary_rows, target_resolution, print_summary=print_summary
+            )
 
         return written
-    
+
     #: Nodata written into DEM-derived float thumbs (DEM and slope).  Hillshades
     #: are uint8 and use 0, like the optical thumbs.
     DEM_FLOAT_NODATA: float = -9999.0
 
     @classmethod
-    def _write_dem_products(cls, dem: gu.Raster, todo: list[tuple[str, pathlib.Path]],
-                            terrain_params: dict, mask: "np.ndarray | None" = None
-                            ) -> list[pathlib.Path]:
+    def _write_dem_products(
+        cls,
+        dem: gu.Raster,
+        todo: list[tuple[str, pathlib.Path]],
+        terrain_params: dict,
+        mask: "np.ndarray | None" = None,
+    ) -> list[pathlib.Path]:
         """Write the DEM and/or its terrain products for one sieved DEM group.
 
         *dem* is already on the pzone's canonical grid; every product is derived
@@ -4008,9 +4517,12 @@ class Session:
                 data = np.where(mask, nodata, data).astype(data.dtype)
             # Masked explicitly: handing geoutils a plain array that contains
             # the nodata value makes it warn and mask it anyway.
-            out = gu.Raster.from_array(np.ma.masked_equal(data, nodata),
-                                       transform=dem.transform, crs=dem.crs,
-                                       nodata=nodata)
+            out = gu.Raster.from_array(
+                np.ma.masked_equal(data, nodata),
+                transform=dem.transform,
+                crs=dem.crs,
+                nodata=nodata,
+            )
             path.parent.mkdir(parents=True, exist_ok=True)
             out.to_file(path)
             written.append(path)
@@ -4095,13 +4607,19 @@ class Session:
             stem = corrparams_figure_stem(view, pz_name=pz_for_stem, **assumptions)
 
         paths = save_corrparams_figure(
-            frame, out_dir, view=view, formats=formats, stem=stem, title=title,
-            dpi=dpi, figsize=figsize, plotlyjs=plotlyjs, view_kwargs=view_kwargs,
+            frame,
+            out_dir,
+            view=view,
+            formats=formats,
+            stem=stem,
+            title=title,
+            dpi=dpi,
+            figsize=figsize,
+            plotlyjs=plotlyjs,
+            view_kwargs=view_kwargs,
             overwrite=overwrite,
         )
-        logger.success(
-            f"Saved {view} figure to {out_dir} ({', '.join(paths)})."
-        )
+        logger.success(f"Saved {view} figure to {out_dir} ({', '.join(paths)}).")
         return paths
 
     def _corrparams_pair_facts(
@@ -4139,24 +4657,29 @@ class Session:
         if pz_name:
             overview = overview[overview["pa_pz_name"] == pz_name]
         if image_type is not None:
-            overview = overview[type_column(overview, "pa_type") == normalise_image_type(image_type)]
+            overview = overview[
+                type_column(overview, "pa_type") == normalise_image_type(image_type)
+            ]
 
         resolutions = self._thumb_resolution_lookup()
 
         facts: list[dict] = []
         for _, row in overview.iterrows():
             pz = row["pa_pz_name"]
-            left_res = self._resolution_for(resolutions, pz, row["pa_left_date"],
-                                            row["pa_left_sensor"])
-            right_res = self._resolution_for(resolutions, pz, row["pa_right_date"],
-                                             row["pa_right_sensor"])
+            left_res = self._resolution_for(
+                resolutions, pz, row["pa_left_date"], row["pa_left_sensor"]
+            )
+            right_res = self._resolution_for(
+                resolutions, pz, row["pa_right_date"], row["pa_right_sensor"]
+            )
             # pa_path is built as ".../image_correlation/{pa_key}", so the
             # basename IS the key by construction.  Re-formatting it from the
             # thumb components would be a second source of truth that
             # drifts the moment Pair's key format changes.
             pa_key = pathlib.Path(str(row["pa_path"])).name
             if (
-                np.isfinite(left_res) and np.isfinite(right_res)
+                np.isfinite(left_res)
+                and np.isfinite(right_res)
                 and abs(left_res - right_res) > 0.01 * max(left_res, right_res)
             ):
                 # ASP reports disparity in LEFT-image pixels, so the left GSD is
@@ -4348,14 +4871,27 @@ class Session:
         facts = self._corrparams_pair_facts(criterias, pz_name, image_type)
 
         initial = {
-            "velocity_m_yr": 1.0, "footprint_m": 60.0, "c_px": 0.15, "k": 3.0,
-            "coreg_px": 2.0, "margin_px": 2.0, "flow_azimuth_deg": None,
-            "strain_rate_per_yr": None, "corr_algorithm": "asp_bm",
-            "subpixel_mode": 2, "tau_days": None, "dt_bin_ratio": 3.0,
-            "explicit_search": True, "explicit_search_above_days": 365,
-            "uniform_kernel": False, "uniform_kernel_px": 21,
-            "uniform_search": False, "uniform_search_box": "20",
-            "sensor_filter": "", "max_dt_days": None, "min_dt_days": None,
+            "velocity_m_yr": 1.0,
+            "footprint_m": 60.0,
+            "c_px": 0.15,
+            "k": 3.0,
+            "coreg_px": 2.0,
+            "margin_px": 2.0,
+            "flow_azimuth_deg": None,
+            "strain_rate_per_yr": None,
+            "corr_algorithm": "asp_bm",
+            "subpixel_mode": 2,
+            "tau_days": None,
+            "dt_bin_ratio": 3.0,
+            "explicit_search": True,
+            "explicit_search_above_days": 365,
+            "uniform_kernel": False,
+            "uniform_kernel_px": 21,
+            "uniform_search": False,
+            "uniform_search_box": "20",
+            "sensor_filter": "",
+            "max_dt_days": None,
+            "min_dt_days": None,
             "color_by": "group",
         }
         initial.update(defaults)
@@ -4370,7 +4906,8 @@ class Session:
             if sfilter:
                 needle = str(sfilter).lower()
                 rows = [
-                    f for f in rows
+                    f
+                    for f in rows
                     if needle in str(f["sensor_i"]).lower()
                     or needle in str(f["sensor_j"]).lower()
                 ]
@@ -4417,8 +4954,9 @@ class Session:
             groups = _group_params(ideal, assumptions, uniform or {})
             return _derive(rows, groups, **assumptions), groups
 
-        def _group_params(frame: pd.DataFrame, assumptions: dict,
-                          uniform: dict) -> dict:
+        def _group_params(
+            frame: pd.DataFrame, assumptions: dict, uniform: dict
+        ) -> dict:
             """One ASP parameter set per group, from the per-pair derivation.
 
             Uniform overrides replace the derived value here rather than inside
@@ -4430,12 +4968,17 @@ class Session:
                 return {}
 
             fixed_kernel = (
-                to_odd(int(uniform.get("uniform_kernel_px", 21)),
-                       minimum=TEXTURE_FLOOR_PX)
-                if uniform.get("uniform_kernel") else None
+                to_odd(
+                    int(uniform.get("uniform_kernel_px", 21)), minimum=TEXTURE_FLOOR_PX
+                )
+                if uniform.get("uniform_kernel")
+                else None
             )
-            fixed_box = uniform.get("_parsed_search_box") if uniform.get(
-                "uniform_search") else None
+            fixed_box = (
+                uniform.get("_parsed_search_box")
+                if uniform.get("uniform_search")
+                else None
+            )
 
             def _kernel_for(row) -> int:
                 return fixed_kernel if fixed_kernel is not None else int(row.kernel_px)
@@ -4475,10 +5018,12 @@ class Session:
             would render differently."""
             if view_key == "design_map":
                 return {
-                    "k": assumptions["k"], "c_px": assumptions["c_px"],
+                    "k": assumptions["k"],
+                    "c_px": assumptions["c_px"],
                     "coreg_px": assumptions["coreg_px"],
                     "margin_px": assumptions["margin_px"],
-                    "tau_days": assumptions["tau_days"], "color_by": color_by,
+                    "tau_days": assumptions["tau_days"],
+                    "color_by": color_by,
                 }
             if view_key == "kernel_search":
                 return {"strain_rate_per_yr": assumptions["strain_rate_per_yr"]}
@@ -4507,12 +5052,20 @@ class Session:
             out = {key: source[key] for key in self._CORR_UNIFORM_KEYS}
             out["_parsed_search_box"] = (
                 parse_search_box(source["uniform_search_box"])
-                if source["uniform_search"] else None
+                if source["uniform_search"]
+                else None
             )
             return out
 
-        def _stash_params(frame: pd.DataFrame, groups: dict, assumptions: dict,
-                          sfilter, max_dt, min_dt, uniform: dict | None = None) -> dict:
+        def _stash_params(
+            frame: pd.DataFrame,
+            groups: dict,
+            assumptions: dict,
+            sfilter,
+            max_dt,
+            min_dt,
+            uniform: dict | None = None,
+        ) -> dict:
             """Write the stash and the plan. Returns the plan document.
 
             NOTE: ``_last_corr_params`` carries exactly ``_CORR_PARAM_KEYS`` —
@@ -4527,25 +5080,30 @@ class Session:
             )
             from geomulticorr.utils._corrparams_frame import relevant_corr_keys
 
-            edges, _labels = geometric_dt_bins(
-                frame["dt_days"].tolist(), ratio=assumptions["dt_bin_ratio"]
-            ) if len(frame) else ([], [])
+            edges, _labels = (
+                geometric_dt_bins(
+                    frame["dt_days"].tolist(), ratio=assumptions["dt_bin_ratio"]
+                )
+                if len(frame)
+                else ([], [])
+            )
 
             # Only claim a pzone when the frame really holds exactly one, the
             # same test save_correlation_figure applies.  Taking .iloc[0] filed
             # a multi-pzone plan under whichever pzone happened to sort first,
             # and made the "no single pzone" guard in _maybe_write_plan
             # unreachable for any non-empty frame.
-            distinct_pz = (
-                [p for p in frame["pz"].unique() if p] if len(frame) else []
-            )
+            distinct_pz = [p for p in frame["pz"].unique() if p] if len(frame) else []
             # The uniform flags belong in the trace: a plan that recorded only
             # the resolved numbers would not say WHY every group shares them.
             recorded = dict(assumptions)
-            recorded.update({
-                key: value for key, value in (uniform or {}).items()
-                if not key.startswith("_")
-            })
+            recorded.update(
+                {
+                    key: value
+                    for key, value in (uniform or {}).items()
+                    if not key.startswith("_")
+                }
+            )
             plan = build_correlation_plan(
                 name=plan_name,
                 pzone=pz_name or (distinct_pz[0] if len(distinct_pz) == 1 else ""),
@@ -4553,10 +5111,12 @@ class Session:
                 groups=groups,
                 pairs=[
                     {
-                        "pa_key": row.pa_key, "pz": row.pz,
+                        "pa_key": row.pa_key,
+                        "pz": row.pz,
                         "dt_days": int(row.dt_days),
                         "resolution_m": float(row.resolution_m),
-                        "sensor_i": row.sensor_i, "sensor_j": row.sensor_j,
+                        "sensor_i": row.sensor_i,
+                        "sensor_j": row.sensor_j,
                         "group": row.group,
                     }
                     for row in frame.itertuples()
@@ -4576,15 +5136,17 @@ class Session:
 
             self._last_corr_assumptions = dict(recorded)
             self._last_corr_filters = {
-                "sensor_filter": sfilter, "max_dt_days": max_dt,
+                "sensor_filter": sfilter,
+                "max_dt_days": max_dt,
                 "min_dt_days": min_dt,
             }
             self._last_corr_plan = plan
             self._last_corr_params = {"plan": plan, "params_by_pair": None}
             return plan
 
-        def _search_box(frame: pd.DataFrame, group: str,
-                        assumptions: dict) -> tuple[int, int, int, int]:
+        def _search_box(
+            frame: pd.DataFrame, group: str, assumptions: dict
+        ) -> tuple[int, int, int, int]:
             """The group's search box: sized for its widest-reaching pair.
 
             A box sized for the median pair in the bin would rail on the longest
@@ -4612,7 +5174,8 @@ class Session:
                 return None
             worst = explicit.loc[explicit["dt_days"].idxmax()]
             return required_search_px(
-                float(worst["velocity_m_yr"]), float(worst["dt_days"]),
+                float(worst["velocity_m_yr"]),
+                float(worst["dt_days"]),
                 float(worst["resolution_m"]),
                 coreg_px=assumptions["coreg_px"],
                 margin_px=assumptions["margin_px"],
@@ -4630,7 +5193,9 @@ class Session:
 
             target_pz = plan.get("pzone") or ""
             if not target_pz:
-                logger.info("No single pzone in the frame — correlation plan not written.")
+                logger.info(
+                    "No single pzone in the frame — correlation plan not written."
+                )
                 return
             try:
                 directory = self.pz_dir(target_pz, PZ_KIND_IMAGE_CORRELATION)
@@ -4644,12 +5209,20 @@ class Session:
             assumptions = _assumptions_from(initial)
             uniform = _uniform_from(initial)
             frame, groups = _build_frame(
-                initial["sensor_filter"], initial["max_dt_days"],
-                initial["min_dt_days"], uniform=uniform, **assumptions,
+                initial["sensor_filter"],
+                initial["max_dt_days"],
+                initial["min_dt_days"],
+                uniform=uniform,
+                **assumptions,
             )
             plan = _stash_params(
-                frame, groups, assumptions, initial["sensor_filter"],
-                initial["max_dt_days"], initial["min_dt_days"], uniform,
+                frame,
+                groups,
+                assumptions,
+                initial["sensor_filter"],
+                initial["max_dt_days"],
+                initial["min_dt_days"],
+                uniform,
             )
             _maybe_write_plan(plan)
 
@@ -4658,11 +5231,17 @@ class Session:
             fig = corr_plotly.VIEW_BUILDERS[view](frame, title=title, **view_kwargs)
             if savefig and len(frame):
                 self.save_correlation_figure(
-                    view=view, frame=frame, formats=formats, title=title,
+                    view=view,
+                    frame=frame,
+                    formats=formats,
+                    title=title,
                     **view_kwargs,
                 )
-            logger.info(format_corrparams_summary(
-                corrparams_stats(frame, k=assumptions["k"]), html=False))
+            logger.info(
+                format_corrparams_summary(
+                    corrparams_stats(frame, k=assumptions["k"]), html=False
+                )
+            )
             return frame, fig
 
         # ── widgets (imported only past the headless return) ──────────────── #
@@ -4674,114 +5253,169 @@ class Session:
 
         c_view = widgets.Dropdown(
             options=[(label, key) for key, label in corr_plotly.VIEW_LABELS.items()],
-            value=view, description="View:",
+            value=view,
+            description="View:",
             style={"description_width": "initial"},
         )
         c_velocity = widgets.FloatText(
-            value=initial["velocity_m_yr"], description="velocity (m/yr):",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="200px"),
+            value=initial["velocity_m_yr"],
+            description="velocity (m/yr):",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="200px"),
         )
         c_footprint = widgets.FloatText(
-            value=initial["footprint_m"], description="template L (m):",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="200px"),
+            value=initial["footprint_m"],
+            description="template L (m):",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="200px"),
         )
         c_c = widgets.FloatText(
-            value=initial["c_px"], step=0.01, description="precision c (px):",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="200px"),
+            value=initial["c_px"],
+            step=0.01,
+            description="precision c (px):",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="200px"),
         )
         c_k = widgets.FloatSlider(
-            value=initial["k"], min=1.0, max=5.0, step=0.5, description="k:",
-            style={"description_width": "initial"}, continuous_update=False,
+            value=initial["k"],
+            min=1.0,
+            max=5.0,
+            step=0.5,
+            description="k:",
+            style={"description_width": "initial"},
+            continuous_update=False,
         )
         c_coreg = widgets.FloatText(
-            value=initial["coreg_px"], description="coreg (px):",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="170px"),
+            value=initial["coreg_px"],
+            description="coreg (px):",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="170px"),
         )
         c_margin = widgets.FloatText(
-            value=initial["margin_px"], description="margin (px):",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="170px"),
+            value=initial["margin_px"],
+            description="margin (px):",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="170px"),
         )
         c_azimuth = widgets.FloatText(
-            value=initial["flow_azimuth_deg"] if initial["flow_azimuth_deg"] is not None else -1.0,
+            value=(
+                initial["flow_azimuth_deg"]
+                if initial["flow_azimuth_deg"] is not None
+                else -1.0
+            ),
             description="flow az (° from N, <0 = off):",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="290px"),
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="290px"),
         )
         c_strain = widgets.FloatText(
-            value=initial["strain_rate_per_yr"] or 0.0, step=0.005,
+            value=initial["strain_rate_per_yr"] or 0.0,
+            step=0.005,
             description="strain (1/yr, 0 = off):",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="260px"),
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="260px"),
         )
         c_tau = widgets.FloatText(
-            value=initial["tau_days"] or 0.0, description="τ (days, 0 = off):",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="230px"),
+            value=initial["tau_days"] or 0.0,
+            description="τ (days, 0 = off):",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="230px"),
         )
         c_explicit = widgets.Checkbox(
             value=bool(initial["explicit_search"]),
-            description="explicit --corr-search", indent=False,
+            description="explicit --corr-search",
+            indent=False,
             layout=widgets.Layout(width="220px"),
         )
         c_explicit_above = widgets.Text(
             value=format_dt_days(initial["explicit_search_above_days"]),
-            description="above Δt:", placeholder="e.g. 1Y (empty = all pairs)",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="250px"),
+            description="above Δt:",
+            placeholder="e.g. 1Y (empty = all pairs)",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="250px"),
         )
         c_uniform_kernel = widgets.Checkbox(
             value=bool(initial["uniform_kernel"]),
-            description="uniform kernel", indent=False,
+            description="uniform kernel",
+            indent=False,
             layout=widgets.Layout(width="170px"),
         )
         c_uniform_kernel_px = widgets.IntText(
-            value=int(initial["uniform_kernel_px"]), description="px:",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="120px"),
+            value=int(initial["uniform_kernel_px"]),
+            description="px:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="120px"),
         )
         c_uniform_search = widgets.Checkbox(
             value=bool(initial["uniform_search"]),
-            description="uniform search box", indent=False,
+            description="uniform search box",
+            indent=False,
             layout=widgets.Layout(width="200px"),
         )
         c_uniform_search_box = widgets.Text(
             value=str(initial["uniform_search_box"]),
-            description="box:", placeholder="20  or  -80 -2 20 2",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="230px"),
+            description="box:",
+            placeholder="20  or  -80 -2 20 2",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="230px"),
         )
         c_ratio = widgets.FloatSlider(
-            value=initial["dt_bin_ratio"], min=1.5, max=10.0, step=0.5,
-            description="Δt bin ratio:", style={"description_width": "initial"},
+            value=initial["dt_bin_ratio"],
+            min=1.5,
+            max=10.0,
+            step=0.5,
+            description="Δt bin ratio:",
+            style={"description_width": "initial"},
             continuous_update=False,
         )
         c_algorithm = widgets.Dropdown(
             options=["asp_bm", "asp_sgm", "asp_mgm", "asp_final_mgm"],
-            value=initial["corr_algorithm"], description="algorithm:",
+            value=initial["corr_algorithm"],
+            description="algorithm:",
             style={"description_width": "initial"},
         )
         c_subpixel = widgets.Dropdown(
-            options=[("2 — Bayes EM (no pixel-locking)", 2), ("1 — parabola", 1),
-                     ("3 — affine", 3), ("0 — none", 0)],
-            value=initial["subpixel_mode"], description="subpixel:",
+            options=[
+                ("2 — Bayes EM (no pixel-locking)", 2),
+                ("1 — parabola", 1),
+                ("3 — affine", 3),
+                ("0 — none", 0),
+            ],
+            value=initial["subpixel_mode"],
+            description="subpixel:",
             style={"description_width": "initial"},
         )
         c_sensor = widgets.Text(
-            value=initial["sensor_filter"] or "", description="sensor:",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="200px"),
+            value=initial["sensor_filter"] or "",
+            description="sensor:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="200px"),
         )
         # Text, not IntText: "1Y"/"6M"/"30D" as well as a bare number of days.
         c_maxdt = widgets.Text(
             value=format_dt_days(initial["max_dt_days"]),
-            description="max Δt:", placeholder="e.g. 1Y, 6M, 200 (empty = off)",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="260px"),
+            description="max Δt:",
+            placeholder="e.g. 1Y, 6M, 200 (empty = off)",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="260px"),
         )
         c_mindt = widgets.Text(
             value=format_dt_days(initial["min_dt_days"]),
-            description="min Δt:", placeholder="e.g. 6M, 60 (empty = off)",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="260px"),
+            description="min Δt:",
+            placeholder="e.g. 6M, 60 (empty = off)",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="260px"),
         )
         c_colorby = widgets.Dropdown(
-            options=["group", "sensor", "none"], value=initial["color_by"],
-            description="colour by:", style={"description_width": "initial"},
+            options=["group", "sensor", "none"],
+            value=initial["color_by"],
+            description="colour by:",
+            style={"description_width": "initial"},
         )
         c_formats = widgets.SelectMultiple(
-            options=list(FIGURE_FORMATS), value=("html", "png"),
-            rows=len(FIGURE_FORMATS), description="formats:",
+            options=list(FIGURE_FORMATS),
+            value=("html", "png"),
+            rows=len(FIGURE_FORMATS),
+            description="formats:",
             style={"description_width": "initial"},
         )
         b_save = widgets.Button(description="Save figure", icon="save")
@@ -4891,14 +5525,20 @@ class Session:
 
         def _compute() -> tuple[pd.DataFrame, dict]:
             sfilter, max_dt, min_dt = _read_filters()
-            return _build_frame(sfilter, max_dt, min_dt,
-                                uniform=_read_uniform(), **_read_assumptions())
+            return _build_frame(
+                sfilter, max_dt, min_dt, uniform=_read_uniform(), **_read_assumptions()
+            )
 
         def _stash() -> dict:
             sfilter, max_dt, min_dt = _read_filters()
             return _stash_params(
-                state["frame"], state["groups"], _read_assumptions(),
-                sfilter, max_dt, min_dt, _read_uniform(),
+                state["frame"],
+                state["groups"],
+                _read_assumptions(),
+                sfilter,
+                max_dt,
+                min_dt,
+                _read_uniform(),
             )
 
         def _view_kwargs() -> dict:
@@ -4949,9 +5589,11 @@ class Session:
             status.value = "<i>saving…</i>"
             try:
                 paths = self.save_correlation_figure(
-                    view=c_view.value, frame=state["frame"],
+                    view=c_view.value,
+                    frame=state["frame"],
                     formats=tuple(c_formats.value) or ("html",),
-                    title=_fig_title(), **_view_kwargs(),
+                    title=_fig_title(),
+                    **_view_kwargs(),
                 )
                 names = " ".join(f"<code>{p.name}</code>" for p in paths.values())
                 folder = next(iter(paths.values())).parent
@@ -4981,12 +5623,29 @@ class Session:
             finally:
                 b_plan.disabled = False
 
-        for widget in (c_velocity, c_footprint, c_c, c_k, c_coreg, c_margin,
-                       c_azimuth, c_strain, c_tau, c_ratio, c_algorithm,
-                       c_subpixel, c_sensor, c_maxdt, c_mindt,
-                       c_explicit, c_explicit_above,
-                       c_uniform_kernel, c_uniform_kernel_px,
-                       c_uniform_search, c_uniform_search_box):
+        for widget in (
+            c_velocity,
+            c_footprint,
+            c_c,
+            c_k,
+            c_coreg,
+            c_margin,
+            c_azimuth,
+            c_strain,
+            c_tau,
+            c_ratio,
+            c_algorithm,
+            c_subpixel,
+            c_sensor,
+            c_maxdt,
+            c_mindt,
+            c_explicit,
+            c_explicit_above,
+            c_uniform_kernel,
+            c_uniform_kernel_px,
+            c_uniform_search,
+            c_uniform_search_box,
+        ):
             widget.observe(_update, "value")
         for widget in (c_view, c_colorby):
             widget.observe(_redraw, "value")
@@ -4999,9 +5658,16 @@ class Session:
         row2 = widgets.HBox([c_velocity, c_footprint, c_c, c_k])
         row3 = widgets.HBox([c_coreg, c_margin, c_azimuth, c_strain, c_tau])
         row4 = widgets.HBox([c_ratio, c_sensor, c_mindt, c_maxdt])
-        row5 = widgets.HBox([c_explicit, c_explicit_above,
-                             c_uniform_kernel, c_uniform_kernel_px,
-                             c_uniform_search, c_uniform_search_box])
+        row5 = widgets.HBox(
+            [
+                c_explicit,
+                c_explicit_above,
+                c_uniform_kernel,
+                c_uniform_kernel_px,
+                c_uniform_search,
+                c_uniform_search_box,
+            ]
+        )
         row6 = widgets.HBox([c_formats, widgets.VBox([b_save, b_plan])])
         return widgets.VBox(
             [row1, row2, row3, row4, row5, plot_out, summary, group_out, status, row6]
@@ -5034,7 +5700,8 @@ class Session:
         from geomulticorr.correlation._correlation_plan import params_differ_from_file
 
         return params_differ_from_file(
-            params_file, effective,
+            params_file,
+            effective,
             save_disparity_difference=save_disparity_difference,
         )
 
@@ -5048,7 +5715,7 @@ class Session:
         cores: int = 8,
         walltime: str = "12:00:00",
         besteffort: bool = False,
-        conda_env: str = "gmc_env", # TO delete (deprecated, use cluster-specific envs instead)
+        conda_env: str = "gmc_env",  # TO delete (deprecated, use cluster-specific envs instead)
         processes: int = 1,
         threads_multiprocess: int = 8,
         threads_singleprocess: int = 8,
@@ -5213,8 +5880,14 @@ class Session:
         ) as live:
             for pair in pairs:
                 pair_name.plain = pair.pa_key
-                rec = {"pair": pair.pa_key, "directory": "—", "symlink": "—",
-                       "group": "—", "params": "—", "script": "—"}
+                rec = {
+                    "pair": pair.pa_key,
+                    "directory": "—",
+                    "symlink": "—",
+                    "group": "—",
+                    "params": "—",
+                    "script": "—",
+                }
                 status = pair.get_status()
 
                 # Resolve this pair's effective parameters up front: the reuse
@@ -5222,8 +5895,11 @@ class Session:
                 # already on disk.
                 group = pair_group.get(pair.pa_key, "")
                 effective, source = resolve_pair_params(
-                    pair.pa_key, group, scalar_params,
-                    groups=plan_groups, overrides=plan_overrides,
+                    pair.pa_key,
+                    group,
+                    scalar_params,
+                    groups=plan_groups,
+                    overrides=plan_overrides,
                 )
                 rec["group"] = group if source != "scalar" else "scalar"
                 if source == "override":
@@ -5260,7 +5936,9 @@ class Session:
                 params_file = pair.pa_path / f"{pair.pa_key}_CorrParameters.txt"
                 if bash_path.exists() and not overwrite_scripts:
                     changed = self._corr_params_changed(
-                        params_file, asp, effective,
+                        params_file,
+                        asp,
+                        effective,
                         save_disparity_difference=save_disparity_difference,
                     ) or input_params_differ_from_file(params_file, input_params)
                     if not changed:
@@ -5379,12 +6057,13 @@ class Session:
 
         if clean:
             from geomulticorr.correlation import ASP
+
             asp = ASP(session=self, asp_bin_dir=asp_bin_dir)
         else:
             asp = None
 
         # Resolve bash script paths and warn for any that are missing.
-        ready: list[tuple] = []   # (pair, script_path)
+        ready: list[tuple] = []  # (pair, script_path)
         for pair in pairs:
             script = pair.pa_path / f"{pair.pa_key}_CorrelationJob.sh"
             if script.exists():
@@ -5450,12 +6129,19 @@ class Session:
                 return_codes.append(result.returncode)
 
                 if result.returncode != 0:
-                    summary_rows.append({"pair": pair.pa_key, "status": f"[red]failed (rc={result.returncode})[/red]"})
+                    summary_rows.append(
+                        {
+                            "pair": pair.pa_key,
+                            "status": f"[red]failed (rc={result.returncode})[/red]",
+                        }
+                    )
                     logger.error(f"Failed [{pair.pa_key}]: {result.stderr.strip()}")
                 else:
                     if clean and not use_cluster:
                         asp.clean_pair_directory(pair)
-                    summary_rows.append({"pair": pair.pa_key, "status": "[green]launched[/green]"})
+                    summary_rows.append(
+                        {"pair": pair.pa_key, "status": "[green]launched[/green]"}
+                    )
 
                 progress.advance(task)
                 live.refresh()
@@ -5533,12 +6219,18 @@ class Session:
                     removed = asp.clean_pair_directory(pair)
                     n_deleted = len(removed)
 
-                summary_rows.append({
-                    "pair": pair.pa_key,
-                    "correlated": "[green]yes[/green]" if status == "complete" else f"[red]no ({status})[/red]",
-                    "deleted": str(n_deleted) if n_deleted else "—",
-                    "db_status": status,
-                })
+                summary_rows.append(
+                    {
+                        "pair": pair.pa_key,
+                        "correlated": (
+                            "[green]yes[/green]"
+                            if status == "complete"
+                            else f"[red]no ({status})[/red]"
+                        ),
+                        "deleted": str(n_deleted) if n_deleted else "—",
+                        "db_status": status,
+                    }
+                )
 
                 progress.advance(task)
                 live.refresh()
@@ -5616,12 +6308,16 @@ class Session:
 
                 deleted_all.extend(deleted)
                 status_after = pair.get_status() if not dry_run else "dry-run"
-                summary_rows.append({
-                    "pair": pair.pa_key,
-                    "status_before": status_before,
-                    "deleted": str(len(deleted)),
-                    "status_after": f"[dim]{status_after}[/dim]" if dry_run else status_after,
-                })
+                summary_rows.append(
+                    {
+                        "pair": pair.pa_key,
+                        "status_before": status_before,
+                        "deleted": str(len(deleted)),
+                        "status_after": (
+                            f"[dim]{status_after}[/dim]" if dry_run else status_after
+                        ),
+                    }
+                )
                 progress.advance(task)
                 live.refresh()
 
@@ -5698,7 +6394,9 @@ class Session:
                 pz_vec = gu.Vector(
                     gpd.GeoDataFrame([row], crs=pzones_df.crs, geometry="geometry")
                 )
-                cb, cs = self._compute_canonical_grid(pz_vec, self.epsg, target_resolution)
+                cb, cs = self._compute_canonical_grid(
+                    pz_vec, self.epsg, target_resolution
+                )
                 pzone_canonical[row["pz_name"]] = (cb, cs)
 
         summary_rows: list[dict] = []
@@ -5707,7 +6405,9 @@ class Session:
         # pa_path is <pzone>/image_correlation/<pa_key>/, so the parent differs
         # per pzone — report the pattern, not one pair's path.
         stats_dirs = sorted({str(p.pa_path.parent) for p in pairs})
-        where = stats_dirs[0] if len(stats_dirs) == 1 else f"{len(stats_dirs)} pzone dir(s)"
+        where = (
+            stats_dirs[0] if len(stats_dirs) == 1 else f"{len(stats_dirs)} pzone dir(s)"
+        )
 
         logger.info(f"Extracting raw displacements — {len(pairs)} pair(s)")
         logger.file(f"Extracting EW | NS | CC files → {where}/<pa_key>/")
@@ -5715,14 +6415,19 @@ class Session:
         if save_plot:
             logger.save("Saving control plot: <pa_key>_raw_disp.jpg (one per pair)")
         if target_resolution is not None:
-            grid = ("explicit canonical grid" if canonical_bounds is not None
-                    else "per-pzone canonical grid")
+            grid = (
+                "explicit canonical grid"
+                if canonical_bounds is not None
+                else "per-pzone canonical grid"
+            )
             logger.settings(
                 f"Resampling EW | NS | CC to {target_resolution} m "
                 f"({resampling}, {grid})"
             )
         if not verbose:
-            logger.settings("Per-pair messages suppressed — pass verbose=True to show them")
+            logger.settings(
+                "Per-pair messages suppressed — pass verbose=True to show them"
+            )
 
         with BatchProgress(
             len(pairs),
@@ -5732,23 +6437,36 @@ class Session:
             for pair in bar.track(pairs, key=lambda p: p.pa_key):
                 rec = {
                     "pair": pair.pa_key,
-                    "ew": "—", "ns": "—", "cc": "—",
-                    "plot": "—", "stats": "—",
+                    "ew": "—",
+                    "ns": "—",
+                    "cc": "—",
+                    "plot": "—",
+                    "stats": "—",
                 }
 
                 if not pair.pa_disparity_f_path.exists():
-                    logger.warning(f"Skipping '{pair.pa_key}' — disparity raster not found")
+                    logger.warning(
+                        f"Skipping '{pair.pa_key}' — disparity raster not found"
+                    )
                     rec["ew"] = rec["ns"] = rec["cc"] = "[red]no disparity[/red]"
                     results[pair.pa_key] = None
                     summary_rows.append(rec)
                     continue  # bar.track() advances on continue
 
-                if not overwrite and pair.pa_ew_path.exists() and pair.pa_ns_path.exists():
+                if (
+                    not overwrite
+                    and pair.pa_ew_path.exists()
+                    and pair.pa_ns_path.exists()
+                ):
                     rec["ew"] = "[dim]exists[/dim]"
                     rec["ns"] = "[dim]exists[/dim]"
                     rec["cc"] = "[dim]exists[/dim]" if pair.pa_cc_path.exists() else "—"
-                    rec["plot"] = "[dim]exists[/dim]" if pair.pa_plot_raw_path.exists() else "—"
-                    rec["stats"] = "[dim]exists[/dim]" if pair.pa_stats_path.exists() else "—"
+                    rec["plot"] = (
+                        "[dim]exists[/dim]" if pair.pa_plot_raw_path.exists() else "—"
+                    )
+                    rec["stats"] = (
+                        "[dim]exists[/dim]" if pair.pa_stats_path.exists() else "—"
+                    )
                     results[pair.pa_key] = None
                     summary_rows.append(rec)
                     continue  # bar.track() advances on continue
@@ -5757,7 +6475,9 @@ class Session:
                 if canonical_bounds is not None and canonical_grid_size is not None:
                     pair_cb, pair_cs = canonical_bounds, canonical_grid_size
                 else:
-                    pair_cb, pair_cs = pzone_canonical.get(pair.pa_pz_name, (None, None))
+                    pair_cb, pair_cs = pzone_canonical.get(
+                        pair.pa_pz_name, (None, None)
+                    )
 
                 try:
                     stats = pair.extract_raw_displacements(
@@ -5768,11 +6488,31 @@ class Session:
                         canonical_grid_size=pair_cs,
                     )
                     results[pair.pa_key] = stats
-                    rec["ew"] = "[green]ok[/green]" if pair.pa_ew_path.exists() else "[red]missing[/red]"
-                    rec["ns"] = "[green]ok[/green]" if pair.pa_ns_path.exists() else "[red]missing[/red]"
-                    rec["cc"] = "[green]ok[/green]" if pair.pa_cc_path.exists() else "[red]missing[/red]"
-                    rec["plot"] = "[green]ok[/green]" if pair.pa_plot_raw_path.exists() else ("—" if not save_plot else "[red]missing[/red]")
-                    rec["stats"] = "[green]ok[/green]" if pair.pa_stats_path.exists() else "[red]missing[/red]"
+                    rec["ew"] = (
+                        "[green]ok[/green]"
+                        if pair.pa_ew_path.exists()
+                        else "[red]missing[/red]"
+                    )
+                    rec["ns"] = (
+                        "[green]ok[/green]"
+                        if pair.pa_ns_path.exists()
+                        else "[red]missing[/red]"
+                    )
+                    rec["cc"] = (
+                        "[green]ok[/green]"
+                        if pair.pa_cc_path.exists()
+                        else "[red]missing[/red]"
+                    )
+                    rec["plot"] = (
+                        "[green]ok[/green]"
+                        if pair.pa_plot_raw_path.exists()
+                        else ("—" if not save_plot else "[red]missing[/red]")
+                    )
+                    rec["stats"] = (
+                        "[green]ok[/green]"
+                        if pair.pa_stats_path.exists()
+                        else "[red]missing[/red]"
+                    )
                 except Exception as exc:
                     logger.error(f"Failed for '{pair.pa_key}': {exc}")
                     results[pair.pa_key] = None
@@ -5880,7 +6620,10 @@ class Session:
         """
         import geoutils as gu
         import matplotlib.pyplot as plt
-        from geomulticorr.corrections.corrections import CorrectionPipeline, make_corrections
+        from geomulticorr.corrections.corrections import (
+            CorrectionPipeline,
+            make_corrections,
+        )
         from geomulticorr.corrections.masks import FilterPipeline, BaseMask
 
         if correction_pipeline is None and filter_pipeline is None:
@@ -5899,22 +6642,32 @@ class Session:
         results: dict = {}
 
         _RAMP_TOPO_CLASSES = {
-            "RampCorrection", "TopoCorrection",
-            "TopoRampCorrection", "SlopeRampCorrection",
+            "RampCorrection",
+            "TopoCorrection",
+            "TopoRampCorrection",
+            "SlopeRampCorrection",
         }
 
         summary_rows: list[dict] = []
 
         # One header for the whole run, in place of per-pair *and* per-step logs.
         filt_steps = (
-            [] if filter_pipeline is None
-            else (filter_pipeline.masks if isinstance(filter_pipeline, FilterPipeline)
-                  else [filter_pipeline])
+            []
+            if filter_pipeline is None
+            else (
+                filter_pipeline.masks
+                if isinstance(filter_pipeline, FilterPipeline)
+                else [filter_pipeline]
+            )
         )
         corr_steps = (
-            [] if correction_pipeline is None
-            else (correction_pipeline.steps if isinstance(correction_pipeline, CorrectionPipeline)
-                  else [correction_pipeline])
+            []
+            if correction_pipeline is None
+            else (
+                correction_pipeline.steps
+                if isinstance(correction_pipeline, CorrectionPipeline)
+                else [correction_pipeline]
+            )
         )
 
         logger.info(f"Applying corrections — {len(pairs)} pair(s)")
@@ -5965,7 +6718,9 @@ class Session:
                 }
 
                 if not pair.pa_ew_path.exists() or not pair.pa_ns_path.exists():
-                    logger.warning(f"Skipping '{pair.pa_key}' — EW/NS rasters not found")
+                    logger.warning(
+                        f"Skipping '{pair.pa_key}' — EW/NS rasters not found"
+                    )
                     rec["ew_corr"] = rec["ns_corr"] = "[red]no input[/red]"
                     results[pair.pa_key] = None
                     summary_rows.append(rec)
@@ -5977,7 +6732,9 @@ class Session:
                     pair.pa_ew_mask_path.exists() and pair.pa_ns_mask_path.exists()
                 )
                 if not overwrite and ew_corr.exists() and ns_corr.exists() and masks_ok:
-                    rec["median"] = rec["ramp_topo"] = rec["stats"] = "[dim]exists[/dim]"
+                    rec["median"] = rec["ramp_topo"] = rec["stats"] = (
+                        "[dim]exists[/dim]"
+                    )
                     rec["ew_corr"] = rec["ns_corr"] = "[dim]exists[/dim]"
                     results[pair.pa_key] = None
                     summary_rows.append(rec)
@@ -5996,10 +6753,14 @@ class Session:
                     all_steps = []
                     if filter_pipeline is not None:
                         fp = filter_pipeline
-                        all_steps += fp.masks if isinstance(fp, FilterPipeline) else [fp]
+                        all_steps += (
+                            fp.masks if isinstance(fp, FilterPipeline) else [fp]
+                        )
                     if correction_pipeline is not None:
                         cp = correction_pipeline
-                        all_steps += cp.steps if isinstance(cp, CorrectionPipeline) else [cp]
+                        all_steps += (
+                            cp.steps if isinstance(cp, CorrectionPipeline) else [cp]
+                        )
                     missing = [
                         f"{type(s).__name__} requires '{k}'"
                         for s in all_steps
@@ -6017,7 +6778,9 @@ class Session:
                     if filter_pipeline is not None:
                         x_stable = filter_pipeline.compute(x_raw, **pair_kwargs)
                         y_stable = filter_pipeline.compute(y_raw, **pair_kwargs)
-                        x_filt, y_filt = filter_pipeline.apply(x_raw, y_raw, **pair_kwargs)
+                        x_filt, y_filt = filter_pipeline.apply(
+                            x_raw, y_raw, **pair_kwargs
+                        )
                     else:
                         x_filt, y_filt = x_raw, y_raw
 
@@ -6030,8 +6793,16 @@ class Session:
                     if correction_pipeline is not None:
                         cp_x = copy.deepcopy(correction_pipeline)
                         cp_y = copy.deepcopy(correction_pipeline)
-                        steps_x = cp_x.steps if isinstance(cp_x, CorrectionPipeline) else [cp_x]
-                        steps_y = cp_y.steps if isinstance(cp_y, CorrectionPipeline) else [cp_y]
+                        steps_x = (
+                            cp_x.steps
+                            if isinstance(cp_x, CorrectionPipeline)
+                            else [cp_x]
+                        )
+                        steps_y = (
+                            cp_y.steps
+                            if isinstance(cp_y, CorrectionPipeline)
+                            else [cp_y]
+                        )
                         for idx, (step_x, step_y) in enumerate(zip(steps_x, steps_y)):
                             step_name = type(step_x).__name__
                             before_x, before_y = x_corr, y_corr
@@ -6039,23 +6810,43 @@ class Session:
                             x_corr = step_x.apply(x_corr)
                             step_y.fit(y_corr, stable_mask=y_stable, **pair_kwargs)
                             y_corr = step_y.apply(y_corr)
-                            gmc_stats.save_corrected_stats(pair, x_corr, y_corr, step_name)
+                            gmc_stats.save_corrected_stats(
+                                pair, x_corr, y_corr, step_name
+                            )
 
                             # Per-step before/after control figure (correct template
                             # per correction type; both EW/NS steps feed the panels)
                             if save_plot:
                                 try:
-                                    from geomulticorr.utils.gmc_functions import plot_correction_result
-                                    fig = plot_correction_result(
-                                        step_x, step_y, before_x, x_corr, before_y, y_corr,
-                                        fig_name=pair.pa_key,
-                                        preview_px=plot_opts["preview_px"], **pair_kwargs,
+                                    from geomulticorr.utils.gmc_functions import (
+                                        plot_correction_result,
                                     )
-                                    plot_path = pair.pa_path / f"{pair.pa_key}_{idx:02d}_{step_name}_disp.jpg"
-                                    fig.savefig(str(plot_path), dpi=plot_opts["dpi"], format="JPEG")
+
+                                    fig = plot_correction_result(
+                                        step_x,
+                                        step_y,
+                                        before_x,
+                                        x_corr,
+                                        before_y,
+                                        y_corr,
+                                        fig_name=pair.pa_key,
+                                        preview_px=plot_opts["preview_px"],
+                                        **pair_kwargs,
+                                    )
+                                    plot_path = (
+                                        pair.pa_path
+                                        / f"{pair.pa_key}_{idx:02d}_{step_name}_disp.jpg"
+                                    )
+                                    fig.savefig(
+                                        str(plot_path),
+                                        dpi=plot_opts["dpi"],
+                                        format="JPEG",
+                                    )
                                     plt.close(fig)
                                 except Exception as plot_exc:
-                                    logger.warning(f"Could not save control plot for {step_name}: {plot_exc}")
+                                    logger.warning(
+                                        f"Could not save control plot for {step_name}: {plot_exc}"
+                                    )
 
                             if step_name == "MedianCentering":
                                 rec["median"] = "[green]ok[/green]"
@@ -6066,33 +6857,60 @@ class Session:
                         # the canonical 'final_corrected_stats' section.
                         if steps_x:
                             gmc_stats.save_final_corrected_stats(
-                                pair, last_correction_name=type(steps_x[-1]).__name__)
+                                pair, last_correction_name=type(steps_x[-1]).__name__
+                            )
 
                     if ramp_topo_names:
-                        rec["ramp_topo"] = "[green]" + "+".join(ramp_topo_names) + "[/green]"
-                    rec["stats"] = "[green]ok[/green]" if pair.pa_stats_path.exists() else "[red]missing[/red]"
+                        rec["ramp_topo"] = (
+                            "[green]" + "+".join(ramp_topo_names) + "[/green]"
+                        )
+                    rec["stats"] = (
+                        "[green]ok[/green]"
+                        if pair.pa_stats_path.exists()
+                        else "[red]missing[/red]"
+                    )
 
                     # Optional corrected-map dashboard (final state + stable areas)
                     if save_plot:
                         try:
-                            from geomulticorr.utils.gmc_functions import plot_show_corrected_results
+                            from geomulticorr.utils.gmc_functions import (
+                                plot_show_corrected_results,
+                            )
+
                             fig = plot_show_corrected_results(
-                                x_corr, y_corr, pair_kwargs.get("cc"),
-                                x_stable=x_stable, y_stable=y_stable,
+                                x_corr,
+                                y_corr,
+                                pair_kwargs.get("cc"),
+                                x_stable=x_stable,
+                                y_stable=y_stable,
                                 fig_name=pair.pa_key,
                                 preview_px=plot_opts["preview_px"],
                                 hexbin_gridsize=plot_opts["hexbin_gridsize"],
                             )
-                            plot_path = pair.pa_path / f"{pair.pa_key}_corrections_disp.jpg"
-                            fig.savefig(str(plot_path), dpi=plot_opts["dpi"], format="JPEG")
+                            plot_path = (
+                                pair.pa_path / f"{pair.pa_key}_corrections_disp.jpg"
+                            )
+                            fig.savefig(
+                                str(plot_path), dpi=plot_opts["dpi"], format="JPEG"
+                            )
                             plt.close(fig)
                         except Exception as plot_exc:
-                            logger.warning(f"Could not save corrected dashboard: {plot_exc}")
+                            logger.warning(
+                                f"Could not save corrected dashboard: {plot_exc}"
+                            )
 
                     x_corr.save(str(ew_corr))
                     y_corr.save(str(ns_corr))
-                    rec["ew_corr"] = "[green]ok[/green]" if ew_corr.exists() else "[red]missing[/red]"
-                    rec["ns_corr"] = "[green]ok[/green]" if ns_corr.exists() else "[red]missing[/red]"
+                    rec["ew_corr"] = (
+                        "[green]ok[/green]"
+                        if ew_corr.exists()
+                        else "[red]missing[/red]"
+                    )
+                    rec["ns_corr"] = (
+                        "[green]ok[/green]"
+                        if ns_corr.exists()
+                        else "[red]missing[/red]"
+                    )
                     pair_result = {"ew": ew_corr, "ns": ns_corr}
 
                     # Persist the stable-ground masks the corrections were fitted
@@ -6144,10 +6962,15 @@ class Session:
         logs = []
         for pzone in self.get_pzones():
             logs.append(
-                pzone.pz_full(self.epsg, corr_algorithm, corr_kernel_size, corr_xthreshold))
+                pzone.pz_full(
+                    self.epsg, corr_algorithm, corr_kernel_size, corr_xthreshold
+                )
+            )
         return pd.DataFrame(logs)
 
-    def _search_engine_thibaut(self, layername: str, criterias: str | list[str] = "") -> gpd.GeoDataFrame:
+    def _search_engine_thibaut(
+        self, layername: str, criterias: str | list[str] = ""
+    ) -> gpd.GeoDataFrame:
         """A search engine among project layers
 
         Args:
@@ -6161,7 +6984,11 @@ class Session:
         # if there is only one criteria we store it in a list
         # if type(criterias) in (str, int):
         #     criterias = [criterias]
-        criterias = [] if criterias in ("", []) else ([criterias] if isinstance(criterias, (str, int)) else list(criterias))
+        criterias = (
+            []
+            if criterias in ("", [])
+            else ([criterias] if isinstance(criterias, (str, int)) else list(criterias))
+        )
 
         # # add an "and" statement between each criteria
         # pattern = ""
@@ -6170,7 +6997,11 @@ class Session:
         #         c = str(c)
         #     pattern += f"(?=.*{c.lower()})"
         # pattern = re.compile(pattern)
-        pattern = None if not criterias else "^" + "".join(f"(?=.*{re.escape(str(c))})" for c in criterias)
+        pattern = (
+            None
+            if not criterias
+            else "^" + "".join(f"(?=.*{re.escape(str(c))})" for c in criterias)
+        )
 
         match layername:
             case "Thumbs":
@@ -6219,7 +7050,9 @@ class Session:
         #     return df[m1 | m2]
         # raise ValueError(f"Unknown layer: {layername}")
 
-    def _search_engine(self, layername: str, criterias: str | list[str] = "") -> gpd.GeoDataFrame:
+    def _search_engine(
+        self, layername: str, criterias: str | list[str] = ""
+    ) -> gpd.GeoDataFrame:
         """
         A search engine among project layers.
 
@@ -6239,7 +7072,11 @@ class Session:
             criterias = [str(c) for c in criterias]
 
         # Build AND regex pattern for all criterias
-        pattern = None if not criterias else "".join(f"(?=.*{re.escape(c)})" for c in criterias)
+        pattern = (
+            None
+            if not criterias
+            else "".join(f"(?=.*{re.escape(c)})" for c in criterias)
+        )
 
         # Helper for case-insensitive contains
         def contains_ci(series, pat):
@@ -6275,13 +7112,18 @@ class Session:
             if not criterias:
                 return df
             # Try to match either ge_pz_name or ge_frogi_id
-            m1 = contains_ci(df.get("ge_pz_name", pd.Series("", index=df.index)), pattern)
-            m2 = contains_ci(df.get("ge_frogi_id", pd.Series("", index=df.index)).astype(str), pattern)
+            m1 = contains_ci(
+                df.get("ge_pz_name", pd.Series("", index=df.index)), pattern
+            )
+            m2 = contains_ci(
+                df.get("ge_frogi_id", pd.Series("", index=df.index)).astype(str),
+                pattern,
+            )
             return df[m1 | m2]
 
         else:
             raise ValueError(f"Unknown layer: {layername}")
-    
+
     def __repr__(self):
         return f"""
             ------------

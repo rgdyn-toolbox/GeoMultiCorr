@@ -73,6 +73,7 @@ Conventions
   intercept at 1970 in nanoseconds. ``offset`` means the bias at that first
   epoch, ``rate`` is in m/yr.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -86,8 +87,11 @@ import xarray as xr
 
 from geomulticorr._logging import logger
 from geomulticorr.inversion._run_parameters import _jsonable
-from geomulticorr.inversion._stack import (COMPONENTS, load_cumulative_stack,
-                                           write_cumulative_stack)
+from geomulticorr.inversion._stack import (
+    COMPONENTS,
+    load_cumulative_stack,
+    write_cumulative_stack,
+)
 from geomulticorr.stats.inversion_extractor import resolve_inversion_dir
 
 #: Days per year used to turn the datetime axis into decimal years.
@@ -105,7 +109,10 @@ _MODELS = ("offset+rate", "offset")
 # helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _require_same_grid(a: xr.Dataset, b: xr.Dataset, what: str = "the two series") -> None:
+
+def _require_same_grid(
+    a: xr.Dataset, b: xr.Dataset, what: str = "the two series"
+) -> None:
     """Refuse two datasets that are not on exactly one grid."""
     try:
         xr.align(a, b, join="exact", exclude={"time", "component", "pair"})
@@ -129,7 +136,9 @@ def _check_series(ds: xr.Dataset, components: Sequence[str], label: str) -> None
 
 def _years_since(time_values, t0) -> np.ndarray:
     t = pd.to_datetime(np.asarray(time_values))
-    return ((t - pd.Timestamp(t0)) / pd.Timedelta(days=_DAYS_PER_YEAR)).to_numpy(dtype="float64")
+    return ((t - pd.Timestamp(t0)) / pd.Timedelta(days=_DAYS_PER_YEAR)).to_numpy(
+        dtype="float64"
+    )
 
 
 def _dates_of(ds: xr.Dataset) -> list[str]:
@@ -147,6 +156,7 @@ def _as_timestamp(value) -> pd.Timestamp:
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. calibration
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def calibrate_to_reference(
     secondary: xr.Dataset,
@@ -223,7 +233,7 @@ def calibrate_to_reference(
     if any(getattr(ref[c].data, "chunks", None) is not None for c in components):
         ref = ref.chunk({"time": -1})
     ref_on_sec = ref.interp(time=t_ov, method="linear")
-    diff = (secondary[list(components)].sel(time=t_ov) - ref_on_sec)
+    diff = secondary[list(components)].sel(time=t_ov) - ref_on_sec
     diff = diff.assign_coords(t_yr=("time", t_yr_ov)).swap_dims({"time": "t_yr"})
 
     offsets, rates, rmss, n_valids, corrected_vars = [], [], [], [], {}
@@ -240,8 +250,9 @@ def calibrate_to_reference(
         # drop the scalar `degree` coord sel() leaves, or the concat below
         # sees two conflicting values of it
         offset = pf.sel(degree=0).drop_vars("degree")
-        rate = (pf.sel(degree=1).drop_vars("degree") if deg == 1
-                else xr.zeros_like(offset))
+        rate = (
+            pf.sel(degree=1).drop_vars("degree") if deg == 1 else xr.zeros_like(offset)
+        )
 
         if deg == 1:
             short = (n_valid < 2) & (n_valid > 0)
@@ -256,7 +267,7 @@ def calibrate_to_reference(
         model_ov = xr.polyval(d["t_yr"], coeffs)
         rms = np.sqrt(((d - model_ov) ** 2).mean("t_yr", skipna=True)).where(~none)
 
-        correction = xr.polyval(t_full, coeffs)          # (time, y, x)
+        correction = xr.polyval(t_full, coeffs)  # (time, y, x)
         corrected_vars[comp] = (secondary[comp] - correction).astype("float32")
 
         offsets.append(offset.astype("float32"))
@@ -271,13 +282,17 @@ def calibrate_to_reference(
         )
 
     comp_coord = list(components)
-    fit = xr.Dataset({
-        "offset": xr.concat(offsets, dim="component"),
-        "rate": xr.concat(rates, dim="component"),
-        "rms": xr.concat(rmss, dim="component"),
-        "n_valid": xr.concat(n_valids, dim="component"),
-    }).assign_coords(component=comp_coord)
-    fit = fit.drop_vars([c for c in ("degree", "t_yr", "time", "date") if c in fit.coords])
+    fit = xr.Dataset(
+        {
+            "offset": xr.concat(offsets, dim="component"),
+            "rate": xr.concat(rates, dim="component"),
+            "rms": xr.concat(rmss, dim="component"),
+            "n_valid": xr.concat(n_valids, dim="component"),
+        }
+    ).assign_coords(component=comp_coord)
+    fit = fit.drop_vars(
+        [c for c in ("degree", "t_yr", "time", "date") if c in fit.coords]
+    )
 
     attrs = {
         "model": model,
@@ -291,7 +306,9 @@ def calibrate_to_reference(
         "extrapolated": bool(model == "offset+rate"),
     }
     fit.attrs.update(attrs)
-    corrected = xr.Dataset(corrected_vars, coords=secondary.coords, attrs=dict(secondary.attrs))
+    corrected = xr.Dataset(
+        corrected_vars, coords=secondary.coords, attrs=dict(secondary.attrs)
+    )
     corrected.attrs["calibration"] = dict(attrs)
     return corrected, fit
 
@@ -299,6 +316,7 @@ def calibrate_to_reference(
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. fusion
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def fuse_series(
     reference: xr.Dataset,
@@ -320,7 +338,9 @@ def fuse_series(
     _check_series(secondary_corrected, components, "secondary")
     _require_same_grid(reference, secondary_corrected)
     if "magn" in reference.data_vars or "magn" in secondary_corrected.data_vars:
-        logger.warning("fuse_series: 'magn' is dropped — magnitude is re-derived from the fused EW/NS.")
+        logger.warning(
+            "fuse_series: 'magn' is dropped — magnitude is re-derived from the fused EW/NS."
+        )
 
     ref = reference[list(components)]
     sec = secondary_corrected[list(components)]
@@ -328,13 +348,22 @@ def fuse_series(
     sec_only = sec.sel(time=~shared)
 
     ref = ref.assign_coords(source=("time", [reference_label] * ref.sizes["time"]))
-    sec_only = sec_only.assign_coords(source=("time", [secondary_label] * sec_only.sizes["time"]))
+    sec_only = sec_only.assign_coords(
+        source=("time", [secondary_label] * sec_only.sizes["time"])
+    )
 
-    fused = xr.concat([ref.drop_vars("date", errors="ignore"),
-                       sec_only.drop_vars("date", errors="ignore")],
-                      dim="time", coords="minimal", compat="override").sortby("time")
+    fused = xr.concat(
+        [
+            ref.drop_vars("date", errors="ignore"),
+            sec_only.drop_vars("date", errors="ignore"),
+        ],
+        dim="time",
+        coords="minimal",
+        compat="override",
+    ).sortby("time")
     fused = fused.assign_coords(
-        date=("time", list(pd.to_datetime(fused["time"].values).strftime("%Y%m%d"))))
+        date=("time", list(pd.to_datetime(fused["time"].values).strftime("%Y%m%d")))
+    )
     fused.attrs["fusion"] = {
         "reference": reference_label,
         "secondary": secondary_label,
@@ -348,6 +377,7 @@ def fuse_series(
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. closure diagnostic
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _default_pair_paths(pair) -> tuple[Path, Path]:
     """Corrected rasters when they exist, raw otherwise — the ``_load_and_filter`` rule."""
@@ -394,7 +424,11 @@ def pair_closure_against_series(
     paths = paths or _default_pair_paths
     t_series = pd.to_datetime(series["time"].values)
     lo, hi = t_series.min(), t_series.max()
-    res = abs(float(series["x"].values[1] - series["x"].values[0])) if series.sizes["x"] > 1 else 1.0
+    res = (
+        abs(float(series["x"].values[1] - series["x"].values[0]))
+        if series.sizes["x"] > 1
+        else 1.0
+    )
     template = series[components[0]].isel(time=0)
 
     stacks = {c: [] for c in components}
@@ -408,12 +442,18 @@ def pair_closure_against_series(
         ew_path, ns_path = paths(pair)
         by_comp = {"EW": ew_path, "NS": ns_path}
         sub = series[list(components)]
-        predicted = (sub.interp(time=np.datetime64(d2)) - sub.interp(time=np.datetime64(d1)))
+        predicted = sub.interp(time=np.datetime64(d2)) - sub.interp(
+            time=np.datetime64(d1)
+        )
         for comp in components:
-            da = rioxarray.open_rasterio(by_comp[comp], masked=True).squeeze("band", drop=True)
+            da = rioxarray.open_rasterio(by_comp[comp], masked=True).squeeze(
+                "band", drop=True
+            )
             da = da.reindex_like(template, method="nearest", tolerance=res / 2)
             resid = (da - predicted[comp]).astype("float32")
-            stacks[comp].append(resid.drop_vars(("time", "date", "band"), errors="ignore"))
+            stacks[comp].append(
+                resid.drop_vars(("time", "date", "band"), errors="ignore")
+            )
         keys.append(pair.pa_key)
         d1s.append(d1.strftime("%Y%m%d"))
         d2s.append(d2.strftime("%Y%m%d"))
@@ -429,17 +469,26 @@ def pair_closure_against_series(
     if not keys:
         raise ValueError("no pair falls within the series' time span")
 
-    out = xr.Dataset({
-        c: xr.concat(stacks[c], dim="pair", coords="minimal", compat="override")
-        for c in components
-    })
-    out = out.assign_coords(pair=keys, date1=("pair", d1s), date2=("pair", d2s),
-                            dt_days=("pair", dts), sensor=("pair", sensors))
+    out = xr.Dataset(
+        {
+            c: xr.concat(stacks[c], dim="pair", coords="minimal", compat="override")
+            for c in components
+        }
+    )
+    out = out.assign_coords(
+        pair=keys,
+        date1=("pair", d1s),
+        date2=("pair", d2s),
+        dt_days=("pair", dts),
+        sensor=("pair", sensors),
+    )
     out.attrs["skipped"] = list(skipped)
     return out
 
 
-def closure_summary(closure: xr.Dataset, mask: xr.DataArray | None = None) -> pd.DataFrame:
+def closure_summary(
+    closure: xr.Dataset, mask: xr.DataArray | None = None
+) -> pd.DataFrame:
     """One row per (pair, component): where the pair disagrees with the series.
 
     :param closure: From :func:`pair_closure_against_series`.
@@ -457,23 +506,34 @@ def closure_summary(closure: xr.Dataset, mask: xr.DataArray | None = None) -> pd
         for comp in comps:
             arr = np.asarray(closure[comp].isel(pair=k).values, dtype="float64")
             if mask is not None:
-                arr = np.where(np.asarray(mask.values if hasattr(mask, "values") else mask, bool),
-                               arr, np.nan)
+                arr = np.where(
+                    np.asarray(mask.values if hasattr(mask, "values") else mask, bool),
+                    arr,
+                    np.nan,
+                )
             valid = arr[np.isfinite(arr)]
             med = float(np.median(valid)) if valid.size else float("nan")
-            rows.append({
-                "pair": str(key),
-                "sensor": str(closure["sensor"].values[k]),
-                "date1": str(closure["date1"].values[k]),
-                "date2": str(closure["date2"].values[k]),
-                "dt_days": dt_days,
-                "component": comp,
-                "median": med,
-                "nmad": float(_nmad(valid)) if valid.size else float("nan"),
-                "rms": float(np.sqrt(np.mean(valid ** 2))) if valid.size else float("nan"),
-                "n": int(valid.size),
-                "rate_bias_m_yr": (med / dt_days * _DAYS_PER_YEAR) if dt_days else float("nan"),
-            })
+            rows.append(
+                {
+                    "pair": str(key),
+                    "sensor": str(closure["sensor"].values[k]),
+                    "date1": str(closure["date1"].values[k]),
+                    "date2": str(closure["date2"].values[k]),
+                    "dt_days": dt_days,
+                    "component": comp,
+                    "median": med,
+                    "nmad": float(_nmad(valid)) if valid.size else float("nan"),
+                    "rms": (
+                        float(np.sqrt(np.mean(valid**2)))
+                        if valid.size
+                        else float("nan")
+                    ),
+                    "n": int(valid.size),
+                    "rate_bias_m_yr": (
+                        (med / dt_days * _DAYS_PER_YEAR) if dt_days else float("nan")
+                    ),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -481,10 +541,16 @@ def closure_summary(closure: xr.Dataset, mask: xr.DataArray | None = None) -> pd
 # 4. orchestrator + trace
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def build_fusion_parameters(
     *,
-    reference_dir, secondary_dir, reference_label: str, secondary_label: str,
-    fit: xr.Dataset, fused: xr.Dataset, components: Sequence[str],
+    reference_dir,
+    secondary_dir,
+    reference_label: str,
+    secondary_label: str,
+    fit: xr.Dataset,
+    fused: xr.Dataset,
+    components: Sequence[str],
 ) -> dict:
     """Assemble the ``fusion_parameters.json`` document (pure; no filesystem).
 
@@ -497,9 +563,11 @@ def build_fusion_parameters(
         valid = arr[np.isfinite(arr)]
         if not valid.size:
             return {"median": None, "p5": None, "p95": None}
-        return {"median": float(np.median(valid)),
-                "p5": float(np.percentile(valid, 5)),
-                "p95": float(np.percentile(valid, 95))}
+        return {
+            "median": float(np.median(valid)),
+            "p5": float(np.percentile(valid, 5)),
+            "p95": float(np.percentile(valid, 95)),
+        }
 
     per_component = {}
     for comp in components:
@@ -515,10 +583,16 @@ def build_fusion_parameters(
         "gmc_version": __version__,
         "written_utc": datetime.now(timezone.utc).isoformat(),
         "kind": "fusion",
-        "reference": {"inversion_dir": str(reference_dir), "label": reference_label,
-                      "dates": list(fit.attrs.get("reference_dates", []))},
-        "secondary": {"inversion_dir": str(secondary_dir), "label": secondary_label,
-                      "dates": list(fit.attrs.get("secondary_dates", []))},
+        "reference": {
+            "inversion_dir": str(reference_dir),
+            "label": reference_label,
+            "dates": list(fit.attrs.get("reference_dates", [])),
+        },
+        "secondary": {
+            "inversion_dir": str(secondary_dir),
+            "label": secondary_label,
+            "dates": list(fit.attrs.get("secondary_dates", [])),
+        },
         "calibration": {
             "model": fit.attrs.get("model"),
             "t0": fit.attrs.get("t0"),
@@ -531,7 +605,9 @@ def build_fusion_parameters(
         },
         "fused": {
             "n_dates": int(fused.sizes["time"]),
-            "source_per_date": dict(zip(_dates_of(fused), [str(s) for s in fused["source"].values])),
+            "source_per_date": dict(
+                zip(_dates_of(fused), [str(s) for s in fused["source"].values])
+            ),
             **_jsonable(fused.attrs.get("fusion", {})),
         },
         "components": list(components),
@@ -576,9 +652,20 @@ def fuse_inversions(
     sec = load_cumulative_stack(sec_dir, components, chunks=chunks)
 
     corrected, fit = calibrate_to_reference(
-        sec, ref, model=model, overlap=overlap, min_epochs=min_epochs, components=components)
-    fused = fuse_series(ref, corrected, reference_label=reference_label,
-                        secondary_label=secondary_label, components=components)
+        sec,
+        ref,
+        model=model,
+        overlap=overlap,
+        min_epochs=min_epochs,
+        components=components,
+    )
+    fused = fuse_series(
+        ref,
+        corrected,
+        reference_label=reference_label,
+        secondary_label=secondary_label,
+        components=components,
+    )
     fused = fused.compute() if hasattr(fused, "compute") else fused
     fit = fit.compute() if hasattr(fit, "compute") else fit
 
@@ -591,10 +678,22 @@ def fuse_inversions(
         )
 
     params = build_fusion_parameters(
-        reference_dir=ref_dir, secondary_dir=sec_dir, reference_label=reference_label,
-        secondary_label=secondary_label, fit=fit, fused=fused, components=components)
+        reference_dir=ref_dir,
+        secondary_dir=sec_dir,
+        reference_label=reference_label,
+        secondary_label=secondary_label,
+        fit=fit,
+        fused=fused,
+        components=components,
+    )
     written = write_cumulative_stack(
-        fused, out_dir, components=components, magnitude=magnitude,
-        overwrite=overwrite, fit=fit, parameters=params)
+        fused,
+        out_dir,
+        components=components,
+        magnitude=magnitude,
+        overwrite=overwrite,
+        fit=fit,
+        parameters=params,
+    )
     logger.info(f"fusion ── {fused.sizes['time']} dates written to {out_dir}")
     return fused, fit, written

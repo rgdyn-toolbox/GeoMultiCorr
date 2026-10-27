@@ -8,6 +8,7 @@ Resolution is read from each file's **header**, not from ``sieve_bulk``'s
 from it would be absent or wrong for those thumbs. The header is what ASP will
 actually see.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -22,8 +23,14 @@ from geomulticorr.core.thumb import Thumb
 
 def _write_raster(path, res: float = 3.0, size: int = 8):
     with rasterio.open(
-        path, "w", driver="GTiff", height=size, width=size, count=1,
-        dtype="uint16", crs="EPSG:32717",
+        path,
+        "w",
+        driver="GTiff",
+        height=size,
+        width=size,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:32717",
         transform=from_origin(500000, 9800000, res, res),
     ) as dst:
         dst.write(np.ones((size, size), dtype="uint16"), 1)
@@ -45,14 +52,19 @@ class TestThumbResolution:
 
     def test_reflects_the_actual_file_not_a_nominal_sensor_value(self, tmp_path):
         """A resampled thumb must report what it really is."""
-        path = _write_raster(tmp_path / "Chimborazo_2020-02-01_planetscope.tif", res=1.5)
+        path = _write_raster(
+            tmp_path / "Chimborazo_2020-02-01_planetscope.tif", res=1.5
+        )
         assert Thumb(path).th_res == pytest.approx(1.5)
 
-    def test_positive_even_though_north_up_rasters_have_negative_y_scale(self, thumb_file):
+    def test_positive_even_though_north_up_rasters_have_negative_y_scale(
+        self, thumb_file
+    ):
         assert Thumb(thumb_file).th_res > 0
 
     def test_unreadable_resolution_degrades_to_nan(self, thumb_file):
         """One odd header must not block registering a whole project."""
+
         class _NoRes:
             res = ()
 
@@ -74,8 +86,16 @@ class TestToPdserie:
         """Adding a column must not disturb the existing ones (th_type added 0.6.x)."""
         keys = set(Thumb(thumb_file).to_pdserie().index)
         assert keys == {
-            "th_pz_name", "th_path", "th_sensor", "th_date", "th_year",
-            "th_date_dec", "th_date_datetime", "th_valid", "th_res", "th_type",
+            "th_pz_name",
+            "th_path",
+            "th_sensor",
+            "th_date",
+            "th_year",
+            "th_date_dec",
+            "th_date_datetime",
+            "th_valid",
+            "th_res",
+            "th_type",
             "geometry",
         }
 

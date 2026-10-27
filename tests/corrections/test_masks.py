@@ -38,6 +38,7 @@ class TestOutlierFilter:
     def test_inside_bounds_kept(self):
         """Values inside (-10, 10) → True."""
         from .conftest import MockRaster
+
         raster = MockRaster(data=ma.array([[1.0, 5.0, -3.0]]))
         result = OutlierFilter((-10, 10)).generate_mask(raster)
         assert result[0, 0] == True
@@ -47,6 +48,7 @@ class TestOutlierFilter:
     def test_outside_bounds_masked(self):
         """Values outside (-10, 10) → False."""
         from .conftest import MockRaster
+
         raster = MockRaster(data=ma.array([[15.0, -15.0]]))
         result = OutlierFilter((-10, 10)).generate_mask(raster)
         assert result[0, 0] == False
@@ -55,6 +57,7 @@ class TestOutlierFilter:
     def test_boundary_exclusive(self):
         """Boundary values (-10, 10): strict inequalities."""
         from .conftest import MockRaster
+
         raster = MockRaster(data=ma.array([[-10.0, 10.0]]))
         result = OutlierFilter((-10, 10)).generate_mask(raster)
         assert result[0, 0] == False
@@ -63,6 +66,7 @@ class TestOutlierFilter:
     def test_nan_masked(self):
         """NaN values → False (not finite)."""
         from .conftest import MockRaster
+
         raster = MockRaster(data=ma.array([[1.0, np.nan, 5.0]]))
         result = OutlierFilter((-10, 10)).generate_mask(raster)
         assert result[0, 0] == True
@@ -72,6 +76,7 @@ class TestOutlierFilter:
     def test_masked_input_filled_nan(self):
         """Masked pixel filled with NaN → not finite → False."""
         from .conftest import MockRaster
+
         data = ma.array([[1.0, 5.0, 3.0]], mask=[[False, True, False]])
         raster = MockRaster(data=data)
         result = OutlierFilter((-10, 10)).generate_mask(raster)
@@ -83,10 +88,11 @@ class TestOutlierFilter:
     def test_parametrized_thresholds(self, lo, hi):
         """Test various thresholds."""
         from .conftest import MockRaster
+
         raster = MockRaster(data=ma.array([[lo - 1, (lo + hi) / 2, hi + 1]]))
         result = OutlierFilter((lo, hi)).generate_mask(raster)
         assert result[0, 0] == False  # below lo
-        assert result[0, 1] == True   # inside
+        assert result[0, 1] == True  # inside
         assert result[0, 2] == False  # above hi
 
     def test_default_threshold(self):
@@ -101,6 +107,7 @@ class TestCCFilter:
     def test_above_threshold_kept(self):
         """CC ≥ threshold → True."""
         from .conftest import MockRaster
+
         target = MockRaster(data=ma.array([[0.0, 0.0, 0.0]]))
         cc = MockRaster(data=ma.array([[0.3, 0.5, 0.8]]))
         result = CCFilter(0.5).generate_mask(target, cc=cc)
@@ -111,6 +118,7 @@ class TestCCFilter:
     def test_below_threshold_masked(self):
         """CC < threshold → False."""
         from .conftest import MockRaster
+
         target = MockRaster(data=ma.array([[0.0]]))
         cc = MockRaster(data=ma.array([[0.3]]))
         result = CCFilter(0.5).generate_mask(target, cc=cc)
@@ -119,6 +127,7 @@ class TestCCFilter:
     def test_boundary_inclusive(self):
         """CC exactly at threshold (uses >=) → True."""
         from .conftest import MockRaster
+
         target = MockRaster(data=ma.array([[0.0]]))
         cc = MockRaster(data=ma.array([[0.5]]))
         result = CCFilter(0.5).generate_mask(target, cc=cc)
@@ -127,6 +136,7 @@ class TestCCFilter:
     def test_masked_cc_filled_zero(self):
         """Masked CC filled with 0.0 → below threshold → False."""
         from .conftest import MockRaster
+
         target = MockRaster(data=ma.array([[0.0]]))
         cc = MockRaster(data=ma.array([[0.8]], mask=[[True]]))
         result = CCFilter(0.5).generate_mask(target, cc=cc)
@@ -158,6 +168,7 @@ class TestSlopeMask:
     def test_below_min_masked(self, ramp_raster):
         """Flat DEM (slope=0°), min_slope=5: all → False."""
         from .conftest import MockRaster
+
         flat_dem = MockRaster(data=ma.array(np.ones((10, 10)) * 300.0))
         result = SlopeMask(min_slope=5, max_slope=80).generate_mask(
             ramp_raster, dem=flat_dem
@@ -167,6 +178,7 @@ class TestSlopeMask:
     def test_dem_shape_mismatch_raises(self, ramp_raster, dem_raster):
         """Mismatched DEM shape → AssertionError."""
         from .conftest import MockRaster
+
         dem_bad = MockRaster(data=ma.array(np.zeros((15, 15))))
         with pytest.raises(AssertionError, match="must match displacement"):
             SlopeMask().generate_mask(ramp_raster, dem=dem_bad)
@@ -180,6 +192,7 @@ class TestSlopeMask:
     def test_masked_dem_pixel_excluded(self, ramp_raster):
         """Masked DEM pixel → result False."""
         from .conftest import MockRaster
+
         dem_data = np.ones((10, 10)) * 300.0
         dem_masked = ma.array(dem_data, mask=False)
         dem_masked.mask = np.zeros((10, 10), dtype=bool)
@@ -195,6 +208,7 @@ class TestShadowMask:
     def test_lit_terrain_kept(self, ramp_raster):
         """Flat DEM, sun at 45° elev, hillshade ≈ 0.707, thresh=0.1: all → True."""
         from .conftest import MockRaster
+
         flat_dem = MockRaster(data=ma.array(np.ones((10, 10)) * 500.0))
         result = ShadowMask(shadow_threshold=0.1).generate_mask(
             ramp_raster, dem=flat_dem, sun_azimuth_deg=0, sun_elevation_deg=45
@@ -204,6 +218,7 @@ class TestShadowMask:
     def test_shadowed_terrain_masked(self, ramp_raster):
         """thresh=0.9 > hillshade ≈ 0.707: all → False."""
         from .conftest import MockRaster
+
         flat_dem = MockRaster(data=ma.array(np.ones((10, 10)) * 500.0))
         result = ShadowMask(shadow_threshold=0.9).generate_mask(
             ramp_raster, dem=flat_dem, sun_azimuth_deg=0, sun_elevation_deg=45
@@ -235,17 +250,18 @@ class TestSnowMask:
     def test_numpy_snow_inverted(self, ramp_raster):
         """snow=True pixels masked out: snow inverted to get keep mask."""
         from .conftest import MockRaster
+
         snow_mask = np.array([[True, False], [False, True]])
         result = SnowMask().generate_mask(
-            MockRaster(data=ma.array(np.ones((2, 2)))),
-            snow_mask=snow_mask
+            MockRaster(data=ma.array(np.ones((2, 2)))), snow_mask=snow_mask
         )
         assert result[0, 0] == False  # was True → inverted
-        assert result[0, 1] == True   # was False → inverted
+        assert result[0, 1] == True  # was False → inverted
 
     def test_raster_snow_inverted(self, ramp_raster):
         """snow_mask as gu.Raster with bool data → inverted."""
         from .conftest import MockRaster
+
         snow_raster = gu.Raster.from_array(
             np.array([[True, False]]), transform=AFFINE_10M, crs=32632, nodata=None
         )
@@ -276,6 +292,7 @@ class TestCloudMask:
     def test_numpy_cloud_inverted(self, ramp_raster):
         """cloud=True pixels masked out."""
         from .conftest import MockRaster
+
         cloud_data = np.array([[True, False]])
         small_raster = MockRaster(data=ma.array(np.ones((1, 2))))
         result = CloudMask().generate_mask(small_raster, cloud_mask=cloud_data)
@@ -285,6 +302,7 @@ class TestCloudMask:
     def test_raster_cloud_inverted(self, ramp_raster):
         """Same as numpy case via gu.Raster."""
         from .conftest import MockRaster
+
         cloud_raster = gu.Raster.from_array(
             np.array([[False, True]]), transform=AFFINE_10M, crs=32632, nodata=None
         )
@@ -325,18 +343,20 @@ class TestStableAreaMask:
         """Mock geoutils.Vector with create_mask() → result inverted."""
         mock_vector = MagicMock(spec=gu.Vector)
         from .conftest import MockRaster
+
         moving_data = np.array([[True, False], [False, True]])
         moving_raster = MockRaster(data=ma.array(moving_data.astype(float)))
         mock_vector.create_mask.return_value = moving_raster
         small_raster = type(ramp_raster)(data=ma.array(np.ones((2, 2))))
         result = StableAreaMask(mock_vector).generate_mask(small_raster)
         assert result[0, 0] == False  # moving → inverted
-        assert result[0, 1] == True   # not moving → inverted
+        assert result[0, 1] == True  # not moving → inverted
 
     def test_str_path_loads_mask(self, ramp_raster, tmp_path):
         """str/Path to a vector file → pixels inside polygons masked out."""
         import geopandas as gpd
         from shapely.geometry import box
+
         # ramp_raster: 10×10, transform Affine(10,0,0,0,-10,0) → extent x[0,100], y[-100,0]
         gdf = gpd.GeoDataFrame(geometry=[box(0, -50, 50, 0)], crs="EPSG:2154")
         fn = tmp_path / "moving.gpkg"
@@ -344,18 +364,19 @@ class TestStableAreaMask:
         result = StableAreaMask(str(fn)).generate_mask(ramp_raster)
         assert result.shape == ramp_raster.data.shape
         assert result.dtype == bool
-        assert (~result).sum() > 0   # some pixels inside the polygon are masked (moving)
-        assert result.sum() > 0      # some pixels outside are kept (stable)
+        assert (~result).sum() > 0  # some pixels inside the polygon are masked (moving)
+        assert result.sum() > 0  # some pixels outside are kept (stable)
 
     def test_gdf_loads_mask(self, ramp_raster):
         """GeoDataFrame input → pixels inside polygons masked out."""
         import geopandas as gpd
         from shapely.geometry import box
+
         gdf = gpd.GeoDataFrame(geometry=[box(0, -50, 50, 0)], crs="EPSG:2154")
         result = StableAreaMask(gdf).generate_mask(ramp_raster)
         assert result.shape == ramp_raster.data.shape
-        assert (~result).sum() > 0   # inside polygon → masked
-        assert result.sum() > 0      # outside → kept
+        assert (~result).sum() > 0  # inside polygon → masked
+        assert result.sum() > 0  # outside → kept
 
 
 class TestFilterPipeline:
@@ -375,6 +396,7 @@ class TestFilterPipeline:
     def test_compute_ands_masks(self):
         """Masks AND-combined: if one rejects, result is False."""
         from .conftest import MockRaster
+
         data = np.array([[3.0]])
         raster = MockRaster(data=ma.array(data))
         fp = OutlierFilter((-5, 5)) + CCFilter(0.8)
@@ -422,6 +444,7 @@ class TestBaseMaskApply:
     def test_apply_single_masks_outlier(self, ramp_raster):
         """apply_single: outlier pixel becomes masked."""
         from .conftest import MockRaster
+
         data = np.array([[1.0, 5.0, 15.0, -3.0]])
         raster = MockRaster(data=ma.array(data))
         result = OutlierFilter((-10, 10)).apply_single(raster)
@@ -430,6 +453,7 @@ class TestBaseMaskApply:
     def test_apply_single_meta_newly_masked(self, ramp_raster):
         """apply_single sets meta['newly_masked'] and meta['masked_fraction']."""
         from .conftest import MockRaster
+
         data = np.array([[1.0, 5.0, 15.0]])
         raster = MockRaster(data=ma.array(data))
         corr = OutlierFilter((-10, 10))
@@ -519,7 +543,10 @@ class TestFilterPipelineCoverage:
         out = a + b
         assert isinstance(out, FilterPipeline)
         assert [type(m).__name__ for m in out.masks] == [
-            "OutlierFilter", "CCFilter", "SnowMask", "CloudMask",
+            "OutlierFilter",
+            "CCFilter",
+            "SnowMask",
+            "CloudMask",
         ]
 
     def test_pipeline_plus_non_mask_raises(self):

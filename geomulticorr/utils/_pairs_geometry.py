@@ -65,6 +65,7 @@ Public API:
 - :func:`color_ring_mesh` / :func:`ring_centerline` — the time colour ring.
 - :func:`year_tick_segments` / :func:`year_label_placement` — ring decorations.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -97,6 +98,7 @@ def _is_scalar_date(dates) -> bool:
 
 # ── decimal year ────────────────────────────────────────────────────────────────
 
+
 def to_decimal_year(dates: DateLike | Sequence[DateLike]):
     """Convert date(s) to decimal year.
 
@@ -119,6 +121,7 @@ def to_decimal_year(dates: DateLike | Sequence[DateLike]):
 
 # ── circular time scale ─────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class CircularTimeScale:
     """Maps dates onto a circle: Jan 1 at the top, time running clockwise.
@@ -139,7 +142,9 @@ class CircularTimeScale:
         """Build the scale spanning the whole years touched by *dates*."""
         idx = _as_index(dates)
         if len(idx) == 0:
-            raise ValueError("Cannot build a circular time scale from an empty date list.")
+            raise ValueError(
+                "Cannot build a circular time scale from an empty date list."
+            )
         return cls(
             start=pd.Timestamp(year=int(idx.min().year), month=1, day=1),
             end=pd.Timestamp(year=int(idx.max().year) + 1, month=1, day=1),
@@ -167,10 +172,13 @@ class CircularTimeScale:
 
     def year_angles(self) -> np.ndarray:
         """Angle of Jan 1 of each year in :attr:`years`."""
-        return self.angle([pd.Timestamp(year=int(y), month=1, day=1) for y in self.years])
+        return self.angle(
+            [pd.Timestamp(year=int(y), month=1, day=1) for y in self.years]
+        )
 
 
 # ── primitives ──────────────────────────────────────────────────────────────────
+
 
 def polar_to_xy(radius, theta) -> tuple[np.ndarray, np.ndarray]:
     """Polar → cartesian, broadcasting *radius* against *theta*."""
@@ -194,19 +202,22 @@ def bezier_sample(control_pts: np.ndarray, n_points: int = 16) -> np.ndarray:
         raise ValueError(f"control_pts must have shape (m, k, 2); got {pts.shape}.")
     k = pts.shape[1]
     if k not in (3, 4):
-        raise ValueError(f"Only quadratic (k=3) and cubic (k=4) curves are supported; got k={k}.")
+        raise ValueError(
+            f"Only quadratic (k=3) and cubic (k=4) curves are supported; got k={k}."
+        )
     if n_points < 2:
         raise ValueError("n_points must be >= 2.")
 
     s = np.linspace(0.0, 1.0, n_points)[None, :, None]  # (1, n, 1)
     if k == 3:
-        basis = [(1 - s) ** 2, 2 * (1 - s) * s, s ** 2]
+        basis = [(1 - s) ** 2, 2 * (1 - s) * s, s**2]
     else:
-        basis = [(1 - s) ** 3, 3 * (1 - s) ** 2 * s, 3 * (1 - s) * s ** 2, s ** 3]
+        basis = [(1 - s) ** 3, 3 * (1 - s) ** 2 * s, 3 * (1 - s) * s**2, s**3]
     return sum(b * pts[:, i, None, :] for i, b in enumerate(basis))
 
 
 # ── circular chords ─────────────────────────────────────────────────────────────
+
 
 def chord_control_points(
     theta_i,
@@ -231,7 +242,9 @@ def chord_control_points(
     ti = np.atleast_1d(np.asarray(theta_i, dtype=float))
     tj = np.atleast_1d(np.asarray(theta_j, dtype=float))
     if ti.shape != tj.shape:
-        raise ValueError(f"theta_i and theta_j must have the same shape; got {ti.shape} vs {tj.shape}.")
+        raise ValueError(
+            f"theta_i and theta_j must have the same shape; got {ti.shape} vs {tj.shape}."
+        )
 
     x1, y1 = polar_to_xy(link_radius, ti)
     x2, y2 = polar_to_xy(link_radius, tj)
@@ -244,7 +257,11 @@ def chord_control_points(
     xc, yc = polar_to_xy(control_radius, mid_theta)
 
     return np.stack(
-        [np.column_stack([x1, y1]), np.column_stack([xc, yc]), np.column_stack([x2, y2])],
+        [
+            np.column_stack([x1, y1]),
+            np.column_stack([xc, yc]),
+            np.column_stack([x2, y2]),
+        ],
         axis=1,
     )
 
@@ -263,12 +280,15 @@ def chord_polylines(
         ``LineCollection`` or a NaN-separated plotly line trace.
     """
     return bezier_sample(
-        chord_control_points(theta_i, theta_j, link_radius=link_radius, curvature=curvature),
+        chord_control_points(
+            theta_i, theta_j, link_radius=link_radius, curvature=curvature
+        ),
         n_points=n_points,
     )
 
 
 # ── arrowheads ──────────────────────────────────────────────────────────────────
+
 
 def polyline_point_and_tangent(
     curves: np.ndarray,
@@ -344,6 +364,7 @@ def tangent_marker_angles(tangents: np.ndarray) -> np.ndarray:
 
 
 # ── timeline arcs ───────────────────────────────────────────────────────────────
+
 
 def arc_heights(
     dt_years,
@@ -429,6 +450,7 @@ def timeline_arc_polylines(x1, x2, height, *, n_points: int = 16) -> np.ndarray:
 
 
 # ── colour ring and decorations ─────────────────────────────────────────────────
+
 
 def color_ring_mesh(
     n_segments: int = 720,

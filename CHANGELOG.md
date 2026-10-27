@@ -2,13 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+- GitHub Actions workflow (`.github/workflows/tests.yml`) that runs the test suite with coverage on every
+  push to `main` and on every pull request, and uploads the report to Coveralls. A Coveralls coverage
+  badge is shown in the README.
+
+### Changed
+- **Code formatted with Black** (`line-length = 88`, `target-version = ["py310"]`, configured in
+  `pyproject.toml`). Every module under `geomulticorr/` and `tests/` now passes `black --check`; the
+  change is whitespace and line wrapping only, with no behaviour change (the test suite is unchanged
+  at 2474 passing tests).
+
 ### Fixed
-- **Pléiades is detected from a bare file name**, like SPOT and PlanetScope. A file such as
-  `..._pleiades.tif`, `..._pléiades.tif`, `..._pleiades-1b.tif` or `..._pleiades-neo.tif` used to come
-  out as `sensor="unknown"`, so `sieve_bulk` refused it and registered thumbs carried no family. The
-  variant is now optional (`pleiades` → sensor `pleiades`, family `pleiades`, platform `None`;
-  `phr1a` → platform `pleiades-1a`), the Neo branch is checked first, `pleiades-neo` is listed before
-  `pleiades` in `supported_sensors` (the shorter token shadowed it), and `phr1a`/`phr1b` are recognised.
+- **Package metadata builds again**: the licence classifier in `pyproject.toml` now uses the official trove-classifier spelling. The previous spelling made `pip install -e .` fail with current hatchling.
+- **The test suite runs without ASP installed**: the `asp_helper` fixture now points `ASP` at stub `parallel_stereo` / `corr_eval` executables in a temporary folder. Before, a `patch` that expired on `return` made these tests depend on a local ASP install. The fusion NaN test now escalates only `RankWarning` to an error, not unrelated pandas/numpy deprecation warnings.
+- **Pléiades is detected from a bare file name**, like SPOT and PlanetScope. A file such as `..._pleiades.tif`, `..._pléiades.tif`, `..._pleiades-1b.tif` or `..._pleiades-neo.tif` used to come
+  out as `sensor="unknown"`, so `sieve_bulk` refused it and registered thumbs carried no family. The variant is now optional (`pleiades` → sensor `pleiades`, family `pleiades`, platform `None`;
+  `phr1a` → platform `pleiades-1a`), the Neo branch is checked first, `pleiades-neo` is listed before `pleiades` in `supported_sensors` (the shorter token shadowed it), and `phr1a`/`phr1b` are recognised.
 - `sensor_normalize("ple" | "pl1a" | "PHR1A")` no longer raises `AttributeError`.
 - `Pair.get_xDisp_raster` / `get_yDisp_raster` now cache and return the **scaled (metre)** raster on
   every call. Before, the first call returned the scaled raster and later calls the raw cached one, and

@@ -6,6 +6,7 @@ The XML tag patterns in ``supported_sensors`` are the only route to a date for
 band-scoped filenames (Sentinel-2 ``B08.tif``), so their exact shape is
 load-bearing for any archive that keeps catalog filenames.
 """
+
 from __future__ import annotations
 
 import re
@@ -59,7 +60,11 @@ class TestAttributesOnTags:
     @pytest.mark.parametrize(
         "family, xml, expected_date",
         [
-            ("spot", '<IMAGING_DATE version="2">2021-07-14</IMAGING_DATE>', "2021-07-14"),
+            (
+                "spot",
+                '<IMAGING_DATE version="2">2021-07-14</IMAGING_DATE>',
+                "2021-07-14",
+            ),
             ("pleiades", "<IMAGING_DATE>2021-07-14</IMAGING_DATE>", "2021-07-14"),
             (
                 "worldview",
@@ -195,10 +200,15 @@ class TestSensorNormalize:
         """Documents the greedy tile-code branch: ``t31tgk`` is taken as Sentinel-2."""
         assert sensor_normalize("t31tgk")["family"] == "sentinel"
 
-    @pytest.mark.parametrize("text,platform", [
-        ("ple", None), ("pl1a", "pleiades-1a"), ("PHR1A", "pleiades-1a"),
-        ("pleiades 1b", "pleiades-1b"),
-    ])
+    @pytest.mark.parametrize(
+        "text,platform",
+        [
+            ("ple", None),
+            ("pl1a", "pleiades-1a"),
+            ("PHR1A", "pleiades-1a"),
+            ("pleiades 1b", "pleiades-1b"),
+        ],
+    )
     def test_short_pleiades_tokens_do_not_crash(self, text, platform):
         out = sensor_normalize(text)
         assert out["family"] == "pleiades" and out["sensor"] == "pleiades"
@@ -256,8 +266,15 @@ class TestGdalInfoJson:
     def test_readable_raster_gives_info(self, tmp_path):
         path = tmp_path / "ok.tif"
         with rasterio.open(
-            path, "w", driver="GTiff", width=4, height=3, count=1, dtype="uint8",
-            crs="EPSG:32632", transform=from_origin(500000, 4649000, 3, 3),
+            path,
+            "w",
+            driver="GTiff",
+            width=4,
+            height=3,
+            count=1,
+            dtype="uint8",
+            crs="EPSG:32632",
+            transform=from_origin(500000, 4649000, 3, 3),
         ) as dst:
             dst.write(np.ones((1, 3, 4), "uint8"))
         info = _gdal_info_json(path)
@@ -276,7 +293,9 @@ class TestExtractAcquisitionDateCandidates:
         assert got is not None
         assert got.strftime("%Y-%m-%d %H:%M:%S") == "2017-08-01 09:42:39"
 
-    def test_date_and_time_token_pick_the_right_xml_among_several_scenes(self, tmp_path):
+    def test_date_and_time_token_pick_the_right_xml_among_several_scenes(
+        self, tmp_path
+    ):
         """A decoy sorted first, and another scene with a different date, must lose."""
         (tmp_path / self.PS_NAME).touch()
         (tmp_path / "20170801_000000_decoy.xml").write_text(self.OTHER_XML)
@@ -286,7 +305,9 @@ class TestExtractAcquisitionDateCandidates:
         assert got is not None
         assert got.strftime("%Y-%m-%d %H:%M:%S") == "2017-08-01 09:42:39"
 
-    def test_unreadable_candidate_is_skipped_and_filename_is_the_fallback(self, tmp_path):
+    def test_unreadable_candidate_is_skipped_and_filename_is_the_fallback(
+        self, tmp_path
+    ):
         """A directory named ``*.xml`` raises OSError on read; extraction must carry on."""
         name = "LC08_L1TP_232083_20230301_20230307_02_T1_B8.TIF"
         (tmp_path / name).touch()
@@ -302,7 +323,8 @@ class TestExtractAcquisitionDateCandidates:
 
 class TestPleiadesFromFilename:
     """A Pléiades file must resolve to sensor + family through the real detection chain
-    (``re_searcher`` over ``supported_sensors``, then ``sensor_normalize``), like SPOT/PlanetScope."""
+    (``re_searcher`` over ``supported_sensors``, then ``sensor_normalize``), like SPOT/PlanetScope.
+    """
 
     @staticmethod
     def _detect(filename):
@@ -311,17 +333,20 @@ class TestPleiadesFromFilename:
         token = re_searcher(filename.lower(), ss.sensors(ss.supported_sensors))
         return sensor_normalize(token)
 
-    @pytest.mark.parametrize("filename,sensor,platform", [
-        ("chim_2016-11-17_pleiades.tif", "pleiades", None),
-        ("pz_2020-01-01_pléiades.tif", "pleiades", None),
-        ("pz_2020-01-01_pleiades-1b.tif", "pleiades", None),
-        ("pz_2020-01-01_pleiades_1a.tif", "pleiades", None),
-        ("pz_2020-01-01_phr1a.tif", "pleiades", "pleiades-1a"),
-        ("pz_2020-01-01_PHR1B.tif", "pleiades", "pleiades-1b"),
-        ("pz_2020-01-01_ple.tif", "pleiades", None),
-        ("pz_2020-01-01_pleiades-neo.tif", "pleiadesneo", None),
-        ("pz_2020-01-01_pneo.tif", "pleiadesneo", None),
-    ])
+    @pytest.mark.parametrize(
+        "filename,sensor,platform",
+        [
+            ("chim_2016-11-17_pleiades.tif", "pleiades", None),
+            ("pz_2020-01-01_pléiades.tif", "pleiades", None),
+            ("pz_2020-01-01_pleiades-1b.tif", "pleiades", None),
+            ("pz_2020-01-01_pleiades_1a.tif", "pleiades", None),
+            ("pz_2020-01-01_phr1a.tif", "pleiades", "pleiades-1a"),
+            ("pz_2020-01-01_PHR1B.tif", "pleiades", "pleiades-1b"),
+            ("pz_2020-01-01_ple.tif", "pleiades", None),
+            ("pz_2020-01-01_pleiades-neo.tif", "pleiadesneo", None),
+            ("pz_2020-01-01_pneo.tif", "pleiadesneo", None),
+        ],
+    )
     def test_filename_gives_sensor_and_family(self, filename, sensor, platform):
         out = self._detect(filename)
         assert out["sensor"] == sensor
@@ -333,16 +358,23 @@ class TestPleiadesFromFilename:
         lst = ss.supported_sensors
         assert lst.index("pleiades-neo") < lst.index("pleiades")
 
-    @pytest.mark.parametrize("text,sensor,platform", [
-        ("pleiades", "pleiades", None),
-        ("pléiades", "pleiades", None),
-        ("pleiades-1b", "pleiades", "pleiades-1b"),
-        ("pleiades 1a", "pleiades", "pleiades-1a"),
-        ("pleiades-neo", "pleiadesneo", None),
-        ("pleiades neo 3", "pleiadesneo", "pleiadesneo3"),
-        ("PHR1A", "pleiades", "pleiades-1a"),
-        ("PNEO4", "pleiadesneo", "pleiadesneo4"),
-    ])
+    @pytest.mark.parametrize(
+        "text,sensor,platform",
+        [
+            ("pleiades", "pleiades", None),
+            ("pléiades", "pleiades", None),
+            ("pleiades-1b", "pleiades", "pleiades-1b"),
+            ("pleiades 1a", "pleiades", "pleiades-1a"),
+            ("pleiades-neo", "pleiadesneo", None),
+            ("pleiades neo 3", "pleiadesneo", "pleiadesneo3"),
+            ("PHR1A", "pleiades", "pleiades-1a"),
+            ("PNEO4", "pleiadesneo", "pleiadesneo4"),
+        ],
+    )
     def test_sensor_normalize_variants(self, text, sensor, platform):
         out = sensor_normalize(text)
-        assert (out["sensor"], out["platform"], out["family"]) == (sensor, platform, "pleiades")
+        assert (out["sensor"], out["platform"], out["family"]) == (
+            sensor,
+            platform,
+            "pleiades",
+        )
