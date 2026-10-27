@@ -35,11 +35,15 @@ from unittest.mock import patch, MagicMock
 from geomulticorr.correlation import ASP
 
 @pytest.fixture
-def asp_helper():
-    """ASP instance with mocked ASP binaries."""
-    with patch('shutil.which', return_value="/fake/parallel_stereo"):
-        return ASP(session=None, asp_bin_dir=None)
-    #END with
+def asp_helper(tmp_path):
+    """ASP instance whose binaries are stub executables (no real ASP needed)."""
+    bin_dir = tmp_path / "asp_bin"
+    bin_dir.mkdir()
+    for name in ("parallel_stereo", "corr_eval"):
+        exe = bin_dir / name
+        exe.write_text("#!/bin/sh\nexit 0\n")
+        exe.chmod(0o755)
+    return ASP(session=None, asp_bin_dir=bin_dir)
 #END def
 
 @pytest.fixture
