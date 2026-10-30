@@ -1,13 +1,51 @@
 # Changelog
 
-## [Unreleased]
+## [0.8.1] — 2026-10-30
 
 ### Added
+- **Image similarity — `geomulticorr.similarity`**: predicts whether two images will correlate, from
+  the images alone, before any ASP run. Usable outside GMC (no `geomulticorr.core` import): any two
+  rasters, same-sensor or cross-sensor, optical or hillshade. Metrics are measured on stable ground:
+  Pearson/Spearman, mutual information, local ZNCC, SSIM contrast/structure, orientation correlation,
+  spectral coherence and a small trial block matcher (`trial_peak_median`, `trial_sigma_px`,
+  `trial_valid_frac`). Validated on 61 correlated PasDeLours couples: `trial_peak_median` and
+  `coh_mean` predict correlation quality best. Theory: `docs/source/theory/image_similarity.md`.
+- `Session.compute_thumbs_similarity(pz, image_type, couples="all"|<strategy>, cross_sensor_only,
+  moving_areas="auto", grid="coarser"|"reference", plots=True)`. Results are kept in a JSON trace,
+  `<pz>/similarity/thumb_similarity_<pz>[_<type>].json`, with one run per parameter set. Couples
+  already measured with the same parameters are reused, not recomputed. `score` is the couple's
+  percentile rank over the whole run (`rank_score`). `load_thumbs_similarity` reads a run back;
+  `similarity_validation` checks the predictions against already-correlated pairs.
+- Static figures in `<pz>/figures/similarity/`: `plot_similarity_matrices`,
+  `plot_similarity_by_sensor`, `plot_similarity_validation`, `plot_similarity_selection`.
+- **`update_pairs(strategy="similarity")`** builds pairs from the latest similarity run: a metric
+  threshold (`min_similarity`, `similarity_metric`), a cap per anchor image (`per_image`),
+  `cross_sensor_only` and the usual Δt filters. This is how SPOT ↔ PlanetScope bridges are chosen.
+  `strategy="manual", couples=[...]` commits an explicit list. `min_similarity` also filters a
+  date-based strategy. Every new keyword is optional, so existing calls are unchanged.
+- **`Session.explore_similarity_pairs(pz, …)`**, an interactive explorer with two views (similarity
+  matrix with the selected couples outlined, and the network of selected pairs). The current
+  selection is saved in `session._last_similarity_params`; commit it with
+  `session.update_pairs(**session._last_similarity_params, append=True)`. A **Save figure** button
+  writes the view on screen (`html`, `png`, `jpg`, `pdf`, `svg`) to `<pz>/figures/similarity/`,
+  under a name built from the selection (e.g.
+  `PasDeLours_selection_network_score_cross_per2_dt0-730.png`). `interactive=False` returns
+  `(selected, fig)` for scripts. `Session.save_similarity_figure(view, formats=…)` saves from a
+  script.
+- `geomulticorr._profiling.profile` decorator on the long-running `Session` methods. It does nothing
+  unless the geoutils profiler is switched on.
 - GitHub Actions workflow (`.github/workflows/tests.yml`) that runs the test suite with coverage on every
   push to `main` and on every pull request, and uploads the report to Coveralls. A Coveralls coverage
   badge is shown in the README.
 
 ### Changed
+- New pzone folder **`similarity/`** (`PZ_KIND_SIMILARITY`), created with every new pzone;
+  `NEW_LAYOUT_PZ_SUBDIRS` now has 9 entries. A similarity JSON left in `image_correlation/` by an
+  earlier version is moved there on first use, with a log line. Old `thumb_similarity_*.csv` files
+  are no longer read and can be deleted. `migrate_to_new_structure` moves the folder of legacy
+  projects.
+- `plot_pairs_network`: the sensor legend moved to the upper right, so it no longer hides the
+  "above: forward" note.
 - **Code formatted with Black** (`line-length = 88`, `target-version = ["py310"]`, configured in
   `pyproject.toml`). Every module under `geomulticorr/` and `tests/` now passes `black --check`; the
   change is whitespace and line wrapping only, with no behaviour change (the test suite is unchanged

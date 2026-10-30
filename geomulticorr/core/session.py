@@ -115,6 +115,7 @@ from geomulticorr.core.console import (
 )
 
 from geomulticorr._logging import logger
+from geomulticorr._profiling import profile as gmc_profile
 from geomulticorr.utils._image_types import (
     ELEVATION_DIRNAME,
     ELEVATION_IMAGE_TYPES,
@@ -152,6 +153,8 @@ PZ_KIND_REFERENCE_RASTER = "reference_raster"
 PZ_KIND_VECTOR = "vector"
 PZ_KIND_INVERSION = "inversion"
 PZ_KIND_FIGURES = "figures"
+#: The similarity trace of ``compute_thumbs_similarity`` (JSON, one per type).
+PZ_KIND_SIMILARITY = "similarity"
 #: DEM-derived thumbs, one subfolder per image type (elevation/<type>/).
 PZ_KIND_ELEVATION = ELEVATION_DIRNAME
 
@@ -164,6 +167,25 @@ NEW_LAYOUT_PZ_SUBDIRS = (
     PZ_KIND_INVERSION,
     PZ_KIND_FIGURES,
     PZ_KIND_ELEVATION,
+    PZ_KIND_SIMILARITY,
+)
+
+#: Identity columns of a ``compute_thumbs_similarity`` frame; the metric columns
+#: (``similarity.raster.REPORT_KEYS``) follow them.  ``params_hash`` is what
+#: lets a re-run reuse a stored row only when it was computed the same way.
+SIMILARITY_ID_COLUMNS = (
+    "pz_name",
+    "image_type",
+    "left_key",
+    "right_key",
+    "left_date",
+    "right_date",
+    "left_sensor",
+    "right_sensor",
+    "cross_sensor",
+    "dt_days",
+    "doy_diff",
+    "params_hash",
 )
 
 #: Backwards-compatible aliases — the implementation now lives in
@@ -527,6 +549,7 @@ class Session:
         - pz_dir(name, "vector") → path_raster_data/name (vectors in root)
         - pz_dir(name, "inversion") → path_raster_data/name (inversion_* subdirs in root)
         - pz_dir(name, "figures") → path_figures (project-wide)
+        - pz_dir(name, "similarity") → path_raster_data/name/similarity
         - pz_dir(name, None) → path_raster_data/name
 
         Args:
@@ -553,6 +576,10 @@ class Session:
                 return pz_root
             elif kind == PZ_KIND_FIGURES:
                 return self.path_figures
+            elif kind == PZ_KIND_SIMILARITY:
+                # A real folder even in legacy: a loose JSON in the pzone root
+                # would be the one file migrate_to_new_structure misses.
+                return pz_root / "similarity"
             elif kind == PZ_KIND_ELEVATION:
                 # Deliberately no fallback to the pzone root: DEM-derived
                 # thumbs need the per-type subfolders of the new layout.
@@ -1192,6 +1219,7 @@ class Session:
             )
         return gu.Raster(str(path), load_data=False)
 
+    @gmc_profile("gmc.session.build_reference_dem", memprof=True)
     def build_reference_dem(
         self,
         pz_name: str,
@@ -1394,6 +1422,982 @@ class Session:
             )
         return gu.Vector(
             gpd.read_file(str(path), engine="pyogrio", layer=f"{pz_name}_moving-areas")
+        )
+
+    def similarity_path(
+        self, pz_name: str, image_type: str = IMAGE_TYPE_OPTICAL
+    ) -> pathlib.Path:
+        """JSON trace of :meth:`compute_thumbs_similarity` for one pzone and type.
+
+        ``<pzone>/similarity/thumb_similarity_<pz>[_<type>].json``. The type
+        suffix is omitted for ``"opt"``. Layout:
+        :mod:`geomulticorr.similarity.trace`.
+        """
+        t = normalise_image_type(image_type)
+        suffix = "" if t == IMAGE_TYPE_OPTICAL else f"_{t}"
+        return (
+            self.pz_dir(pz_name, PZ_KIND_SIMILARITY)
+            / f"thumb_similarity_{pz_name}{suffix}.json"
+        )
+
+    def _similarity_trace_path(self, pz_name: str, image_type: str) -> pathlib.Path:
+        """:meth:`similarity_path`, after moving a trace left in ``image_correlation/``.
+
+        Traces written before the ``similarity/`` folder existed sit in
+        ``image_correlation/`` under the same name; the first read or write
+        moves such a file once. A failed move is logged and the old file is
+        left where it is (the new path is then simply absent).
+        """
+        path = self.similarity_path(pz_name, image_type)
+        old = self.pz_dir(pz_name, PZ_KIND_IMAGE_CORRELATION) / path.name
+        if not path.exists() and old.exists():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(old), str(path))
+                logger.info(f"Moved the similarity trace {old} → {path}")
+            except OSError as exc:
+                logger.warning(f"Could not move the similarity trace {old}: {exc}")
+        return path
+
+    @gmc_profile("gmc.session.compute_thumbs_similarity", memprof=True)
+    def compute_thumbs_similarity(
+        self,
+        pz_name: str,
+        image_type: str = IMAGE_TYPE_OPTICAL,
+        couples: str = "all",
+        max_step: int | None = None,
+        sensor_filter: str | None = None,
+        cross_sensor_only: bool = False,
+        moving_areas: Any = "auto",
+        moving_buffer: float = 0.0,
+        grid: str = "coarser",
+        save: bool = True,
+        overwrite: bool = False,
+        progress: bool = True,
+        plots: bool = True,
+        formats: Sequence[str] = ("png",),
+        **report_kwargs,
+    ) -> pd.DataFrame:
+        """Measure how alike the thumbs of a pzone are, couple by couple.
+
+        A predictor of correlability computed from the images alone, before
+        anything is sent to ASP — see ``docs/source/theory/image_similarity.md``
+        for what each metric means. Every couple is put on a common grid and
+        measured **on stable ground** (outside the pzone's moving areas): on
+        moving terrain two images are *supposed* to differ.
+
+        Couples are **unordered**, left = earlier date; similarity is (nearly)
+        symmetric, so a forward and a backward pair share one row.
+
+        Thumb files are located through :meth:`thumb_dir`, not the stored
+        ``th_path``, so a project that was moved still resolves.
+
+        Results go to the JSON trace :meth:`similarity_path`, one *run* per set
+        of parameters (``params_hash``). With ``overwrite=False`` a couple
+        already stored in the same run is reused, so adding thumbs only measures
+        the new couples; changing any parameter starts another run (earlier runs
+        are kept). A write failure is logged, never raised.
+
+        Every row gets a ``score``: the mean percentile rank of
+        ``trial_peak_median``, ``coh_mean``, ``trial_valid_frac`` and (inverted)
+        ``trial_sigma_px`` **over the whole run**, so ``score >= 0.8`` means
+        "better than 80 % of this dataset's couples". It is recomputed whenever
+        couples are added to the run.
+
+        With ``plots=True`` the dataset overview is written to
+        ``<pzone>/figures/similarity/``: thumb × thumb matrices, indices per
+        sensor combination and, once at least five of the couples have been
+        correlated and corrected, the validation of every index against what
+        ASP achieved (re-run after correlation: the couples are reused, only
+        the figure is new).
+
+        Args:
+            pz_name: Processing zone.
+            image_type: Thumb type, as everywhere else (``"opt"``, ``"hillshade"``…).
+            couples: ``"all"`` (every couple) or a pairing strategy name
+                (``"consecutive"``, ``"step"``, ``"redundancy"``,
+                ``"forward-backward"``) to measure only the couples it would pair.
+            max_step: For ``"step"`` / ``"redundancy"``.
+            sensor_filter: Case-insensitive substring of the thumb file name.
+            cross_sensor_only: Keep only couples whose sensor **families** differ
+                (``spot6``↔``spot7`` is not cross-sensor).
+            moving_areas: ``"auto"`` (the pzone's polygons from
+                :meth:`get_moving_areas`, with a warning when none are loaded),
+                ``None`` (all terrain), or a path / GeoDataFrame / ``gu.Vector``.
+            moving_buffer: Margin around the polygons, in metres.
+            grid: ``"coarser"`` (each couple on its coarser image's grid — what a
+                cross-sensor pair is correlated on) or ``"reference"`` (the
+                pzone reference grid, for every couple).
+            save: Write the JSON trace.
+            overwrite: Recompute couples even when a matching row is stored.
+            progress: Show a progress bar.
+            plots: Write the overview figures.
+            formats: Figure formats (``"png"``, ``"pdf"``, ``"svg"``, ``"jpg"``).
+            **report_kwargs: Metric settings — ``kernel`` (default 21, as
+                :meth:`prepare_pairs_correlation`), ``search``,
+                ``prefilter_mode``, ``prefilter_width``, ``n_tiles``,
+                ``min_peak``, ``tile``, ``bins``, ``rng``. Use the values the
+                pairs are (or will be) correlated with.
+
+        Returns:
+            One row per requested couple: :data:`SIMILARITY_ID_COLUMNS`, then
+            ``similarity.raster.REPORT_KEYS``, then ``score``; sorted by dates.
+        """
+        # Imported here: scikit-image is only needed by this method.
+        import hashlib
+        import json
+
+        from geomulticorr.similarity import raster as sim_raster
+        from geomulticorr.similarity import trace as sim_trace
+        from geomulticorr.similarity.selection import sensor_family
+
+        t = normalise_image_type(image_type)
+        params = sim_raster.report_params(**report_kwargs)
+
+        thumbs = self._thumbs
+        if thumbs is None or len(thumbs) == 0:
+            raise ValueError("The Thumbs layer is empty; run update_thumbs() first")
+        thumbs = thumbs[
+            (thumbs["th_pz_name"] == pz_name) & (type_column(thumbs, "th_type") == t)
+        ].copy()
+        thumbs["file"] = [
+            self.thumb_dir(pz_name, t) / pathlib.Path(str(p)).name
+            for p in thumbs["th_path"]
+        ]
+        if sensor_filter:
+            thumbs = thumbs[
+                thumbs["file"].map(lambda p: sensor_filter.lower() in p.name.lower())
+            ]
+        missing = ~thumbs["file"].map(lambda p: p.exists())
+        if missing.any():
+            logger.warning(
+                f"{int(missing.sum())} thumb(s) of '{pz_name}' not found in "
+                f"{self.thumb_dir(pz_name, t)}; skipped"
+            )
+            thumbs = thumbs[~missing]
+        thumbs = thumbs.sort_values("th_date").reset_index(drop=True)
+        if len(thumbs) < 2:
+            raise ValueError(
+                f"Need at least two {t!r} thumbs in '{pz_name}', found {len(thumbs)}"
+            )
+
+        if couples == "all":
+            idx = list(itertools.combinations(range(len(thumbs)), 2))
+        else:
+            raw = gmc_pzone._strategy_pair_indices(len(thumbs), couples, max_step)
+            idx = sorted({(min(i, j), max(i, j)) for i, j in raw})
+        families = [sensor_family(x) for x in thumbs["th_sensor"]]
+        if cross_sensor_only:
+            idx = [(i, j) for i, j in idx if families[i] != families[j]]
+
+        if isinstance(moving_areas, str) and moving_areas == "auto":
+            if self.moving_areas_path(pz_name).exists():
+                moving_source = f"auto:{self.moving_areas_path(pz_name).name}"
+                moving_areas = self.get_moving_areas(pz_name)
+            else:
+                logger.warning(
+                    f"No moving areas loaded for '{pz_name}': similarity is measured "
+                    f"on all terrain, moving areas included. Load them with "
+                    f"session.load_moving_areas({pz_name!r}, <source>)"
+                )
+                moving_source, moving_areas = "none", None
+        elif moving_areas is None:
+            moving_source = "none"
+        else:
+            moving_source = (
+                f"custom:{moving_areas}"
+                if isinstance(moving_areas, (str, pathlib.Path))
+                else "custom"
+            )
+
+        if grid == "reference":
+            target = sim_raster.Grid.of(self.reference_grid_path(pz_name))
+        elif grid == "coarser":
+            target = "coarser"
+        else:
+            raise ValueError(f"grid must be 'coarser' or 'reference', got {grid!r}")
+
+        fingerprint = dict(
+            params, grid=grid, moving=moving_source, moving_buffer=moving_buffer
+        )
+        params_hash = hashlib.sha1(
+            json.dumps(fingerprint, sort_keys=True).encode()
+        ).hexdigest()[:10]
+
+        path = self._similarity_trace_path(pz_name, t)
+        legacy_csv = (
+            self.pz_dir(pz_name, PZ_KIND_IMAGE_CORRELATION)
+            / path.with_suffix(".csv").name
+        )
+        if legacy_csv.exists() and not path.exists():
+            logger.info(
+                f"{legacy_csv.name} (CSV, before the JSON trace) is not read; "
+                f"its couples are measured again into {path.name}"
+            )
+        doc = sim_trace.empty_trace(pz_name, t)
+        if path.exists():
+            try:
+                doc = sim_trace.read_trace(path)
+            except (OSError, ValueError) as exc:
+                logger.warning(f"Could not read {path}: {exc}; starting a new trace")
+        stored = pd.DataFrame()
+        if params_hash in doc["runs"]:
+            stored = sim_trace.run_frame(doc, params_hash)
+        reusable = set()
+        if not overwrite and not stored.empty:
+            reusable = set(zip(stored["left_key"], stored["right_key"]))
+
+        keys = [p.stem for p in thumbs["file"]]
+        todo = [(i, j) for i, j in idx if (keys[i], keys[j]) not in reusable]
+        logger.info(
+            f"Similarity '{pz_name}' ({t}): {len(idx)} couple(s), "
+            f"{len(idx) - len(todo)} reused, {len(todo)} to measure "
+            f"(params {params_hash})"
+        )
+
+        cache: dict = {}
+        rows = []
+        for i, j in tqdm.tqdm(todo, disable=not progress, desc="similarity"):
+            a, b = thumbs.iloc[i], thumbs.iloc[j]
+            try:
+                report = sim_raster.compare_rasters(
+                    a["file"],
+                    b["file"],
+                    moving_areas=moving_areas,
+                    buffer=moving_buffer,
+                    grid=target,
+                    cache=cache,
+                    **params,
+                )
+            except Exception as exc:  # one unreadable file must not stop a batch
+                logger.warning(f"Similarity {keys[i]} / {keys[j]} failed: {exc}")
+                continue
+            da = pd.Timestamp(a["th_date"])
+            db = pd.Timestamp(b["th_date"])
+            rows.append(
+                {
+                    "pz_name": pz_name,
+                    "image_type": t,
+                    "left_key": keys[i],
+                    "right_key": keys[j],
+                    "left_date": str(a["th_date"]),
+                    "right_date": str(b["th_date"]),
+                    "left_sensor": a["th_sensor"],
+                    "right_sensor": b["th_sensor"],
+                    "cross_sensor": families[i] != families[j],
+                    "dt_days": abs((db - da).days),
+                    "doy_diff": abs(da.dayofyear - db.dayofyear),
+                    "params_hash": params_hash,
+                    **report,
+                }
+            )
+        columns = list(SIMILARITY_ID_COLUMNS) + list(sim_raster.REPORT_KEYS) + ["score"]
+        new = pd.DataFrame(rows, columns=columns[:-1])
+
+        # The whole run is rescored on every merge (score is a percentile).
+        run = sim_trace.merge_run(doc, params_hash, fingerprint, new)
+        if run.empty:
+            run = pd.DataFrame(columns=columns)
+        wanted = {(keys[i], keys[j]) for i, j in idx}
+        in_request = np.array(
+            [k in wanted for k in zip(run["left_key"], run["right_key"])], dtype=bool
+        )
+        result = (
+            run[in_request]
+            .reindex(columns=columns)
+            .sort_values(["left_date", "right_date"], ignore_index=True)
+        )
+        result["cross_sensor"] = result["cross_sensor"].astype(bool)
+
+        if save:  # also when all reused: the run becomes the latest (seq)
+            if sim_trace.write_trace(path, doc) is None:
+                logger.warning(f"Could not write thumb similarity to {path}")
+            else:
+                logger.file(f"Thumb similarity written: {path}")
+        if plots and not result.empty:
+            self._write_similarity_figures(pz_name, t, result, formats)
+        return result
+
+    def load_thumbs_similarity(
+        self,
+        pz_name: str,
+        image_type: str = IMAGE_TYPE_OPTICAL,
+        params_hash: str | None = None,
+    ) -> pd.DataFrame:
+        """Read one run of the similarity trace back, without recomputing.
+
+        What :meth:`explore_similarity_pairs` and
+        ``update_pairs(strategy="similarity")`` read.
+
+        Args:
+            pz_name: Processing zone.
+            image_type: Thumb type.
+            params_hash: Run to read; ``None`` → the most recently updated run.
+
+        Returns:
+            The run's couples, with ``score``.
+
+        Raises:
+            FileNotFoundError: No trace yet — run :meth:`compute_thumbs_similarity`.
+            KeyError: No such run in the trace.
+        """
+        from geomulticorr.similarity import trace as sim_trace
+
+        t = normalise_image_type(image_type)
+        path = self._similarity_trace_path(pz_name, t)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"No similarity trace for '{pz_name}' ({t}) at {path}. "
+                f"Run session.compute_thumbs_similarity({pz_name!r}, ...) first."
+            )
+        frame = sim_trace.run_frame(sim_trace.read_trace(path), params_hash)
+        if "cross_sensor" in frame.columns:
+            frame["cross_sensor"] = frame["cross_sensor"].astype(bool)
+        return frame.sort_values(["left_date", "right_date"], ignore_index=True)
+
+    def _similarity_outcomes(
+        self, pz_name: str, image_type: str = IMAGE_TYPE_OPTICAL
+    ) -> pd.DataFrame:
+        """What ASP achieved, per correlated thumb couple, from the pair stats JSON.
+
+        Keyed by the **sorted pair of thumb stems** parsed from each pair key
+        (``couple_key_from_pair_name``), the same key the similarity rows carry;
+        pairs whose key predates the ``__`` format fall back on
+        ``<pz>_<date>_<sensor>``. Forward and backward pairs are averaged.
+
+        Reads the stats JSON (the source the Pairs-layer stats columns are
+        synced from), so it works whether or not those columns exist yet; a
+        pair with no JSON contributes nothing.
+
+        Returns:
+            Indexed by couple: ``cc_median``, ``cc_q50`` (fraction of CC ≥ 0.5)
+            and ``nmad_m`` (``hypot`` of the corrected EW/NS NMAD on stable
+            ground, metres; NaN until corrections ran). Empty when nothing is
+            correlated.
+        """
+        import json
+
+        from geomulticorr.similarity.validation import couple_key_from_pair_name
+
+        t = normalise_image_type(image_type)
+        cols = ["cc_median", "cc_q50", "nmad_m"]
+        pairs = self._pairs
+        if pairs is None or len(pairs) == 0:
+            return pd.DataFrame(columns=cols)
+        pairs = pairs[
+            (pairs["pa_pz_name"] == pz_name) & (type_column(pairs, "pa_type") == t)
+        ]
+        root = self.pair_dir(pz_name, t)
+        rows = []
+        for _, p in pairs.iterrows():
+            name = pathlib.Path(str(p["pa_path"])).name
+            try:
+                js = json.loads((root / name / f"{name}.json").read_text())
+            except (OSError, ValueError):
+                continue
+            couple = couple_key_from_pair_name(name) or tuple(
+                sorted(
+                    (
+                        f"{pz_name}_{p['pa_left_date']}_{p['pa_left_sensor']}",
+                        f"{pz_name}_{p['pa_right_date']}_{p['pa_right_sensor']}",
+                    )
+                )
+            )
+            cc = js.get("raw_corr_stats", {}).get("cc", {})
+            fin = js.get("final_corrected_stats", {})
+            nmad = np.nan
+            if "ew" in fin and "ns" in fin:
+                nmad = float(np.hypot(fin["ew"].get("nmad"), fin["ns"].get("nmad")))
+            rows.append(
+                {
+                    "couple": couple,
+                    "cc_median": cc.get("median", np.nan),
+                    "cc_q50": cc.get("cc_quality_gte_050", np.nan),
+                    "nmad_m": nmad,
+                }
+            )
+        if not rows:
+            return pd.DataFrame(columns=cols)
+        frame = pd.DataFrame(rows)
+        frame[cols] = frame[cols].apply(pd.to_numeric, errors="coerce")
+        return frame.groupby("couple")[cols].mean()
+
+    def similarity_validation(
+        self,
+        pz_name: str,
+        image_type: str = IMAGE_TYPE_OPTICAL,
+        sim: pd.DataFrame | None = None,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Compare similarity with what ASP achieved on the correlated couples.
+
+        Args:
+            pz_name: Processing zone.
+            image_type: Thumb type.
+            sim: A similarity frame; default the latest stored run.
+
+        Returns:
+            ``(matched, table)``: the similarity rows of the correlated couples
+            with their outcomes (``cc_median``, ``cc_q50``, ``nmad_m``,
+            ``nmad_px``), and the Spearman ρ of every index against every
+            outcome (empty below
+            :data:`~geomulticorr.similarity.validation.MIN_VALIDATION_COUPLES`
+            matched couples).
+        """
+        from geomulticorr.similarity import validation as sim_val
+
+        if sim is None:
+            sim = self.load_thumbs_similarity(pz_name, image_type)
+        outcomes = self._similarity_outcomes(pz_name, image_type)
+        if outcomes.empty:
+            return pd.DataFrame(), pd.DataFrame()
+        matched = sim_val.match_outcomes(sim, outcomes)
+        if len(matched) < sim_val.MIN_VALIDATION_COUPLES:
+            return matched, pd.DataFrame()
+        return matched, sim_val.spearman_table(matched)
+
+    def _write_similarity_figures(
+        self,
+        pz_name: str,
+        image_type: str,
+        frame: pd.DataFrame,
+        formats: Sequence[str] = ("png",),
+    ) -> list[pathlib.Path]:
+        """Write the dataset overview of a similarity run. Never raises.
+
+        ``<pzone>/figures/similarity/<pz>[_<type>]_similarity_{matrices,
+        by_sensor,validation}.<fmt>``. The validation figure needs at least
+        :data:`~geomulticorr.similarity.validation.MIN_VALIDATION_COUPLES`
+        correlated couples; below that it is skipped with one info line.
+        File names carry no parameter: re-running refreshes the same files.
+        """
+        import matplotlib.pyplot as plt
+
+        from geomulticorr.similarity import validation as sim_val
+        from geomulticorr.utils import gmc_functions as gmc_fn
+
+        formats = [f for f in formats if f in ("png", "pdf", "svg", "jpg")]
+        suffix = "" if image_type == IMAGE_TYPE_OPTICAL else f"_{image_type}"
+        stem = f"{pz_name}{suffix}_similarity"
+        out_dir = self.pz_dir(pz_name, PZ_KIND_FIGURES) / "similarity"
+        written: list[pathlib.Path] = []
+
+        def _save(build, name):
+            fig = None
+            try:
+                fig = build()
+                if isinstance(fig, tuple):
+                    fig = fig[0]
+                out_dir.mkdir(parents=True, exist_ok=True)
+                for fmt in formats:
+                    path = out_dir / f"{stem}_{name}.{fmt}"
+                    fig.savefig(path, dpi=120)
+                    written.append(path)
+            except Exception as exc:  # a figure must never cost the computation
+                logger.warning(f"Could not write similarity figure '{name}': {exc}")
+            finally:
+                if fig is not None:
+                    plt.close(fig)
+
+        title = f"{pz_name} — {len(frame)} couples"
+        _save(
+            lambda: gmc_fn.plot_similarity_matrices(frame, fig_name=title), "matrices"
+        )
+        _save(
+            lambda: gmc_fn.plot_similarity_by_sensor(frame, fig_name=title),
+            "by_sensor",
+        )
+
+        matched, table = self.similarity_validation(pz_name, image_type, frame)
+        if len(matched) >= sim_val.MIN_VALIDATION_COUPLES:
+            _save(
+                lambda: gmc_fn.plot_similarity_validation(table, n=len(matched)),
+                "validation",
+            )
+        else:
+            logger.info(
+                f"Similarity validation skipped for '{pz_name}': {len(matched)} "
+                f"correlated couple(s), {sim_val.MIN_VALIDATION_COUPLES} needed. "
+                f"Re-run compute_thumbs_similarity after correlation and corrections."
+            )
+        if written:
+            logger.file(f"Similarity figures written to {out_dir}")
+        return written
+
+    #: ``**defaults`` accepted by :meth:`explore_similarity_pairs`; with
+    #: ``strategy``, ``pz_name`` and ``image_type`` they are exactly the
+    #: ``update_pairs`` keywords the explorer stashes.
+    _SIMILARITY_EXPLORER_DEFAULTS = frozenset(
+        {
+            "similarity_metric",
+            "min_similarity",
+            "per_image",
+            "cross_sensor_only",
+            "max_dt_days",
+            "min_dt_days",
+            "both_directions",
+            "sensor_filter",
+        }
+    )
+
+    @staticmethod
+    def _similarity_sensor_filter(sim: pd.DataFrame, sensor_filter) -> pd.DataFrame:
+        """Couples whose two thumb names both contain *sensor_filter* (any case)."""
+        if not sensor_filter:
+            return sim
+        f = str(sensor_filter).lower()
+        keep = sim["left_key"].str.lower().str.contains(f, regex=False) & sim[
+            "right_key"
+        ].str.lower().str.contains(f, regex=False)
+        return sim[keep]
+
+    def explore_similarity_pairs(
+        self,
+        pz_name: str,
+        image_type: str = IMAGE_TYPE_OPTICAL,
+        view: str = "matrix",
+        interactive: bool = True,
+        params_hash: str | None = None,
+        **defaults,
+    ):
+        """Interactively choose couples from the similarity trace, then commit them.
+
+        Reads the run written by :meth:`compute_thumbs_similarity` **once**; no
+        raster is opened and no ``Thumb`` is built, so every control change is
+        a pandas filter over at most n(n−1)/2 rows plus a figure redraw —
+        milliseconds even for hundreds of thumbs.
+
+        Controls: the metric (``score`` or a raw index) and its threshold
+        (``>=``, or ``<=`` for ``trial_sigma_px``), cross-sensor only, a cap
+        per image (0 = none; per minority-sensor image when cross-sensor),
+        Δt window (duration strings, ``"2Y"``), direction, and the view:
+
+        ==========  ==============================================================
+        ``matrix``  thumb × thumb heatmap of the metric, selected couples outlined
+        ``network`` the selected pairs on the timeline (coloured by sensor)
+        ==========  ==============================================================
+
+        The **Save figure** button writes the view on screen to
+        ``<pzone>/figures/similarity/`` in the chosen formats (``html`` via
+        plotly, ``png``/``jpg``/``pdf``/``svg`` via matplotlib), named after the
+        selection; :meth:`save_similarity_figure` is the scripted equivalent.
+
+        The current selection is stashed on ``self._last_similarity_params`` as
+        ``update_pairs`` keywords, so committing it is one line::
+
+            session.explore_similarity_pairs("PasDeLours")
+            session.update_pairs(**session._last_similarity_params, append=True)
+
+        ``interactive=False`` skips the widgets and returns
+        ``(selected_frame, fig)`` for the arguments given (stashing the same
+        way); it imports no ipywidgets.
+
+        :param pz_name: Processing zone.
+        :param image_type: Thumb type.
+        :param view: Initial view (see above).
+        :param interactive: Build the widget (default) or return results.
+        :param params_hash: Similarity run to read; default the latest.
+        :param defaults: Initial values / actual parameters:
+            ``similarity_metric`` (``"score"``), ``min_similarity``,
+            ``per_image``, ``cross_sensor_only``, ``max_dt_days``,
+            ``min_dt_days``, ``both_directions`` (``True``), ``sensor_filter``.
+        :returns: An ``ipywidgets.VBox`` when *interactive* (returned, not
+            displayed: Jupyter shows the value of the last expression, and
+            displaying it here too drew the explorer twice), else
+            ``(selected_frame, fig)``.
+        """
+        from geomulticorr.similarity import selection as sim_selection
+        from geomulticorr.utils import _similarity_plotly as sim_plotly
+
+        if view not in sim_plotly.SIMILARITY_VIEWS:
+            raise ValueError(
+                f"Unknown view {view!r}. Valid options: {list(sim_plotly.SIMILARITY_VIEWS)}."
+            )
+        unknown = set(defaults) - self._SIMILARITY_EXPLORER_DEFAULTS
+        if unknown:
+            raise TypeError(
+                f"Unexpected argument(s) {sorted(unknown)}. "
+                f"Valid options: {sorted(self._SIMILARITY_EXPLORER_DEFAULTS)}."
+            )
+        t = normalise_image_type(image_type)
+        sim = self.load_thumbs_similarity(pz_name, t, params_hash)
+        metrics = [m for m in sim_selection.METRIC_HIGHER_IS_BETTER if m in sim.columns]
+        metric0 = defaults.get("similarity_metric", "score")
+        if metric0 not in metrics:
+            raise ValueError(
+                f"similarity_metric must be one of {metrics}, got {metric0!r}"
+            )
+
+        def _select(metric, threshold, cross, per_image, max_dt, min_dt, sfilter):
+            sub = self._similarity_sensor_filter(sim, sfilter)
+            # Resolved as a module attribute so tests can count recomputes.
+            return sim_selection.select_couples(
+                sub,
+                metric=metric,
+                threshold=threshold,
+                cross_sensor_only=cross,
+                per_image=per_image or None,
+                max_dt_days=max_dt,
+                min_dt_days=min_dt,
+            )
+
+        def _stash(metric, threshold, cross, per_image, max_dt, min_dt, both, sfilter):
+            self._last_similarity_params = {
+                "strategy": "similarity",
+                "pz_name": pz_name,
+                "image_type": t,
+                "similarity_metric": metric,
+                "min_similarity": None if threshold is None else float(threshold),
+                "per_image": per_image or None,
+                "cross_sensor_only": bool(cross),
+                "max_dt_days": max_dt,
+                "min_dt_days": min_dt,
+                "both_directions": bool(both),
+                "sensor_filter": sfilter or None,
+            }
+
+        def _summary(selected, both, cross) -> str:
+            n = len(selected)
+            text = (
+                f"{n} couple(s) selected of {len(sim)} → "
+                f"{n * (2 if both else 1)} pair(s)"
+            )
+            if cross and n:
+                cov = sim_selection.bridge_coverage(sim, selected)
+                lonely = cov[cov["n_bridges"] == 0]["anchor_key"].tolist()
+                text += f"; {len(cov) - len(lonely)}/{len(cov)} anchor image(s) bridged"
+                if lonely:
+                    text += " — no bridge: " + ", ".join(
+                        k.split("_", 1)[-1] for k in lonely
+                    )
+            return text
+
+        def _title(metric, threshold) -> str:
+            op = ">=" if sim_selection.METRIC_HIGHER_IS_BETTER[metric] else "<="
+            thr = "any" if threshold is None else f"{op} {threshold:.3g}"
+            return f"{pz_name} — {metric} {thr}"
+
+        # ---- headless --------------------------------------------------------
+        if not interactive:
+            args = (
+                metric0,
+                defaults.get("min_similarity"),
+                bool(defaults.get("cross_sensor_only", False)),
+                defaults.get("per_image"),
+                _parse_dt_days(defaults.get("max_dt_days")),
+                _parse_dt_days(defaults.get("min_dt_days")),
+                defaults.get("sensor_filter"),
+            )
+            both = bool(defaults.get("both_directions", True))
+            selected = _select(*args)
+            _stash(*args[:6], both, args[6])
+            fig = sim_plotly.figure_similarity_view(
+                view,
+                sim,
+                selected,
+                metric=metric0,
+                both_directions=both,
+                title=_title(metric0, args[1]),
+            )
+            logger.info(_summary(selected, both, args[2]))
+            return selected, fig
+
+        # ---- widgets ---------------------------------------------------------
+        import ipywidgets as widgets
+        from IPython.display import clear_output, display
+
+        from geomulticorr.utils import _similarity_export as sim_export
+        from geomulticorr.utils._pairs_export import FIGURE_FORMATS
+
+        def _range(metric):
+            v = pd.to_numeric(sim[metric], errors="coerce").to_numpy(dtype=float)
+            v = v[np.isfinite(v)]
+            lo, hi = (float(v.min()), float(v.max())) if v.size else (0.0, 1.0)
+            if metric == "score":
+                lo, hi = 0.0, 1.0
+            if hi <= lo:
+                hi = lo + 1e-6
+            return lo, hi
+
+        def _permissive(metric):
+            lo, hi = _range(metric)
+            return lo if sim_selection.METRIC_HIGHER_IS_BETTER[metric] else hi
+
+        lo, hi = _range(metric0)
+        thr0 = defaults.get("min_similarity")
+        w_metric = widgets.Dropdown(
+            options=metrics, value=metric0, description="metric"
+        )
+        w_thr = widgets.FloatSlider(
+            value=_permissive(metric0) if thr0 is None else min(max(thr0, lo), hi),
+            min=lo,
+            max=hi,
+            step=(hi - lo) / 100,
+            description="threshold",
+            readout_format=".3f",
+            continuous_update=False,
+        )
+        w_cross = widgets.Checkbox(
+            value=bool(defaults.get("cross_sensor_only", False)),
+            description="cross-sensor only",
+        )
+        n_thumbs = len(sim_selection.thumb_order(sim))
+        w_per = widgets.IntSlider(
+            value=int(defaults.get("per_image") or 0),
+            min=0,
+            max=max(n_thumbs - 1, 1),
+            description="per image",
+            continuous_update=False,
+        )
+        w_max_dt = widgets.Text(
+            value=str(defaults.get("max_dt_days") or ""),
+            description="max Δt",
+            placeholder="e.g. 2Y, 400D",
+        )
+        w_min_dt = widgets.Text(
+            value=str(defaults.get("min_dt_days") or ""),
+            description="min Δt",
+            placeholder="e.g. 30D",
+        )
+        w_both = widgets.Checkbox(
+            value=bool(defaults.get("both_directions", True)),
+            description="both directions",
+        )
+        w_view = widgets.Dropdown(
+            options=[(label, k) for k, label in sim_plotly.SIMILARITY_VIEWS.items()],
+            value=view,
+            description="view",
+        )
+        w_formats = widgets.SelectMultiple(
+            options=list(FIGURE_FORMATS),
+            value=("html", "png"),
+            rows=len(FIGURE_FORMATS),
+            description="formats",
+        )
+        b_save = widgets.Button(description="Save figure", icon="save")
+        status = widgets.HTML()
+        save_status = widgets.HTML()
+        summary = widgets.HTML()
+        out = widgets.Output()
+        state = {"syncing": False, "dt": (None, None), "selected": None}
+
+        def _read_dt():
+            try:
+                dts = (
+                    _parse_dt_days(w_max_dt.value.strip() or None),
+                    _parse_dt_days(w_min_dt.value.strip() or None),
+                )
+            except ValueError as exc:
+                status.value = f"<span style='color:#c0392b'>{exc}</span>"
+                return state["dt"]
+            status.value = ""
+            state["dt"] = dts
+            return dts
+
+        def _current():
+            max_dt, min_dt = _read_dt()
+            thr = w_thr.value
+            if np.isclose(thr, _permissive(w_metric.value)):
+                thr = None
+            return (
+                w_metric.value,
+                thr,
+                w_cross.value,
+                w_per.value,
+                max_dt,
+                min_dt,
+                defaults.get("sensor_filter"),
+            )
+
+        def _draw():
+            args = _current()
+            fig = sim_plotly.figure_similarity_view(
+                w_view.value,
+                sim,
+                state["selected"],
+                metric=args[0],
+                both_directions=w_both.value,
+                title=_title(args[0], args[1]),
+            )
+            with out:
+                clear_output(wait=True)
+                display(fig)
+
+        def _recompute(_change=None):
+            if state["syncing"]:
+                return
+            args = _current()
+            state["selected"] = _select(*args)
+            _stash(*args[:6], w_both.value, args[6])
+            summary.value = _summary(state["selected"], w_both.value, args[2])
+            _draw()
+
+        def _on_metric(change):
+            if state["syncing"]:
+                return
+            state["syncing"] = True
+            try:
+                lo, hi = _range(change["new"])
+                # widen first so neither bound clamps the value mid-update
+                w_thr.min, w_thr.max = min(lo, w_thr.min), max(hi, w_thr.max)
+                w_thr.value = _permissive(change["new"])
+                w_thr.min, w_thr.max, w_thr.step = lo, hi, (hi - lo) / 100
+            finally:
+                state["syncing"] = False
+            _recompute()
+
+        def _on_view(_change):
+            if not state["syncing"]:
+                _draw()
+
+        w_metric.observe(_on_metric, names="value")
+        for w in (w_thr, w_cross, w_per, w_both):
+            w.observe(_recompute, names="value")
+        for w in (w_max_dt, w_min_dt):
+            w.observe(_recompute, names="value")
+
+        def _on_save(_button):
+            # Never raise: an exception in a widget callback only reaches the
+            # kernel log, which VSCode hides. Saving draws what is selected
+            # already; it does not recompute the selection.
+            b_save.disabled = True
+            save_status.value = "<i>saving…</i>"
+            try:
+                params = dict(self._last_similarity_params)
+                paths = sim_export.save_similarity_figure(
+                    sim,
+                    state["selected"],
+                    self._similarity_figures_dir(pz_name),
+                    view=w_view.value,
+                    formats=tuple(w_formats.value) or ("html",),
+                    stem=sim_export.similarity_figure_stem(w_view.value, **params),
+                    title=_title(params["similarity_metric"], params["min_similarity"]),
+                    metric=params["similarity_metric"],
+                    both_directions=w_both.value,
+                    pz_name=pz_name,
+                )
+                names = " ".join(f"<code>{p.name}</code>" for p in paths.values())
+                folder = next(iter(paths.values())).parent
+                save_status.value = (
+                    f"<span style='color:#2a7'>✔ saved to</span> "
+                    f"<code>{folder}</code><br>{names}"
+                )
+            except Exception as exc:
+                logger.error(f"save_similarity_figure failed: {exc!r}")
+                save_status.value = (
+                    f"<span style='color:#c33'>✘ save failed — "
+                    f"{type(exc).__name__}: {exc}</span>"
+                )
+            finally:
+                b_save.disabled = False
+
+        w_view.observe(_on_view, names="value")
+        b_save.on_click(_on_save)
+
+        _recompute()
+        box = widgets.VBox(
+            [
+                widgets.HBox([w_metric, w_thr, w_view]),
+                widgets.HBox([w_cross, w_per, w_both]),
+                widgets.HBox([w_max_dt, w_min_dt]),
+                status,
+                summary,
+                widgets.HTML(
+                    "Commit with <code>session.update_pairs("
+                    "**session._last_similarity_params, append=True)</code>"
+                ),
+                out,
+                save_status,
+                widgets.HBox([w_formats, b_save]),
+            ]
+        )
+        return box
+
+    def _similarity_figures_dir(self, pz_name: str) -> pathlib.Path:
+        """``<pzone>/figures/similarity/`` (project-wide figures in legacy)."""
+        return self.pz_dir(pz_name, PZ_KIND_FIGURES) / "similarity"
+
+    def save_similarity_figure(
+        self,
+        view: str = "matrix",
+        pz_name: str | None = None,
+        *,
+        formats: str | Sequence[str] = ("html", "png"),
+        stem: str | None = None,
+        title: str = "",
+        overwrite: bool = True,
+        dpi: int = 300,
+        plotlyjs: bool | str = True,
+        params_hash: str | None = None,
+        **selection,
+    ) -> dict:
+        """Save a view of a similarity selection — the explorer's button, scripted.
+
+        With no *selection* keywords, the last selection of
+        :meth:`explore_similarity_pairs` (``self._last_similarity_params``) is
+        drawn; otherwise *selection* takes the explorer's keywords
+        (``similarity_metric``, ``min_similarity``, ``per_image``,
+        ``cross_sensor_only``, ``max_dt_days``, ``min_dt_days``,
+        ``both_directions``, ``sensor_filter``, ``image_type``).
+        Files go to ``<pzone>/figures/similarity/``, named after the selection
+        (:func:`~geomulticorr.utils._similarity_export.similarity_figure_stem`)::
+
+            session.explore_similarity_pairs("PasDeLours", cross_sensor_only=True, per_image=2)
+            session.save_similarity_figure("network", formats=("png", "pdf"))
+
+        :param view: ``"matrix"`` or ``"network"``.
+        :param pz_name: Pzone; default the one of the stashed selection.
+        :param formats: Any of ``html``, ``png``, ``jpg``, ``pdf``, ``svg``.
+        :param stem: File stem; derived from the selection when omitted.
+        :param title: Figure title; derived from the selection when omitted.
+        :param overwrite: Replace a file of the same name (default).
+        :param dpi: Raster resolution of the matplotlib output.
+        :param plotlyjs: ``True`` inlines plotly.js in the html (offline).
+        :param params_hash: Similarity run to read; default the latest.
+        :returns: ``{format: Path}`` for every file written.
+        :raises ValueError: Neither a selection nor a pzone to take one from.
+        """
+        from geomulticorr.similarity.selection import METRIC_HIGHER_IS_BETTER
+        from geomulticorr.utils import _similarity_export as sim_export
+
+        stash = dict(getattr(self, "_last_similarity_params", None) or {})
+        if not selection:
+            selection = {
+                k: v
+                for k, v in stash.items()
+                if k in self._SIMILARITY_EXPLORER_DEFAULTS or k == "image_type"
+            }
+            pz_name = pz_name or stash.get("pz_name")
+        if not pz_name:
+            raise ValueError(
+                "pz_name is needed: no selection from explore_similarity_pairs yet"
+            )
+        image_type = selection.pop("image_type", IMAGE_TYPE_OPTICAL)
+        selected, _ = self.explore_similarity_pairs(
+            pz_name,
+            image_type,
+            view=view,
+            interactive=False,
+            params_hash=params_hash,
+            **selection,
+        )
+        params = self._last_similarity_params
+        metric, threshold = params["similarity_metric"], params["min_similarity"]
+        op = ">=" if METRIC_HIGHER_IS_BETTER[metric] else "<="
+        thr = "any" if threshold is None else f"{op} {threshold:.3g}"
+        return sim_export.save_similarity_figure(
+            self.load_thumbs_similarity(pz_name, image_type, params_hash),
+            selected,
+            self._similarity_figures_dir(pz_name),
+            view=view,
+            formats=formats,
+            stem=stem or sim_export.similarity_figure_stem(view, **params),
+            title=title or f"{pz_name} — {metric} {thr}",
+            metric=metric,
+            both_directions=params["both_directions"],
+            pz_name=pz_name,
+            dpi=dpi,
+            plotlyjs=plotlyjs,
+            overwrite=overwrite,
         )
 
     @staticmethod
@@ -2054,6 +3058,11 @@ class Session:
             extra_cols=extra_cols,
         )
 
+    #: Strategies :meth:`update_pairs` handles itself; the four classic ones are
+    #: delegated to :meth:`Pzone.get_valid_pairs_with_strategy_overview`.
+    SESSION_PAIR_STRATEGIES = ("similarity", "manual")
+
+    @gmc_profile("gmc.session.update_pairs")
     def update_pairs(
         self,
         strategy: str = "consecutive",
@@ -2064,12 +3073,39 @@ class Session:
         pz_name: str = "",
         append: bool = False,
         image_type: str = IMAGE_TYPE_OPTICAL,
+        min_similarity: float | None = None,
+        similarity_metric: str = "score",
+        per_image: int | None = None,
+        cross_sensor_only: bool = False,
+        both_directions: bool = True,
+        couples=None,
     ) -> gpd.GeoDataFrame:
-        """Build pairs for all pzones using the specified strategy and persist to geodatabase.
+        """Build pairs and persist them to the geodatabase — the one pairing entry point.
+
+        Three families of strategy:
+
+        - **Date-based** — ``"consecutive"``, ``"step"``, ``"redundancy"``,
+          ``"forward-backward"`` (unchanged). With ``min_similarity`` set, pairs
+          whose thumb couple scores below it in the similarity trace are dropped
+          (couples absent from the trace are dropped too, with a warning).
+        - ``"similarity"`` — pairs chosen from the similarity trace of
+          :meth:`compute_thumbs_similarity`: every measured couple passing the
+          Δt filters, ``sensor_filter``, ``cross_sensor_only``,
+          ``similarity_metric >= min_similarity`` and the ``per_image`` cap
+          (see :func:`geomulticorr.similarity.selection.select_couples`). This
+          is how cross-sensor bridges are formed; the interactive
+          :meth:`explore_similarity_pairs` stashes exactly these arguments.
+        - ``"manual"`` — the explicit ``couples`` you give.
+
+        A typical cross-sensor study::
+
+            session.update_pairs("redundancy", max_step=2, sensor_filter="planetscope")
+            session.update_pairs("redundancy", max_step=1, sensor_filter="spot", append=True)
+            session.update_pairs("similarity", cross_sensor_only=True, min_similarity=0.8,
+                                 per_image=2, max_dt_days="2Y", append=True)
 
         Args:
-            strategy: ``"consecutive"``, ``"step"``, ``"redundancy"``, or
-                ``"forward-backward"`` (explicit step-1 pairs in both directions).
+            strategy: One of the above.
             max_step: Maximum index offset between paired thumbs (required for
                 ``"step"`` and ``"redundancy"``).
             max_dt_days: Optional upper bound on the date gap. Accepts an integer
@@ -2090,24 +3126,84 @@ class Session:
                 Filters on the Thumbs layer's ``th_type`` column; pairs never
                 cross types. Pass ``append=True`` when adding a second type, or
                 the first type's pairs are replaced.
+            min_similarity: Threshold on ``similarity_metric`` (``>=``, or
+                ``<=`` for a lower-is-better metric such as ``trial_sigma_px``).
+                For ``score`` it is a percentile: ``0.8`` keeps couples better
+                than 80 % of the run's couples.
+            similarity_metric: ``"score"`` or a raw index (see
+                ``similarity.selection.METRIC_HIGHER_IS_BETTER``).
+            per_image: ``"similarity"`` only — at most this many couples per
+                image (per image of the minority sensor with
+                ``cross_sensor_only``), best first.
+            cross_sensor_only: ``"similarity"`` only — keep couples whose sensor
+                families differ.
+            both_directions: ``"similarity"`` and ``"manual"`` — also commit
+                each reverse pair, as ``"redundancy"`` does. Ignored by the
+                date-based strategies, which set directions themselves.
+            couples: ``"manual"`` only — ``(left_key, right_key)`` tuples of
+                thumb file stems, or a frame with ``left_key`` / ``right_key``
+                (a similarity frame or a selection works as is).
 
         Returns:
             GeoDataFrame of all pairs written to the ``Pairs`` layer.
+
+        Raises:
+            ValueError: An argument used with a strategy it does not apply to.
+            FileNotFoundError: ``"similarity"`` or ``min_similarity`` without a
+                similarity trace; ``"manual"`` with a missing thumb.
         """
         image_type = normalise_image_type(image_type)
         max_dt_days = _parse_dt_days(max_dt_days)
         min_dt_days = _parse_dt_days(min_dt_days)
+        if couples is not None and strategy != "manual":
+            raise ValueError("couples= is only used with strategy='manual'")
+        if strategy not in self.SESSION_PAIR_STRATEGIES and (
+            per_image is not None or cross_sensor_only
+        ):
+            raise ValueError(
+                "per_image and cross_sensor_only apply to strategy='similarity'; "
+                f"for {strategy!r} use min_similarity to filter by similarity"
+            )
+
+        if strategy == "manual":
+            if couples is None:
+                raise ValueError("strategy='manual' needs couples=[(left, right), ...]")
+            new_pairs = self._pairs_from_couples(couples, image_type, both_directions)
+            return self._write_pairs_layer(new_pairs, append)
+
         updated_frames = []
         for pz in self.get_pzones(pz_name):
-            logger.info(f"Updating pairs for PZone: '{pz.pz_name}'")
-            pairs_gdf = pz.get_valid_pairs_with_strategy_overview(
-                strategy,
-                max_step,
-                max_dt_days,
-                min_dt_days=min_dt_days,
-                sensor_filter=sensor_filter,
-                image_type=image_type,
-            )
+            logger.info(f"Updating pairs for PZone: '{pz.pz_name}' ({strategy})")
+            if strategy == "similarity":
+                pairs_gdf = self._similarity_strategy_pairs(
+                    pz.pz_name,
+                    image_type,
+                    metric=similarity_metric,
+                    threshold=min_similarity,
+                    per_image=per_image,
+                    cross_sensor_only=cross_sensor_only,
+                    max_dt_days=max_dt_days,
+                    min_dt_days=min_dt_days,
+                    sensor_filter=sensor_filter,
+                    both_directions=both_directions,
+                )
+            else:
+                pairs_gdf = pz.get_valid_pairs_with_strategy_overview(
+                    strategy,
+                    max_step,
+                    max_dt_days,
+                    min_dt_days=min_dt_days,
+                    sensor_filter=sensor_filter,
+                    image_type=image_type,
+                )
+                if min_similarity is not None and not pairs_gdf.empty:
+                    pairs_gdf = self._filter_pairs_by_similarity(
+                        pairs_gdf,
+                        pz.pz_name,
+                        image_type,
+                        similarity_metric,
+                        min_similarity,
+                    )
             if not pairs_gdf.empty:
                 updated_frames.append(pairs_gdf)
 
@@ -2119,6 +3215,155 @@ class Session:
         else:
             new_pairs = gpd.GeoDataFrame(geometry=[], crs=self.epsg)
 
+        return self._write_pairs_layer(new_pairs, append)
+
+    def _similarity_strategy_pairs(
+        self,
+        pz_name: str,
+        image_type: str,
+        *,
+        metric: str,
+        threshold: float | None,
+        per_image: int | None,
+        cross_sensor_only: bool,
+        max_dt_days: int | None,
+        min_dt_days: int | None,
+        sensor_filter: str | None,
+        both_directions: bool,
+    ) -> gpd.GeoDataFrame:
+        """Pairs for ``update_pairs(strategy="similarity")`` in one pzone."""
+        from geomulticorr.similarity.selection import select_couples
+
+        sim = self._similarity_sensor_filter(
+            self.load_thumbs_similarity(pz_name, image_type), sensor_filter
+        )
+        # Same rule as the date strategies: only validated thumbs are paired.
+        th = self._thumbs
+        th = th[
+            (th["th_pz_name"] == pz_name)
+            & (type_column(th, "th_type") == image_type)
+            & (th["th_valid"].astype(str) == "1")
+        ]
+        valid = {pathlib.Path(str(p)).stem for p in th["th_path"]}
+        ok = sim["left_key"].isin(valid) & sim["right_key"].isin(valid)
+        if (~ok).any():
+            logger.warning(
+                f"{int((~ok).sum())} couple(s) in '{pz_name}' involve thumbs not "
+                f"validated (th_valid != 1) and are skipped; validate them in QGIS "
+                f"or with session.validate_all_thumbs()"
+            )
+        sim = sim[ok]
+        chosen = select_couples(
+            sim,
+            metric=metric,
+            threshold=threshold,
+            cross_sensor_only=cross_sensor_only,
+            per_image=per_image,
+            max_dt_days=max_dt_days,
+            min_dt_days=min_dt_days,
+        )
+        logger.info(
+            f"Similarity selection in '{pz_name}': {len(chosen)}/{len(sim)} couple(s) "
+            f"({metric} {'>=' if threshold is not None else ''}"
+            f"{threshold if threshold is not None else 'any'})"
+        )
+        if chosen.empty:
+            return gpd.GeoDataFrame(geometry=[], crs=self.epsg)
+        return self._pairs_from_couples(chosen, image_type, both_directions)
+
+    def _filter_pairs_by_similarity(
+        self,
+        pairs_gdf: pd.DataFrame,
+        pz_name: str,
+        image_type: str,
+        metric: str,
+        threshold: float,
+    ) -> pd.DataFrame:
+        """Drop date-strategy pairs whose couple fails *metric* vs *threshold*."""
+        from geomulticorr.similarity.selection import METRIC_HIGHER_IS_BETTER
+        from geomulticorr.similarity.validation import couple_key_from_pair_name
+
+        if metric not in METRIC_HIGHER_IS_BETTER:
+            raise ValueError(
+                f"unknown similarity metric {metric!r}; "
+                f"choose from {sorted(METRIC_HIGHER_IS_BETTER)}"
+            )
+        sim = self.load_thumbs_similarity(pz_name, image_type)
+        value = {
+            tuple(sorted(k)): v
+            for k, v in zip(zip(sim["left_key"], sim["right_key"]), sim[metric])
+        }
+        up = METRIC_HIGHER_IS_BETTER[metric]
+        keep, unmeasured = [], 0
+        for p in pairs_gdf["pa_path"]:
+            v = value.get(couple_key_from_pair_name(pathlib.Path(str(p)).name))
+            if v is None or not np.isfinite(v):
+                unmeasured += 1
+                keep.append(False)
+            else:
+                keep.append(v >= threshold if up else v <= threshold)
+        if unmeasured:
+            logger.warning(
+                f"{unmeasured} pair(s) in '{pz_name}' have no similarity measured and "
+                f"were dropped; run compute_thumbs_similarity on the same thumbs"
+            )
+        out = pairs_gdf[np.array(keep, dtype=bool)]
+        logger.info(
+            f"Similarity filter ({metric} {'>=' if up else '<='} {threshold}): "
+            f"{len(out)}/{len(pairs_gdf)} pair(s) kept in '{pz_name}'"
+        )
+        return out
+
+    def _pairs_from_couples(
+        self, couples, image_type: str, both_directions: bool
+    ) -> gpd.GeoDataFrame:
+        """Build pairs from thumb-stem couples, like a strategy does (``Thumb + Thumb``).
+
+        Thumbs are located through :meth:`thumb_dir` from the pzone that
+        prefixes each stem (pzone names hold no ``_``), not via stored paths.
+        """
+        t = normalise_image_type(image_type)
+        if isinstance(couples, pd.DataFrame):
+            couples = list(zip(couples["left_key"], couples["right_key"]))
+        couples = list(dict.fromkeys(tuple(c) for c in couples))
+        if not couples:
+            raise ValueError("at least one (left_key, right_key) couple is needed")
+        thumbs: dict[str, gmc_thumb.Thumb] = {}
+
+        def _thumb(key: str) -> gmc_thumb.Thumb:
+            if key not in thumbs:
+                stem = pathlib.Path(str(key)).stem
+                folder = self.thumb_dir(stem.split("_", 1)[0], t)
+                path = folder / f"{stem}.tif"
+                if not path.exists():
+                    raise FileNotFoundError(f"No thumb {path.name} in {folder}")
+                thumbs[key] = gmc_thumb.Thumb(str(path))
+            return thumbs[key]
+
+        rows = []
+        for left, right in couples:
+            if left == right:
+                raise ValueError(f"Couple pairs {left!r} with itself")
+            ordered = (
+                [(left, right), (right, left)] if both_directions else [(left, right)]
+            )
+            for a, b in ordered:
+                rows.append((_thumb(a) + _thumb(b)).to_pdserie())
+        logger.info(
+            f"{len(rows)} pair(s) from {len(couples)} couple(s)"
+            f"{' (both directions)' if both_directions else ''}"
+        )
+        return gpd.GeoDataFrame(rows, geometry="geometry", crs=self.epsg)
+
+    def _write_pairs_layer(
+        self, new_pairs: gpd.GeoDataFrame, append: bool
+    ) -> gpd.GeoDataFrame:
+        """Write *new_pairs* to the Pairs layer, replacing it or appending to it.
+
+        Appending dedupes on ``pa_path`` (unique across types), so committing a
+        pair twice keeps one row. Every strategy of :meth:`update_pairs` goes
+        through here, so all commit paths behave identically.
+        """
         if append and not self._pairs.empty:
             existing = self._pairs.copy()
             existing["pa_type"] = type_column(existing, "pa_type")
@@ -2221,6 +3466,11 @@ class Session:
                 ma_file = legacy_pz_root / f"{pz_name}{suffix}"
                 if ma_file.exists():
                     moves.append((ma_file, new_pz_root / PZ_KIND_VECTOR / ma_file.name))
+
+            # Similarity trace folder (already a folder in legacy)
+            moves.append(
+                (legacy_pz_root / "similarity", new_pz_root / PZ_KIND_SIMILARITY)
+            )
 
             # Inversion directories (inversion_* → inversion/*)
             for legacy_inv_dir in legacy_pz_root.glob("inversion_*"):
@@ -2498,6 +3748,7 @@ class Session:
             return None
 
     # * Works properly
+    @gmc_profile("gmc.session.map_georasters_bank", memprof=True)
     def map_georasters_bank(
         self,
         georasters_bank_path: str | pathlib.Path,
@@ -4037,6 +5288,7 @@ class Session:
         del m_crop
         return m_final
 
+    @gmc_profile("gmc.session.sieve_bulk", memprof=True)
     def sieve_bulk(
         self,
         georasters_map: gpd.GeoDataFrame | None = None,
@@ -5705,6 +6957,7 @@ class Session:
             save_disparity_difference=save_disparity_difference,
         )
 
+    @gmc_profile("gmc.session.prepare_pairs_correlation", memprof=True)
     def prepare_pairs_correlation(
         self,
         criterias: str | list[str] = "",
@@ -5993,6 +7246,7 @@ class Session:
 
         return bash_scripts
 
+    @gmc_profile("gmc.session.launch_pairs_correlation")
     def launch_pairs_correlation(
         self,
         criterias: str | list[str] = "",
@@ -6328,6 +7582,7 @@ class Session:
 
         return deleted_all
 
+    @gmc_profile("gmc.session.extract_pairs_raw_displacements", memprof=True)
     def extract_pairs_raw_displacements(
         self,
         criterias: str | list[str] = "",
@@ -6532,6 +7787,7 @@ class Session:
 
         return results
 
+    @gmc_profile("gmc.session.apply_pairs_corrections", memprof=True)
     def apply_pairs_corrections(
         self,
         correction_pipeline=None,

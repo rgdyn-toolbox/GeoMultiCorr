@@ -43,6 +43,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.patches as mpl_patches
+import matplotlib.lines as mlines
 from matplotlib.collections import LineCollection
 from matplotlib.patches import Circle, Ellipse
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -2385,7 +2386,7 @@ def plot_pairs_network(
         ax.legend(
             handles=info["legend_handles"],
             title=info["legend_title"],
-            loc="upper left",
+            loc="upper right",  # the direction notes sit on the left
             fontsize=8,
             title_fontsize=9,
         )
@@ -3720,3 +3721,264 @@ CORRPARAMS_MPL_BUILDERS: dict = {
     "snr": plot_correlation_snr,
     "cost": plot_correlation_cost,
 }
+
+
+# --------------------------------------------------------------------------- #
+# Image similarity — dataset overview figures (written by
+# Session.compute_thumbs_similarity)
+# --------------------------------------------------------------------------- #
+#: Indices drawn by :func:`plot_similarity_matrices`, with their colormaps
+#: (reversed when lower is better, so "good" is always the bright end).
+SIMILARITY_MATRIX_METRICS: dict[str, str] = {
+    "score": "viridis",
+    "trial_valid_frac": "viridis",
+    "trial_sigma_px": "magma_r",
+    "coh_mean": "viridis",
+}
+
+
+def _family_colours(sensors) -> dict[str, str]:
+    from geomulticorr.similarity.selection import sensor_family
+
+    fams = sorted({sensor_family(s) for s in sensors})
+    # The palette's own colours in order: resampling tab10 to n would take
+    # evenly spaced ones, and with two families that gives blue and cyan.
+    palette = matplotlib.colormaps["tab10"].colors
+    return {f: mcolors.to_hex(palette[i % len(palette)]) for i, f in enumerate(fams)}
+
+
+def _draw_similarity_matrix_on_ax(ax, frame, metric, cmap, colours, selected=None):
+    """One thumb × thumb heatmap of *metric*; selected couples get red squares.
+
+    Thumbs are date-sorted and tick labels coloured by sensor family (from
+    *colours*). Both triangles of a selected couple are outlined, as in the
+    explorer's plotly matrix. Returns ``{"n_thumbs", "n_selected"}``.
+    """
+    from geomulticorr.similarity.selection import (
+        sensor_family,
+        similarity_matrix,
+        thumb_order,
+        thumb_sensors,
+    )
+
+    order = thumb_order(frame)
+    sensors = thumb_sensors(frame)
+    labels = [k.split("_", 1)[1] if "_" in k else k for k in order]
+    fs = max(4, min(8, int(220 / max(len(order), 1))))
+    m = similarity_matrix(frame, metric, order)
+    im = ax.imshow(m.to_numpy(), cmap=cmap, interpolation="nearest")
+    ax.set_xticks(range(len(order)), labels, rotation=90, fontsize=fs)
+    ax.set_yticks(range(len(order)), labels, fontsize=fs)
+    for lab, key in zip(ax.get_xticklabels(), order):
+        lab.set_color(colours[sensor_family(sensors[key])])
+    for lab, key in zip(ax.get_yticklabels(), order):
+        lab.set_color(colours[sensor_family(sensors[key])])
+    ax.set_title(metric, fontsize=10)
+    ax.get_figure().colorbar(im, ax=ax, shrink=0.75)
+    n_selected = 0
+    if selected is not None and len(selected):
+        pos = {k: i for i, k in enumerate(order)}
+        xs, ys = [], []
+        for a, b in zip(selected["left_key"], selected["right_key"]):
+            if a in pos and b in pos:
+                xs += [pos[b], pos[a]]
+                ys += [pos[a], pos[b]]
+                n_selected += 1
+        # one artist for every outline (batching rule of the pair figures)
+        ax.scatter(
+            xs,
+            ys,
+            marker="s",
+            s=max(12, min(120, 4000 / max(len(order), 1) ** 1.2)),
+            facecolors="none",
+            edgecolors="red",
+            linewidths=1.2,
+            label="selected",
+        )
+    return {"n_thumbs": len(order), "n_selected": n_selected}
+
+
+def plot_similarity_matrices(
+    frame: pd.DataFrame,
+    metrics: dict[str, str] | None = None,
+    fig_name: str | None = None,
+    cell_in: float = 0.28,
+) -> plt.Figure:
+    """Thumb × thumb heatmaps of similarity indices, one panel per index.
+
+    Thumbs are sorted by date; tick labels are coloured by sensor family, so
+    cross-sensor blocks stand out.
+
+    :param frame: A similarity frame (``Session.compute_thumbs_similarity``).
+    :param metrics: ``{column: colormap}``; default
+        :data:`SIMILARITY_MATRIX_METRICS`, restricted to columns present.
+    :param fig_name: Optional suptitle.
+    :param cell_in: Inches per thumb, so large archives stay legible.
+    :returns: The figure.
+    """
+    from geomulticorr.similarity.selection import thumb_order, thumb_sensors
+
+    metrics = {
+        k: v
+        for k, v in (metrics or SIMILARITY_MATRIX_METRICS).items()
+        if k in frame.columns
+    }
+    order = thumb_order(frame)
+    colours = _family_colours(thumb_sensors(frame).values())
+    side = min(max(4.5, cell_in * len(order) + 1.8), 14.0)
+    fig, axes = plt.subplots(
+        1, len(metrics), figsize=(side * len(metrics), side), squeeze=False
+    )
+    for ax, (metric, cmap) in zip(axes[0], metrics.items()):
+        _draw_similarity_matrix_on_ax(ax, frame, metric, cmap, colours)
+    handles = [mpl_patches.Patch(color=c, label=f) for f, c in colours.items()]
+    fig.legend(handles=handles, loc="upper right", fontsize=8, title="sensor")
+    if fig_name:
+        fig.suptitle(fig_name)
+    fig.tight_layout()
+    return fig
+
+
+def plot_similarity_selection(
+    frame: pd.DataFrame,
+    selected: pd.DataFrame | None = None,
+    metric: str = "score",
+    fig_name: str | None = None,
+    cell_in: float = 0.28,
+) -> plt.Figure:
+    """One similarity heatmap with the selected couples outlined.
+
+    The static twin of the ``matrix`` view of ``Session.explore_similarity_pairs``.
+
+    :param frame: A similarity frame.
+    :param selected: Couples to outline (``left_key`` / ``right_key``).
+    :param metric: Column to draw; the colormap follows
+        :data:`SIMILARITY_MATRIX_METRICS` (reversed for ``trial_sigma_px``).
+    :param fig_name: Optional title.
+    :param cell_in: Inches per thumb.
+    :returns: The figure.
+    """
+    from geomulticorr.similarity.selection import thumb_order, thumb_sensors
+
+    if metric not in frame.columns:
+        raise ValueError(f"{metric!r} is not a column of the similarity frame")
+    cmap = SIMILARITY_MATRIX_METRICS.get(
+        metric, "viridis_r" if metric == "trial_sigma_px" else "viridis"
+    )
+    colours = _family_colours(thumb_sensors(frame).values())
+    side = min(max(5.0, cell_in * len(thumb_order(frame)) + 2.2), 14.0)
+    fig, ax = plt.subplots(figsize=(side + 1.2, side))
+    info = _draw_similarity_matrix_on_ax(ax, frame, metric, cmap, colours, selected)
+    handles = [mpl_patches.Patch(color=c, label=f) for f, c in colours.items()]
+    if info["n_selected"]:
+        handles.append(
+            mlines.Line2D(
+                [],
+                [],
+                marker="s",
+                linestyle="",
+                markerfacecolor="none",
+                markeredgecolor="red",
+                label=f"selected ({info['n_selected']})",
+            )
+        )
+    ax.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(1.25, 1.0),
+        fontsize=8,
+        title="sensor",
+    )
+    if fig_name:
+        ax.set_title(fig_name, fontsize=10)  # the explorer title names the metric
+    fig.tight_layout()
+    return fig
+
+
+def plot_similarity_by_sensor(
+    frame: pd.DataFrame,
+    metrics: tuple[str, ...] = (
+        "score",
+        "trial_valid_frac",
+        "trial_peak_median",
+        "trial_sigma_px",
+        "coh_mean",
+    ),
+    fig_name: str | None = None,
+) -> plt.Figure:
+    """Boxplots of similarity indices per sensor-family combination.
+
+    :param frame: A similarity frame.
+    :param metrics: Columns to draw (absent ones are skipped).
+    :param fig_name: Optional suptitle.
+    :returns: The figure.
+    """
+    from geomulticorr.similarity.selection import sensor_family
+
+    metrics = [m for m in metrics if m in frame.columns]
+    combo = [
+        " ↔ ".join(sorted((sensor_family(a), sensor_family(b))))
+        for a, b in zip(frame["left_sensor"], frame["right_sensor"])
+    ]
+    groups = sorted(set(combo))
+    fig, axes = plt.subplots(
+        1, len(metrics), figsize=(3.2 * len(metrics), 3.8), squeeze=False
+    )
+    for ax, metric in zip(axes[0], metrics):
+        values = [
+            pd.to_numeric(frame[metric], errors="coerce")[
+                [c == g for c in combo]
+            ].dropna()
+            for g in groups
+        ]
+        ax.boxplot(
+            values,
+            tick_labels=[f"{g}\n(n={len(v)})" for g, v in zip(groups, values)],
+        )
+        ax.set_title(metric, fontsize=10)
+        ax.tick_params(axis="x", labelrotation=30, labelsize=8)
+    if fig_name:
+        fig.suptitle(fig_name)
+    fig.tight_layout()
+    return fig
+
+
+def plot_similarity_validation(
+    table: pd.DataFrame,
+    n: int | None = None,
+    fig_name: str | None = None,
+    ax=None,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Spearman ρ of each similarity index against each realised outcome.
+
+    Read it as: a useful index has a strong ρ — positive against CC, negative
+    against NMAD — and beats ``dt_days``, the naive baseline.
+
+    :param table: Output of
+        :func:`geomulticorr.similarity.validation.spearman_table`.
+    :param n: Number of matched couples, shown in the title.
+    :param fig_name: Optional title.
+    :param ax: Draw into an existing Axes.
+    :returns: ``(fig, ax)``.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(
+            figsize=(1.6 * max(len(table.columns), 2) + 3, 0.38 * len(table) + 1.5)
+        )
+    else:
+        fig = ax.get_figure()
+    im = ax.imshow(
+        table.to_numpy(dtype=float), cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto"
+    )
+    ax.set_xticks(range(len(table.columns)), table.columns)
+    ax.set_yticks(range(len(table.index)), table.index)
+    for (y, x), v in np.ndenumerate(table.to_numpy(dtype=float)):
+        if np.isfinite(v):
+            ax.text(x, y, f"{v:+.2f}", ha="center", va="center", fontsize=8)
+    title = fig_name or "Similarity vs realised correlation (Spearman ρ)"
+    if n is not None:
+        title += f" — {n} couples"
+    ax.set_title(title, fontsize=10)
+    fig.colorbar(im, ax=ax, shrink=0.8)
+    fig.tight_layout()
+    return fig, ax

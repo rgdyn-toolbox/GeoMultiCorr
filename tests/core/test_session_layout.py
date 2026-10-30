@@ -128,6 +128,7 @@ class TestPzDirMethod:
             (PZ_KIND_VECTOR, pz_root / "vector"),
             (PZ_KIND_INVERSION, pz_root / "inversion"),
             (PZ_KIND_FIGURES, pz_root / "figures"),
+            ("similarity", pz_root / "similarity"),
         ]
 
         for kind, expected in kinds_and_expected:
@@ -155,7 +156,7 @@ class TestPzDirMethod:
             session.pz_dir("test_pz", "masks")
 
     def test_new_layout_subdirs(self):
-        """masks was removed; reference_raster, then elevation, were added."""
+        """masks was removed; reference_raster, elevation, then similarity, were added."""
         assert NEW_LAYOUT_PZ_SUBDIRS == (
             "optical",
             "image_correlation",
@@ -165,6 +166,7 @@ class TestPzDirMethod:
             "inversion",
             "figures",
             "elevation",
+            "similarity",
         )
         assert "masks" not in NEW_LAYOUT_PZ_SUBDIRS
 
@@ -370,10 +372,11 @@ class TestSaveWeightsFigureRouting:
     def test_no_new_pz_kind_constant_was_added(self):
         """The figures subfolder must not grow the pzone subdirectory tuple.
 
-        Eight since ``elevation`` (DEM-derived thumbs) was added deliberately;
-        figures/inversion is still a plain subfolder, not a kind.
+        Nine since ``elevation`` (DEM-derived thumbs) and ``similarity`` (the
+        similarity trace) were added deliberately; figures/inversion is still a
+        plain subfolder, not a kind.
         """
-        assert len(NEW_LAYOUT_PZ_SUBDIRS) == 8
+        assert len(NEW_LAYOUT_PZ_SUBDIRS) == 9
         assert not any(
             "/" in s or s.endswith("inversion") and s != "inversion"
             for s in NEW_LAYOUT_PZ_SUBDIRS
@@ -386,6 +389,15 @@ class TestSaveWeightsFigureRouting:
         session._legacy_layout = True
 
         assert session.pz_dir("test_pz", PZ_KIND_FIGURES) == session.path_figures
+
+    def test_legacy_layout_similarity_is_a_folder(self, temp_project_new):
+        """Unlike vector/inversion, the trace keeps its folder in legacy layout."""
+        session, _ = temp_project_new
+        session.insert_pzone([(0, 0), (1, 0), (1, 1), (0, 1)], "test_pz", "TP")
+        session._legacy_layout = True
+        assert session.pz_dir("test_pz", "similarity") == (
+            session.path_raster_data / "test_pz" / "similarity"
+        )
 
 
 class TestSavePairsFigure:
