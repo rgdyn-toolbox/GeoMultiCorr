@@ -26,9 +26,15 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 
-print(f"geomulticorr {__version__}")
+import os
+import sys
+
+# The banner is for notebooks; the `gmc` command keeps stdout clean so that
+# `gmc <stage> --template-config > config.yaml` writes valid YAML.
+if not os.path.basename(sys.argv[0] if sys.argv else "").startswith("gmc"):
+    print(f"geomulticorr {__version__}")
 
 from geomulticorr.core.session import open_gmc_session
 from geomulticorr.inversion import TIOInversion
