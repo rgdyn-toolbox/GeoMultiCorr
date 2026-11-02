@@ -55,6 +55,7 @@ from geomulticorr.stats.stats import (
     save_pair_weight,
     save_raw_corr_stats,
     update_pair_stats,
+    update_stats_file,
 )
 
 from .conftest import MockRasterData, write_geotiff
@@ -687,6 +688,32 @@ class TestUpdatePairStats:
         assert load_pair_stats(mock_pair)["raw_corr_stats"]["ew"][
             "mean"
         ] == pytest.approx(2.0)
+
+
+class TestUpdateStatsFile:
+    """Tests for update_stats_file() — the path-based section writer."""
+
+    def test_sets_section_and_keeps_others(self, tmp_path):
+        path = tmp_path / "p.json"
+        path.write_text(json.dumps({"metadata": {"a": 1}, "raw_corr_stats": {"x": 2}}))
+        out = update_stats_file(path, "similarity", {"before": {"k": 0.5}})
+        assert json.loads(path.read_text()) == out
+        assert out["metadata"] == {"a": 1} and out["raw_corr_stats"] == {"x": 2}
+        assert out["similarity"] == {"before": {"k": 0.5}}
+        assert not path.with_name("p.json.part").exists()
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            update_stats_file(tmp_path / "absent.json", "similarity", {})
+
+    def test_update_pair_stats_writes_through_it(self, mock_pair):
+        init_pair_stats(mock_pair)
+        update_stats_file(mock_pair.pa_stats_path, "similarity", {"k": 1})
+        update_pair_stats(mock_pair, "raw_corr_stats", {"ew": {}})
+        loaded = load_pair_stats(mock_pair)
+        assert loaded["similarity"] == {"k": 1} and loaded["raw_corr_stats"] == {
+            "ew": {}
+        }
 
 
 # ──────────────────────────────────────────────────────────────────────────────

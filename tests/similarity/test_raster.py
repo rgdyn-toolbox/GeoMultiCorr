@@ -5,10 +5,11 @@ from __future__ import annotations
 import geopandas as gpd
 import numpy as np
 import pytest
+from scipy import ndimage
 from shapely.geometry import box
 
 from geomulticorr.similarity import raster as sr
-from tests.similarity.conftest import EPSG, ORIGIN
+from tests.similarity.conftest import EPSG, ORIGIN, texture, write_tif
 
 KW = dict(kernel=21, search=4, tile=32)
 
@@ -134,3 +135,122 @@ def test_report_params_defaults_and_override():
     p = sr.report_params(kernel=53)
     assert p["kernel"] == 53 and p["search"] == sr.REPORT_DEFAULTS["search"]
     assert set(p) == set(sr.REPORT_DEFAULTS)
+
+
+# --------------------------------------------------------------------------- #
+# after correlation
+# --------------------------------------------------------------------------- #
+DX, DY = 2.3, -1.7  # px: left (row, col) matches right (row + DY, col + DX)
+
+
+def _write_disparity(path, dx, dy, valid, res=3.0, origin=ORIGIN):
+    import rasterio
+    from affine import Affine
+
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        height=dx.shape[0],
+        width=dx.shape[1],
+        count=3,
+        dtype="float32",
+        crs=f"EPSG:{EPSG}",
+        transform=Affine(res, 0, origin[0], 0, -res, origin[1]),
+    ) as dst:
+        for i, band in enumerate((dx, dy, valid.astype("float32")), start=1):
+            dst.write(np.asarray(band, dtype="float32"), i)
+    return path
+
+
+@pytest.fixture
+def shifted_pair(tmp_path):
+    """A 3 m left image and a right image whose content is moved by (DX, DY)."""
+    left = 1000 + 200 * texture(128, seed=3)
+    right = ndimage.shift(left, (DY, DX), order=3, mode="nearest")
+    paths = {
+        "left": write_tif(tmp_path / "left.tif", left, 3.0, dtype="float32"),
+        "right": write_tif(tmp_path / "right.tif", right, 3.0, dtype="float32"),
+    }
+    shape = left.shape
+    paths["disp"] = _write_disparity(
+        tmp_path / "pair-F.tif",
+        np.full(shape, DX),
+        np.full(shape, DY),
+        np.ones(shape, bool),
+    )
+    return paths
+
+
+class TestAfterCorrelation:
+    def test_read_disparity(self, shifted_pair):
+        dx, dy, valid, grid = sr.read_disparity(shifted_pair["disp"])
+        assert grid.key() == sr.Grid.of(shifted_pair["left"]).key()
+        assert np.allclose(dx, DX) and np.allclose(dy, DY) and valid.all()
+
+    def test_alignment_recovers_the_left_image(self, shifted_pair):
+        dx, dy, valid, grid = sr.read_disparity(shifted_pair["disp"])
+        before = sr.compare_rasters(shifted_pair["left"], shifted_pair["right"], **KW)
+        after = sr.compare_after_correlation(
+            shifted_pair["left"], shifted_pair["right"], dx, dy, valid, grid=grid, **KW
+        )
+        idx = after["indices"]
+        assert tuple(idx) == sr.REPORT_KEYS
+        assert idx["zncc_local_median"] > 0.95 > before["zncc_local_median"]
+        assert abs(idx["trial_dx_median_px"]) < 0.1
+        assert abs(idx["trial_dy_median_px"]) < 0.1
+        assert abs(before["trial_dx_median_px"] - DX) < 0.2  # the shift was there
+        assert after["disp_valid_frac"] == pytest.approx(1.0)
+
+    def test_apply_disparity_holes(self):
+        b = np.arange(25, dtype=float).reshape(5, 5)
+        b[2, 2] = np.nan
+        zero = np.zeros_like(b)
+        valid = np.ones(b.shape, bool)
+        valid[0, 0] = False
+        out = sr.apply_disparity(b, zero + 0.5, zero, valid)
+        assert np.isnan(out[0, 0])  # invalid disparity
+        assert np.isnan(out[2, 1]) and np.isnan(out[2, 2])  # touches the hole
+        assert np.isnan(out[1, 4])  # samples past the edge
+        assert out[1, 1] == pytest.approx(6.5)
+
+    def test_shape_mismatch_raises(self, shifted_pair):
+        grid = sr.Grid.of(shifted_pair["left"])
+        small = np.zeros((10, 10))
+        with pytest.raises(ValueError, match="disparity"):
+            sr.compare_after_correlation(
+                shifted_pair["left"],
+                shifted_pair["right"],
+                small,
+                small,
+                small > -1,
+                grid=grid,
+            )
+
+    def test_displacement_to_disparity_sign_and_grid(self, tmp_path):
+        """EW/NS in metres, NS north-positive, on a 2x coarser grid shifted by
+        half a coarse pixel: back to (DX, DY) left-image pixels on the fine grid."""
+        fine = sr.Grid.of(write_tif(tmp_path / "fine.tif", np.ones((64, 64)), 1.5))
+        origin = (ORIGIN[0] - 1.5, ORIGIN[1] + 1.5)
+        ew = np.full((34, 34), DX * 1.5)
+        ns = np.full((34, 34), -DY * 1.5)  # north-positive
+        ew[:6, :6] = 0.0  # the corrected maps' no-data
+        kw = dict(res=3.0, origin=origin, dtype="float32")
+        write_tif(tmp_path / "ew.tif", ew, **kw)
+        write_tif(tmp_path / "ns.tif", ns, **kw)
+        dx, dy, valid = sr.displacement_to_disparity(
+            tmp_path / "ew.tif", tmp_path / "ns.tif", fine
+        )
+        assert dx.shape == fine.shape
+        assert np.allclose(dx[valid], DX) and np.allclose(dy[valid], DY)
+        assert not valid[0, 0] and np.isnan(dx[0, 0])  # 0 is no-data, not 0 m
+        assert valid[30:, 30:].all()
+
+    def test_masked_stats(self):
+        arr = np.array([[0.2, 0.6], [0.9, np.nan]])
+        keep = np.array([[True, True], [False, True]])
+        st = sr.masked_stats(arr, keep)
+        assert st["n"] == 2 and st["median"] == pytest.approx(0.4)
+        assert st["frac_gte_050"] == pytest.approx(0.5)
+        empty = sr.masked_stats(arr, np.zeros_like(keep))
+        assert empty["n"] == 0 and np.isnan(empty["median"])

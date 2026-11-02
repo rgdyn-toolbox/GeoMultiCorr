@@ -33,6 +33,13 @@ Pure pandas/SciPy, no GMC imports. The caller gathers, per correlated pair, the
 realised quality (median CC, fraction of CC ≥ 0.5, stable-ground NMAD) and the
 two thumbs it was built from; this module matches them to similarity rows and
 ranks each index against each outcome.
+
+After correlation, the same indices can be measured again on the pair aligned
+by ASP's raw disparity and by the corrected displacement maps; the session
+stores them in each pair's stats JSON under ``similarity`` (``before`` /
+``after.raw`` / ``after.corrected``). :func:`flatten_similarity_block` turns
+that block into one row of ``<index>_raw`` / ``<index>_corr`` columns and
+:func:`before_after_table` ranks each index against its own twin.
 """
 
 from __future__ import annotations
@@ -71,6 +78,14 @@ VALIDATION_OUTCOMES: tuple[str, ...] = ("cc_median", "cc_q50", "nmad_px")
 #: Below this many matched couples a rank correlation is not reported.
 MIN_VALIDATION_COUPLES = 5
 
+#: Column suffix of each after-correlation variant, keyed by its name in the
+#: pair JSON: aligned by the raw disparity, or by the corrected maps.
+ASP_VARIANTS: dict[str, str] = {"raw": "_raw", "corrected": "_corr"}
+
+#: Outcomes measured on the ASP rasters over the similarity's own stable mask
+#: (the stats JSON outcomes use the corrections' mask, another set of pixels).
+RASTER_OUTCOMES: tuple[str, ...] = ("ncc_median", "ncc_q50", "nmad_corr_px")
+
 
 def couple_key_from_pair_name(pa_name: str) -> tuple[str, str] | None:
     """The two thumb stems a pair was built from, sorted, or None.
@@ -103,15 +118,77 @@ def spearman_table(
     outs = [o for o in outcomes if o in frame.columns]
     table = pd.DataFrame(np.nan, index=preds, columns=outs, dtype=float)
     for p in preds:
-        x = pd.to_numeric(frame[p], errors="coerce").to_numpy(dtype=float)
         for o in outs:
-            y = pd.to_numeric(frame[o], errors="coerce").to_numpy(dtype=float)
-            ok = np.isfinite(x) & np.isfinite(y)
-            if ok.sum() < MIN_VALIDATION_COUPLES:
-                continue
-            if np.ptp(x[ok]) == 0 or np.ptp(y[ok]) == 0:
-                continue
-            table.loc[p, o] = stats.spearmanr(x[ok], y[ok]).statistic
+            table.loc[p, o] = _rho(frame[p], frame[o])
+    return table
+
+
+def _rho(a, b) -> float:
+    """Spearman ρ over the rows finite in both; NaN when too few or constant."""
+    x = pd.to_numeric(a, errors="coerce").to_numpy(dtype=float)
+    y = pd.to_numeric(b, errors="coerce").to_numpy(dtype=float)
+    ok = np.isfinite(x) & np.isfinite(y)
+    if ok.sum() < MIN_VALIDATION_COUPLES:
+        return np.nan
+    if np.ptp(x[ok]) == 0 or np.ptp(y[ok]) == 0:
+        return np.nan
+    return float(stats.spearmanr(x[ok], y[ok]).statistic)
+
+
+def with_asp_twins(names: Sequence[str]) -> list[str]:
+    """*names* followed by their ``_raw`` and ``_corr`` twins."""
+    return list(names) + [n + sfx for sfx in ASP_VARIANTS.values() for n in names]
+
+
+def flatten_similarity_block(block) -> dict:
+    """One row of columns from a pair JSON ``similarity`` block.
+
+    ``after.raw.indices`` → ``<index>_raw``, ``after.corrected.indices`` →
+    ``<index>_corr``, each variant's ``disp_valid_frac`` → ``disp_valid_frac_<sfx>``,
+    and the raster outcomes ``ncc_median``, ``ncc_q50`` (raw) and
+    ``nmad_corr_m``, ``nmad_corr_px`` (corrected). A missing variant
+    (``corrected: null`` before corrections ran) gives no column; ``null``
+    values become NaN.
+    """
+    after = (block or {}).get("after") or {}
+    row: dict = {}
+    for variant, sfx in ASP_VARIANTS.items():
+        part = after.get(variant) or {}
+        for key, value in (part.get("indices") or {}).items():
+            row[key + sfx] = value
+        if part:
+            row["disp_valid_frac" + sfx] = part.get("disp_valid_frac")
+    raw, corr = after.get("raw") or {}, after.get("corrected") or {}
+    if raw:
+        row["ncc_median"] = raw.get("ncc_median")
+        row["ncc_q50"] = raw.get("ncc_q50")
+    if corr:
+        row["nmad_corr_m"] = corr.get("nmad_m")
+        row["nmad_corr_px"] = corr.get("nmad_px")
+    return {k: (np.nan if v is None else v) for k, v in row.items()}
+
+
+def before_after_table(
+    frame: pd.DataFrame, predictors: Sequence[str] = VALIDATION_PREDICTORS
+) -> pd.DataFrame:
+    """Spearman ρ of each index against its own after-correlation twins.
+
+    Columns ``before_vs_raw`` and ``before_vs_corr``; indices without a twin in
+    *frame* (``dt_days``, ``score``…) are left out. A high ρ means the index
+    measured before correlation already ranked the couples as they rank once
+    ASP has aligned them.
+    """
+    cols = {f"before_vs{sfx}": sfx for sfx in ASP_VARIANTS.values()}
+    preds = [
+        p
+        for p in predictors
+        if p in frame.columns and any(p + s in frame.columns for s in cols.values())
+    ]
+    table = pd.DataFrame(np.nan, index=preds, columns=list(cols), dtype=float)
+    for p in preds:
+        for col, sfx in cols.items():
+            if p + sfx in frame.columns:
+                table.loc[p, col] = _rho(frame[p], frame[p + sfx])
     return table
 
 

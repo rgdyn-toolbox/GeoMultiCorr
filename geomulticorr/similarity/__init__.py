@@ -59,7 +59,7 @@ from geomulticorr.similarity.preprocess import (
     nan_uniform,
     wallis,
 )
-from geomulticorr.similarity.raster import compare_rasters
+from geomulticorr.similarity.raster import compare_after_correlation, compare_rasters
 from geomulticorr.similarity.selection import (
     METRIC_HIGHER_IS_BETTER,
     bridge_coverage,

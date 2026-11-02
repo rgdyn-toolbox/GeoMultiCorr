@@ -488,16 +488,32 @@ def update_pair_stats(pair: Pair, section: str, stats_data: dict) -> dict:
     :returns: The full updated stats dict.
     :rtype: dict
     """
-    if pair.pa_stats_path.exists():
-        stats_dict = load_pair_stats(pair)
-    else:
-        stats_dict = init_pair_stats(pair)
+    if not pair.pa_stats_path.exists():
+        init_pair_stats(pair)
+    return update_stats_file(pair.pa_stats_path, section, stats_data)
 
+
+def update_stats_file(path: str | Path, section: str, stats_data) -> dict:
+    """Set one top-level *section* of an existing pair stats JSON, by path.
+
+    The path-based twin of :func:`update_pair_stats`, for callers that read the
+    Pairs layer rather than build a :class:`~geomulticorr.core.pair.Pair` (whose
+    thumbs cost a footprint computation each). Other sections are kept as they
+    are. Written to ``<file>.part`` then renamed, so a failure leaves the
+    previous file intact.
+
+    :raises FileNotFoundError: *path* does not exist (no file is created here:
+        only :func:`init_pair_stats` knows the pair metadata).
+    :returns: The full updated stats dict.
+    """
+    path = Path(path)
+    with open(path) as f:
+        stats_dict = json.load(f)
     stats_dict[section] = stats_data
-
-    with open(pair.pa_stats_path, "w") as f:
+    tmp = path.with_name(path.name + ".part")
+    with open(tmp, "w") as f:
         json.dump(stats_dict, f, indent=2)
-
+    tmp.replace(path)
     return stats_dict
 
 

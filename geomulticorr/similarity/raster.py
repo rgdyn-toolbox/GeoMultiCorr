@@ -44,6 +44,15 @@ Grid rules
   Otherwise it is **anti-aliased before resampling** (Gaussian, σ = (f − 1)/2
   input pixels) and warped bilinearly: skipping the low-pass aliases the finer
   image's high frequencies into the coarse grid, which reads as dissimilarity.
+
+After correlation
+-----------------
+:func:`compare_after_correlation` measures the same indices once the right
+image has been aligned on the left one by a displacement field: ASP's raw
+disparity (:func:`read_disparity`, ``<pair>-F.tif``) or the corrected maps
+(:func:`displacement_to_disparity`, ``<pair>-F_{EW,NS}_corr.tif``). Both are
+expressed as ``(dx, dy)`` in left-image pixels: the left pixel ``(row, col)``
+matches the right pixel ``(row + dy, col + dx)``.
 """
 
 from __future__ import annotations
@@ -55,8 +64,9 @@ import numpy as np
 import rasterio
 from rasterio.features import geometry_mask
 from rasterio.warp import Resampling, reproject
+from scipy import ndimage
 
-from geomulticorr.similarity.metrics import SIMILARITY_KEYS, similarity_report
+from geomulticorr.similarity.metrics import SIMILARITY_KEYS, nmad, similarity_report
 from geomulticorr.similarity.preprocess import antialias_sigma, as_float, nan_gaussian
 
 #: Columns of :func:`compare_rasters`' result: the grid resolution, then the report.
@@ -221,4 +231,122 @@ def compare_rasters(
     return {
         "res": grid.res,
         **similarity_report(a, b, mask=keep, res=grid.res, **params),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# after correlation
+# --------------------------------------------------------------------------- #
+def read_disparity(path) -> tuple[np.ndarray, np.ndarray, np.ndarray, Grid]:
+    """ASP's filtered disparity ``<pair>-F.tif``: ``(dx, dy, valid, grid)``.
+
+    Band 1 is dx, band 2 dy (left-image pixels), band 3 the validity flag.
+    A pixel is valid when that flag is set and both offsets are finite.
+    """
+    with rasterio.open(path) as src:
+        dx = as_float(src.read(1), src.nodata)
+        dy = as_float(src.read(2), src.nodata)
+        valid = src.read(3) > 0 if src.count >= 3 else np.ones(dx.shape, bool)
+        grid = Grid(src.transform, src.crs, (src.height, src.width))
+    return dx, dy, valid & np.isfinite(dx) & np.isfinite(dy), grid
+
+
+def displacement_to_disparity(
+    ew_path, ns_path, grid: Grid
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Corrected EW/NS maps (metres) as ``(dx, dy, valid)`` on *grid* (pixels).
+
+    The maps usually sit on the extraction grid, not the thumb grid, so both
+    are warped onto *grid* first; their declared no-data (``0`` for GMC's
+    corrected maps) becomes NaN. NS is **north-positive** while rows grow
+    southwards, hence ``dy = −NS / res``.
+    """
+    ew = warp_to_grid(ew_path, grid)
+    ns = warp_to_grid(ns_path, grid)
+    dx = ew / grid.res
+    dy = -ns / float(abs(grid.transform.e))
+    return dx, dy, np.isfinite(dx) & np.isfinite(dy)
+
+
+def apply_disparity(b, dx, dy, valid) -> np.ndarray:
+    """Resample *b* at ``(row + dy, col + dx)``: the right image aligned on the left.
+
+    Bilinear. NaN where the disparity is invalid, where the sample falls
+    outside *b*, and wherever a NaN of *b* contributes to the interpolation,
+    so a hole never leaks a fabricated value.
+    """
+    b = np.asarray(b, dtype=np.float64)
+    if np.shape(dx) != b.shape or np.shape(dy) != b.shape:
+        raise ValueError(f"disparity {np.shape(dx)} does not match image {b.shape}")
+    ok = np.asarray(valid, bool) & np.isfinite(dx) & np.isfinite(dy)
+    rows, cols = np.indices(b.shape, dtype=np.float64)
+    coords = [rows + np.where(ok, dy, 0.0), cols + np.where(ok, dx, 0.0)]
+    holes = ~np.isfinite(b)
+    out = ndimage.map_coordinates(
+        np.where(holes, 0.0, b), coords, order=1, mode="constant", cval=np.nan
+    )
+    touched = ndimage.map_coordinates(
+        holes.astype(np.float64), coords, order=1, mode="constant", cval=1.0
+    )
+    out[~ok | (touched > 0) | ~np.isfinite(out)] = np.nan
+    return out
+
+
+def masked_stats(arr, keep=None) -> dict:
+    """Median, fraction ≥ 0.5, NMAD and count of the finite pixels of *arr* in *keep*."""
+    arr = np.asarray(arr, dtype=np.float64)
+    sel = (
+        np.isfinite(arr) if keep is None else np.asarray(keep, bool) & np.isfinite(arr)
+    )
+    v = arr[sel]
+    if v.size == 0:
+        return {"median": np.nan, "frac_gte_050": np.nan, "nmad": np.nan, "n": 0}
+    return {
+        "median": float(np.median(v)),
+        "frac_gte_050": float(np.mean(v >= 0.5)),
+        "nmad": nmad(v),
+        "n": int(v.size),
+    }
+
+
+def compare_after_correlation(
+    path_left,
+    path_right,
+    dx,
+    dy,
+    valid,
+    *,
+    grid: Grid,
+    keep=None,
+    band: int = 1,
+    **report_kwargs,
+) -> dict:
+    """The similarity indices once the right image is aligned by ``(dx, dy)``.
+
+    :param path_left: Left image of the pair (the disparity's reference).
+    :param path_right: Right image; put on *grid*, then resampled by the disparity.
+    :param dx, dy, valid: Disparity on *grid*, in left-image pixels.
+    :param grid: The disparity's grid (the left image's for ASP output).
+    :param keep: Stable-ground *keep* mask on *grid* (None → everything).
+    :param report_kwargs: Any of :data:`REPORT_DEFAULTS`.
+    :returns: ``{"indices": {...REPORT_KEYS}, "disp_valid_frac": float}``; the
+        valid fraction is taken over the kept pixels where the left image has data.
+    :raises ValueError: The disparity is not on *grid*.
+    """
+    params = report_params(**report_kwargs)
+    if np.shape(dx) != tuple(grid.shape):
+        raise ValueError(
+            f"disparity shape {np.shape(dx)} is not the grid's {tuple(grid.shape)}"
+        )
+    keep = np.ones(grid.shape, bool) if keep is None else np.asarray(keep, bool)
+    a = warp_to_grid(path_left, grid, band)
+    b = apply_disparity(warp_to_grid(path_right, grid, band), dx, dy, valid)
+    base = keep & np.isfinite(a)
+    frac = float(np.asarray(valid, bool)[base].mean()) if base.any() else np.nan
+    return {
+        "indices": {
+            "res": grid.res,
+            **similarity_report(a, b, mask=keep, res=grid.res, **params),
+        },
+        "disp_valid_frac": frac,
     }

@@ -47,6 +47,7 @@ from typing import (
     Any,
     Callable,
     Iterable,
+    Iterator,
     Mapping,
     Optional,
     Sequence,
@@ -1755,15 +1756,45 @@ class Session:
             frame["cross_sensor"] = frame["cross_sensor"].astype(bool)
         return frame.sort_values(["left_date", "right_date"], ignore_index=True)
 
+    def _correlated_pair_folders(
+        self, pz_name: str, image_type: str = IMAGE_TYPE_OPTICAL
+    ) -> Iterator[tuple[tuple[str, str], str, pathlib.Path, str, str]]:
+        """Every pair of *pz_name* / *image_type* in the Pairs layer, as folders.
+
+        Yields ``(couple, pa_name, folder, left_stem, right_stem)``: *couple* is
+        the **sorted** pair of thumb stems the similarity rows are keyed by, the
+        two stems are in the pair's own order (a backward pair has the later
+        date on the left). Stems come from the ``__`` pair key; keys that
+        predate it fall back on ``<pz>_<date>_<sensor>``. Reads the table only:
+        no ``Pair`` or ``Thumb`` is built.
+        """
+        t = normalise_image_type(image_type)
+        pairs = self._pairs
+        if pairs is None or len(pairs) == 0:
+            return
+        pairs = pairs[
+            (pairs["pa_pz_name"] == pz_name) & (type_column(pairs, "pa_type") == t)
+        ]
+        root = self.pair_dir(pz_name, t)
+        for _, p in pairs.iterrows():
+            name = pathlib.Path(str(p["pa_path"])).name
+            pz, _, rest = name.partition("_")
+            parts = rest.split("__")
+            if pz and len(parts) == 2 and all(parts):
+                left, right = f"{pz}_{parts[0]}", f"{pz}_{parts[1]}"
+            else:
+                left = f"{pz_name}_{p['pa_left_date']}_{p['pa_left_sensor']}"
+                right = f"{pz_name}_{p['pa_right_date']}_{p['pa_right_sensor']}"
+            yield tuple(sorted((left, right))), name, root / name, left, right
+
     def _similarity_outcomes(
         self, pz_name: str, image_type: str = IMAGE_TYPE_OPTICAL
     ) -> pd.DataFrame:
         """What ASP achieved, per correlated thumb couple, from the pair stats JSON.
 
-        Keyed by the **sorted pair of thumb stems** parsed from each pair key
-        (``couple_key_from_pair_name``), the same key the similarity rows carry;
-        pairs whose key predates the ``__`` format fall back on
-        ``<pz>_<date>_<sensor>``. Forward and backward pairs are averaged.
+        Keyed by the **sorted pair of thumb stems** (see
+        :meth:`_correlated_pair_folders`), the same key the similarity rows
+        carry. Forward and backward pairs are averaged.
 
         Reads the stats JSON (the source the Pairs-layer stats columns are
         synced from), so it works whether or not those columns exist yet; a
@@ -1777,32 +1808,15 @@ class Session:
         """
         import json
 
-        from geomulticorr.similarity.validation import couple_key_from_pair_name
-
-        t = normalise_image_type(image_type)
         cols = ["cc_median", "cc_q50", "nmad_m"]
-        pairs = self._pairs
-        if pairs is None or len(pairs) == 0:
-            return pd.DataFrame(columns=cols)
-        pairs = pairs[
-            (pairs["pa_pz_name"] == pz_name) & (type_column(pairs, "pa_type") == t)
-        ]
-        root = self.pair_dir(pz_name, t)
         rows = []
-        for _, p in pairs.iterrows():
-            name = pathlib.Path(str(p["pa_path"])).name
+        for couple, name, folder, _, _ in self._correlated_pair_folders(
+            pz_name, image_type
+        ):
             try:
-                js = json.loads((root / name / f"{name}.json").read_text())
+                js = json.loads((folder / f"{name}.json").read_text())
             except (OSError, ValueError):
                 continue
-            couple = couple_key_from_pair_name(name) or tuple(
-                sorted(
-                    (
-                        f"{pz_name}_{p['pa_left_date']}_{p['pa_left_sensor']}",
-                        f"{pz_name}_{p['pa_right_date']}_{p['pa_right_sensor']}",
-                    )
-                )
-            )
             cc = js.get("raw_corr_stats", {}).get("cc", {})
             fin = js.get("final_corrected_stats", {})
             nmad = np.nan
@@ -1822,18 +1836,238 @@ class Session:
         frame[cols] = frame[cols].apply(pd.to_numeric, errors="coerce")
         return frame.groupby("couple")[cols].mean()
 
+    def _similarity_after_correlation(
+        self,
+        pz_name: str,
+        image_type: str,
+        sim: pd.DataFrame,
+        overwrite: bool = False,
+        progress: bool = True,
+    ) -> list[tuple[tuple[str, str], str, dict]]:
+        """Measure the similarity again on every correlated pair, once aligned
+        by ASP, and store it in the pair stats JSON under ``similarity``.
+
+        Per pair, on its **left thumb's grid** and with the similarity run's
+        report parameters and stable-ground mask:
+
+        - ``before``: the run's row for the couple (indices and ``score``);
+        - ``after.raw``: the indices with the right thumb aligned by the raw
+          disparity ``<pa>-F.tif``, plus the NCC of ``<pa>-F-ncc.tif`` over the
+          same stable ground;
+        - ``after.corrected``: aligned by ``<pa>-F_{EW,NS}_corr.tif`` instead,
+          plus their NMAD on stable ground; ``null`` until corrections ran.
+
+        A stored block is reused while its ``params`` and every source file's
+        mtime are unchanged (``overwrite=True`` recomputes). Pairs without a
+        stats JSON or a ``-F.tif`` are skipped. One failing pair warns and the
+        rest go on; a write failure is logged, never raised.
+
+        Returns:
+            ``(couple, pa_name, block)`` per pair measured or reused.
+        """
+        import json
+
+        from geomulticorr.similarity import raster as sim_raster
+        from geomulticorr.similarity import trace as sim_trace
+        from geomulticorr.similarity.trace import json_tree
+
+        t = normalise_image_type(image_type)
+        if sim.empty or "params_hash" not in sim.columns:
+            return []
+        hashes = sim["params_hash"].dropna().unique()
+        if len(hashes) != 1:
+            raise ValueError(
+                f"sim mixes {len(hashes)} similarity runs; pass the rows of one run"
+            )
+        doc = sim_trace.read_trace(self._similarity_trace_path(pz_name, t))
+        params = dict(doc["runs"][hashes[0]]["params"])
+        report_kw = {k: params[k] for k in sim_raster.REPORT_DEFAULTS if k in params}
+        buffer = float(params.get("moving_buffer") or 0.0)
+        moving = str(params.get("moving", "none"))
+        moving_areas = None
+        if moving != "none":
+            if moving.startswith("custom"):
+                logger.warning(
+                    f"The similarity run used custom moving areas ({moving}), which "
+                    f"cannot be rebuilt; the pzone's moving areas are used instead"
+                )
+            if self.moving_areas_path(pz_name).exists():
+                moving_areas = self.get_moving_areas(pz_name)
+            else:
+                logger.warning(
+                    f"No moving areas loaded for '{pz_name}': the similarity after "
+                    f"correlation is measured on all terrain"
+                )
+
+        before_cols = list(sim_raster.REPORT_KEYS) + ["score"]
+        before = {
+            tuple(sorted(k)): row
+            for k, row in zip(
+                zip(sim["left_key"], sim["right_key"]),
+                sim.reindex(columns=["left_key"] + before_cols).to_dict("records"),
+            )
+        }
+        thumbs = self.thumb_dir(pz_name, t)
+
+        def _mtime(path):
+            return path.stat().st_mtime_ns if path.exists() else None
+
+        todo = [x for x in self._correlated_pair_folders(pz_name, t) if x[0] in before]
+        out, skipped = [], 0
+        for couple, name, folder, left, right in tqdm.tqdm(
+            todo, disable=not progress, desc="similarity after correlation"
+        ):
+            js_path = folder / f"{name}.json"
+            disp = folder / f"{name}-F.tif"
+            if not js_path.exists() or not disp.exists():
+                skipped += 1
+                continue
+            ncc = folder / f"{name}-F-ncc.tif"
+            ew = folder / f"{name}-F_EW_corr.tif"
+            ns = folder / f"{name}-F_NS_corr.tif"
+            has_corr = ew.exists() and ns.exists()
+            sources_raw = {"disp": _mtime(disp), "ncc": _mtime(ncc)}
+            sources_corr = {"ew": _mtime(ew), "ns": _mtime(ns)} if has_corr else None
+            try:
+                stored = json.loads(js_path.read_text()).get("similarity")
+            except (OSError, ValueError):
+                stored = None
+            if (
+                not overwrite
+                and isinstance(stored, dict)
+                and stored.get("params") == json_tree(params)
+                and ((stored.get("after") or {}).get("raw") or {}).get("sources")
+                == sources_raw
+                and (
+                    ((stored.get("after") or {}).get("corrected") or {}).get("sources")
+                )
+                == sources_corr
+            ):
+                out.append((couple, name, stored))
+                continue
+            try:
+                dx, dy, valid, grid = sim_raster.read_disparity(disp)
+                left_path, right_path = thumbs / f"{left}.tif", thumbs / f"{right}.tif"
+                if sim_raster.Grid.of(left_path).key() != grid.key():
+                    raise ValueError(f"{disp.name} is not on the grid of {left}.tif")
+                keep = sim_raster.stable_mask(moving_areas, grid, buffer)
+                raw = sim_raster.compare_after_correlation(
+                    left_path,
+                    right_path,
+                    dx,
+                    dy,
+                    valid,
+                    grid=grid,
+                    keep=keep,
+                    **report_kw,
+                )
+                ncc_stats = {"median": np.nan, "frac_gte_050": np.nan}
+                if ncc.exists():
+                    arr, g = sim_raster.read_image(ncc)
+                    if g.shape == grid.shape:
+                        ncc_stats = sim_raster.masked_stats(arr, keep)
+                raw.update(
+                    ncc_median=ncc_stats["median"],
+                    ncc_q50=ncc_stats["frac_gte_050"],
+                    sources=sources_raw,
+                )
+                corrected = None
+                if has_corr:
+                    cdx, cdy, cvalid = sim_raster.displacement_to_disparity(
+                        ew, ns, grid
+                    )
+                    corrected = sim_raster.compare_after_correlation(
+                        left_path,
+                        right_path,
+                        cdx,
+                        cdy,
+                        cvalid,
+                        grid=grid,
+                        keep=keep,
+                        **report_kw,
+                    )
+                    # NMAD on the maps' own (extraction) grid and stable ground.
+                    native = sim_raster.Grid.of(ew)
+                    keep_native = sim_raster.stable_mask(moving_areas, native, buffer)
+                    n_ew = sim_raster.masked_stats(
+                        sim_raster.read_image(ew)[0], keep_native
+                    )["nmad"]
+                    n_ns = sim_raster.masked_stats(
+                        sim_raster.read_image(ns)[0], keep_native
+                    )["nmad"]
+                    corrected.update(
+                        nmad_ew_m=n_ew,
+                        nmad_ns_m=n_ns,
+                        nmad_m=float(np.hypot(n_ew, n_ns)),
+                        nmad_px=float(np.hypot(n_ew, n_ns)) / grid.res,
+                        sources=sources_corr,
+                    )
+            except Exception as exc:  # one bad pair must not stop a batch
+                logger.warning(f"Similarity after correlation of {name} failed: {exc}")
+                continue
+            prior = before[couple]
+            block = json_tree(
+                {
+                    "params": params,
+                    "couple": list(couple),
+                    "orientation": (
+                        "forward" if prior["left_key"] == left else "backward"
+                    ),
+                    "before": {k: prior[k] for k in before_cols},
+                    "after": {"raw": raw, "corrected": corrected},
+                    "written_utc": datetime.now()
+                    .astimezone()
+                    .isoformat(timespec="seconds"),
+                }
+            )
+            try:
+                gmc_stats.update_stats_file(js_path, "similarity", block)
+            except (OSError, ValueError, TypeError) as exc:
+                logger.warning(f"Could not write the similarity of {name}: {exc}")
+            out.append((couple, name, block))
+        if skipped:
+            logger.info(
+                f"{skipped} pair(s) of '{pz_name}' have no stats JSON or -F.tif "
+                f"yet; no similarity after correlation for them"
+            )
+        return out
+
     def similarity_validation(
         self,
         pz_name: str,
         image_type: str = IMAGE_TYPE_OPTICAL,
         sim: pd.DataFrame | None = None,
+        validation: bool = False,
+        overwrite: bool = False,
+        progress: bool = True,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Compare similarity with what ASP achieved on the correlated couples.
+
+        With ``validation=True`` the similarity is also measured **after**
+        correlation, on every correlated pair, with the same thumbs, report
+        parameters and stable-ground mask as the run, and written into each
+        pair's stats JSON under ``similarity``:
+
+        - ``before``: the run's row for the couple;
+        - ``after.raw``: the right thumb aligned by ASP's raw disparity
+          (``<pa>-F.tif``), plus the NCC (``<pa>-F-ncc.tif``) on stable ground;
+        - ``after.corrected``: aligned by the corrected maps
+          (``<pa>-F_{EW,NS}_corr.tif``), plus their NMAD on stable ground;
+          ``null`` until corrections ran.
+
+        ``after.raw`` is the best match ASP found; on stable ground,
+        ``raw − corrected`` is what the corrections removed. Stored blocks are
+        reused until a source raster or the parameters change.
 
         Args:
             pz_name: Processing zone.
             image_type: Thumb type.
             sim: A similarity frame; default the latest stored run.
+            validation: Also measure, store and return the similarity after
+                correlation.
+            overwrite: With *validation*, recompute pairs whose stored block is
+                current.
+            progress: With *validation*, show a progress bar.
 
         Returns:
             ``(matched, table)``: the similarity rows of the correlated couples
@@ -1841,7 +2075,13 @@ class Session:
             ``nmad_px``), and the Spearman ρ of every index against every
             outcome (empty below
             :data:`~geomulticorr.similarity.validation.MIN_VALIDATION_COUPLES`
-            matched couples).
+            matched couples). With *validation*, ``matched`` gains
+            ``<index>_raw`` / ``<index>_corr``, ``disp_valid_frac_{raw,corr}``,
+            ``ncc_median``, ``ncc_q50``, ``nmad_corr_m``, ``nmad_corr_px`` and
+            ``asp_pairs`` (forward and backward pairs averaged); ``table`` gains
+            those twins as predictors, the raster outcomes, and the columns
+            ``before_vs_raw`` / ``before_vs_corr`` (ρ of each index against its
+            own twin).
         """
         from geomulticorr.similarity import validation as sim_val
 
@@ -1851,9 +2091,40 @@ class Session:
         if outcomes.empty:
             return pd.DataFrame(), pd.DataFrame()
         matched = sim_val.match_outcomes(sim, outcomes)
+        predictors = sim_val.VALIDATION_PREDICTORS
+        outcome_cols = sim_val.VALIDATION_OUTCOMES
+        if validation:
+            blocks = self._similarity_after_correlation(
+                pz_name, image_type, sim, overwrite=overwrite, progress=progress
+            )
+            after = pd.DataFrame(
+                [
+                    {"couple": c, **sim_val.flatten_similarity_block(b)}
+                    for c, _, b in blocks
+                ]
+            )
+            if not after.empty:
+                n_pairs = after.groupby("couple").size()
+                after = after.groupby("couple").mean(numeric_only=True)
+                after["asp_pairs"] = n_pairs
+                lookup = after.to_dict(orient="index")
+                keys = [
+                    tuple(sorted(k))
+                    for k in zip(matched["left_key"], matched["right_key"])
+                ]
+                for col in after.columns:
+                    matched[col] = [lookup.get(k, {}).get(col, np.nan) for k in keys]
+                if "nmad_corr_px" in matched and "res" in matched:
+                    # Same pixel as nmad_px: the similarity run's grid.
+                    matched["nmad_corr_px"] = matched["nmad_corr_m"] / matched["res"]
+            predictors = sim_val.with_asp_twins(predictors)
+            outcome_cols = tuple(outcome_cols) + sim_val.RASTER_OUTCOMES
         if len(matched) < sim_val.MIN_VALIDATION_COUPLES:
             return matched, pd.DataFrame()
-        return matched, sim_val.spearman_table(matched)
+        table = sim_val.spearman_table(matched, predictors, outcome_cols)
+        if validation:
+            table = table.join(sim_val.before_after_table(matched))
+        return matched, table
 
     def _write_similarity_figures(
         self,

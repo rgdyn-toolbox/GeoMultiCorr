@@ -1,5 +1,48 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Similarity after correlation: `similarity_validation(pz, validation=True)`.** It measures the
+  similarity of every correlated pair again, once ASP has aligned it, with the same thumbs,
+  parameters and stable-ground mask as the similarity run:
+  - `raw`: the right thumb is aligned by ASP's disparity (`<pa>-F.tif`). The NCC of
+    `<pa>-F-ncc.tif` on stable ground is added.
+  - `corrected`: the right thumb is aligned by the corrected maps (`<pa>-F_{EW,NS}_corr.tif`).
+    Their NMAD on stable ground is added. On stable ground, `raw − corrected` shows what the
+    corrections removed.
+
+  The results are written into each **pair's stats JSON** under a new key `similarity`, holding
+  `before` (the run's row), `after.raw` and `after.corrected` (`null` until corrections ran). A
+  stored block is reused until a source raster or the run parameters change. `matched` gains
+  `<index>_raw` / `<index>_corr`, `ncc_median`, `ncc_q50` and `nmad_corr_px`, with forward and
+  backward pairs averaged. `table` gains them as predictors, plus the columns
+  `before_vs_raw` / `before_vs_corr`. The default `validation=False` behaves as before. On 16
+  PasDeLours PlanetScope pairs, the raw-aligned `trial_sigma_px` drops to 0.04–0.11 px, and the
+  raster NCC median matches the JSON `cc_median` to ±0.01.
+- `geomulticorr.similarity.raster`: `read_disparity`, `displacement_to_disparity` (corrected maps
+  in metres on the extraction grid, NS north-positive, nodata 0 → left-image pixels on the thumb
+  grid), `apply_disparity` (NaN-aware bilinear) and `masked_stats`. Also
+  `compare_after_correlation`, which `geomulticorr.similarity` exports.
+- `geomulticorr.similarity.validation`: `flatten_similarity_block`, `before_after_table`,
+  `with_asp_twins`, `ASP_VARIANTS`, `RASTER_OUTCOMES`. `geomulticorr.similarity.trace.json_tree`.
+- `stats.update_stats_file(path, section, data)`, a path-based section writer that needs no `Pair`.
+  `update_pair_stats` now writes through it, atomically (`.part` then rename).
+
+### Changed
+- `Session._similarity_outcomes` now scans the pairs through `_correlated_pair_folders`, which the
+  after-correlation step shares, so both agree on which pairs count. Its output is unchanged.
+
+### Tests
+- +35 tests (2815 passing):
+  - a known shift recovered by alignment;
+  - the corrected-map sign and grid conversion;
+  - a zero disparity reproduces the before indices;
+  - the pair JSON block, its reuse by mtime, and a missing `-F.tif`;
+  - `corrected: null` without corrections;
+  - a failing write does not raise;
+  - forward and backward pairs are averaged.
+
 ## [0.8.1] — 2026-10-30
 
 ### Added

@@ -86,6 +86,18 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def json_tree(value: Any) -> Any:
+    """*value* with every leaf made JSON-safe by :func:`_jsonable`, recursively
+    through dicts, lists and tuples (tuples become lists)."""
+    if isinstance(value, Mapping):
+        return {str(k): json_tree(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_tree(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return [json_tree(v) for v in value.tolist()]
+    return _jsonable(value)
+
+
 def empty_trace(pz_name: str, image_type: str) -> dict:
     """A trace with no run yet."""
     return {

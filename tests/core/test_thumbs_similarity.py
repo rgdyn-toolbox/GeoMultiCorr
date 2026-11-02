@@ -236,10 +236,12 @@ def test_resolves_thumbs_through_layout_not_stored_path(session):
 # --------------------------------------------------------------------------- #
 # overview figures and validation
 # --------------------------------------------------------------------------- #
-def _fake_correlate(session, couples):
+def _fake_correlate(session, couples, both_directions=False):
     """Commit the couples as pairs and write the stats JSON ASP extraction and
     corrections would leave, with CC decreasing along *couples*."""
-    session.update_pairs(strategy="manual", couples=couples, both_directions=False)
+    session.update_pairs(
+        strategy="manual", couples=couples, both_directions=both_directions
+    )
     root = session.pair_dir("TestPz")
     for k, p in enumerate(session._pairs["pa_path"]):
         name = pathlib.Path(p).name
@@ -309,3 +311,210 @@ def test_similarity_validation_public(session):
     assert len(matched) == 6 and "nmad_px" in matched
     # CC was written roughly decreasing with score (pairs-layer order) → positive ρ
     assert table.loc["score", "cc_median"] > 0.5
+
+
+# --------------------------------------------------------------------------- #
+# similarity after correlation (validation=True)
+# --------------------------------------------------------------------------- #
+def _write_asp_outputs(session, corrected=True):
+    """What ASP and the corrections leave in each pair folder: a zero
+    disparity ``-F.tif`` and an NCC map on the left thumb's grid, and (with
+    *corrected*) small corrected EW/NS maps (0 is their no-data, so not 0)."""
+    import rasterio
+
+    from geomulticorr.similarity.raster import Grid
+
+    root = session.pair_dir("TestPz")
+    rng = np.random.default_rng(0)
+    for p in session._pairs["pa_path"]:
+        name = pathlib.Path(p).name
+        pz, _, rest = name.partition("_")
+        left = session.thumb_dir("TestPz") / f"{pz}_{rest.split('__')[0]}.tif"
+        g = Grid.of(left)
+        prof = dict(
+            driver="GTiff",
+            height=g.shape[0],
+            width=g.shape[1],
+            dtype="float32",
+            crs=g.crs,
+            transform=g.transform,
+        )
+        zeros = np.zeros(g.shape, "float32")
+        with rasterio.open(root / name / f"{name}-F.tif", "w", count=3, **prof) as d:
+            d.write(np.stack([zeros, zeros, zeros + 1]))
+        with rasterio.open(
+            root / name / f"{name}-F-ncc.tif", "w", count=1, nodata=-32768, **prof
+        ) as d:
+            d.write(zeros + 0.8, 1)
+        if corrected:
+            for comp in ("EW", "NS"):
+                with rasterio.open(
+                    root / name / f"{name}-F_{comp}_corr.tif",
+                    "w",
+                    count=1,
+                    nodata=0,
+                    **prof,
+                ) as d:
+                    d.write((0.01 + 0.001 * rng.random(g.shape)).astype("float32"), 1)
+
+
+def _pair_jsons(session):
+    root = session.pair_dir("TestPz")
+    names = [pathlib.Path(p).name for p in session._pairs["pa_path"]]
+    return {n: root / n / f"{n}.json" for n in names}
+
+
+@pytest.fixture
+def correlated(session):
+    sim = session.compute_thumbs_similarity("TestPz", **KW)
+    _fake_correlate(session, sim.sort_values("score", ascending=False))
+    _write_asp_outputs(session)
+    return session
+
+
+def _count_after(monkeypatch):
+    from geomulticorr.similarity import raster as sim_raster
+
+    calls = []
+    real = sim_raster.compare_after_correlation
+    monkeypatch.setattr(
+        sim_raster,
+        "compare_after_correlation",
+        lambda *a, **k: calls.append(a[0]) or real(*a, **k),
+    )
+    return calls
+
+
+def test_validation_false_is_unchanged(correlated):
+    matched, table = correlated.similarity_validation("TestPz")
+    assert not any(c.endswith(("_raw", "_corr")) for c in matched.columns)
+    assert "before_vs_raw" not in table.columns
+    for path in _pair_jsons(correlated).values():
+        assert "similarity" not in _strict_json(path)
+
+
+def test_validation_writes_before_and_after_into_pair_json(correlated):
+    matched, table = correlated.similarity_validation(
+        "TestPz", validation=True, progress=False
+    )
+    for path in _pair_jsons(correlated).values():
+        js = _strict_json(path)  # NaN written as null
+        assert js["raw_corr_stats"]["cc"]["median"] > 0  # other sections intact
+        block = js["similarity"]
+        assert set(block) == {
+            "params",
+            "couple",
+            "orientation",
+            "before",
+            "after",
+            "written_utc",
+        }
+        assert "params_hash" not in block and "params_hash" not in block["params"]
+        assert block["params"]["kernel"] == 21
+        assert block["orientation"] == "forward"
+        assert set(block["after"]) == {"raw", "corrected"}
+        raw, corr = block["after"]["raw"], block["after"]["corrected"]
+        assert set(raw["indices"]) == set(REPORT_KEYS)
+        assert raw["ncc_median"] == pytest.approx(0.8)
+        assert corr["nmad_m"] == pytest.approx(
+            np.hypot(corr["nmad_ew_m"], corr["nmad_ns_m"])
+        )
+        assert "score" in block["before"]
+    for col in ("trial_peak_median_raw", "coh_mean_corr", "ncc_median", "nmad_corr_px"):
+        assert matched[col].notna().all(), col
+    assert (matched["asp_pairs"] == 1).all()
+    assert {"before_vs_raw", "before_vs_corr", "ncc_median"} <= set(table.columns)
+    assert "trial_peak_median_raw" in table.index
+
+
+def test_zero_disparity_reproduces_before(correlated):
+    """Same thumbs, same grid, same mask and no shift: after == before."""
+    correlated.similarity_validation("TestPz", validation=True, progress=False)
+    checked = 0
+    for path in _pair_jsons(correlated).values():
+        block = _strict_json(path)["similarity"]
+        if "spot" in "".join(block["couple"]):
+            continue  # cross-resolution: before ran on the coarser grid
+        checked += 1
+        before, after = block["before"], block["after"]["raw"]["indices"]
+        for key in REPORT_KEYS:
+            b = np.nan if before[key] is None else before[key]
+            a = np.nan if after[key] is None else after[key]
+            assert np.isclose(a, b, equal_nan=True), key
+    assert checked == 3  # the three PlanetScope couples
+
+
+def test_second_call_reuses_and_a_touched_file_recomputes(correlated, monkeypatch):
+    import os
+
+    calls = _count_after(monkeypatch)
+    correlated.similarity_validation("TestPz", validation=True, progress=False)
+    n_pairs = len(_pair_jsons(correlated))
+    assert len(calls) == 2 * n_pairs  # raw + corrected per pair
+    calls.clear()
+    m2, _ = correlated.similarity_validation("TestPz", validation=True, progress=False)
+    assert calls == [] and m2["trial_peak_median_raw"].notna().all()
+    name = next(iter(_pair_jsons(correlated)))
+    ew = correlated.pair_dir("TestPz") / name / f"{name}-F_EW_corr.tif"
+    st = ew.stat()
+    os.utime(ew, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    correlated.similarity_validation("TestPz", validation=True, progress=False)
+    assert len(calls) == 2
+
+
+def test_without_corrections_corrected_is_null(session):
+    sim = session.compute_thumbs_similarity("TestPz", **KW)
+    _fake_correlate(session, sim.sort_values("score", ascending=False))
+    _write_asp_outputs(session, corrected=False)
+    matched, _ = session.similarity_validation(
+        "TestPz", validation=True, progress=False
+    )
+    for path in _pair_jsons(session).values():
+        assert _strict_json(path)["similarity"]["after"]["corrected"] is None
+    assert "trial_peak_median_raw" in matched
+    assert not any(c.endswith("_corr") for c in matched.columns)
+
+
+def test_missing_disparity_is_skipped(correlated):
+    jsons = _pair_jsons(correlated)
+    name = next(iter(jsons))
+    (correlated.pair_dir("TestPz") / name / f"{name}-F.tif").unlink()
+    matched, _ = correlated.similarity_validation(
+        "TestPz", validation=True, progress=False
+    )
+    assert "similarity" not in _strict_json(jsons[name])
+    assert (
+        sum("similarity" in _strict_json(p) for n, p in jsons.items() if n != name)
+        == len(jsons) - 1
+    )
+    assert matched["trial_peak_median_raw"].isna().sum() == 1
+
+
+def test_write_failure_never_raises(correlated, monkeypatch):
+    from geomulticorr.stats import stats as gmc_stats
+
+    def _boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(gmc_stats, "update_stats_file", _boom)
+    matched, _ = correlated.similarity_validation(
+        "TestPz", validation=True, progress=False
+    )
+    assert matched["trial_peak_median_raw"].notna().all()  # still returned
+
+
+def test_forward_and_backward_pairs_are_averaged(session):
+    sim = session.compute_thumbs_similarity("TestPz", **KW)
+    _fake_correlate(
+        session, sim.sort_values("score", ascending=False), both_directions=True
+    )
+    _write_asp_outputs(session)
+    matched, _ = session.similarity_validation(
+        "TestPz", validation=True, progress=False
+    )
+    assert len(matched) == 6 and (matched["asp_pairs"] == 2).all()
+    orients = {
+        _strict_json(p)["similarity"]["orientation"]
+        for p in _pair_jsons(session).values()
+    }
+    assert orients == {"forward", "backward"}

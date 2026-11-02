@@ -73,3 +73,70 @@ def test_match_outcomes():
     )
     m = val.match_outcomes(sim, outcomes)
     assert len(m) == 1 and m["nmad_px"].item() == 0.5 and "couple" not in m
+
+
+def _block(corrected=True):
+    return {
+        "before": {"trial_peak_median": 0.7},
+        "after": {
+            "raw": {
+                "indices": {"trial_peak_median": 0.9, "coh_mean": None},
+                "disp_valid_frac": 0.95,
+                "ncc_median": 0.8,
+                "ncc_q50": 0.9,
+                "sources": {"disp": 1, "ncc": 2},
+            },
+            "corrected": (
+                {
+                    "indices": {"trial_peak_median": 0.85},
+                    "disp_valid_frac": 0.9,
+                    "nmad_m": 1.2,
+                    "nmad_px": 0.4,
+                    "sources": {"ew": 3, "ns": 4},
+                }
+                if corrected
+                else None
+            ),
+        },
+    }
+
+
+def test_flatten_similarity_block():
+    row = val.flatten_similarity_block(_block())
+    assert row["trial_peak_median_raw"] == 0.9
+    assert row["trial_peak_median_corr"] == 0.85
+    assert np.isnan(row["coh_mean_raw"])  # null → NaN
+    assert row["disp_valid_frac_raw"] == 0.95 and row["disp_valid_frac_corr"] == 0.9
+    assert row["ncc_median"] == 0.8 and row["ncc_q50"] == 0.9
+    assert row["nmad_corr_m"] == 1.2 and row["nmad_corr_px"] == 0.4
+    assert "sources" not in row and "trial_peak_median" not in row
+
+
+def test_flatten_without_corrections():
+    row = val.flatten_similarity_block(_block(corrected=False))
+    assert "trial_peak_median_raw" in row
+    assert not any(k.endswith("_corr") for k in row) and "nmad_corr_m" not in row
+    assert val.flatten_similarity_block(None) == {}
+
+
+def test_with_asp_twins():
+    assert val.with_asp_twins(["a", "b"]) == [
+        "a",
+        "b",
+        "a_raw",
+        "b_raw",
+        "a_corr",
+        "b_corr",
+    ]
+
+
+def test_before_after_table():
+    x = np.arange(8.0)
+    frame = pd.DataFrame(
+        {"coh_mean": x, "coh_mean_raw": x * 2, "coh_mean_corr": -x, "dt_days": x}
+    )
+    table = val.before_after_table(frame)
+    assert list(table.columns) == ["before_vs_raw", "before_vs_corr"]
+    assert list(table.index) == ["coh_mean"]  # dt_days has no twin
+    assert table.loc["coh_mean", "before_vs_raw"] == pytest.approx(1.0)
+    assert table.loc["coh_mean", "before_vs_corr"] == pytest.approx(-1.0)
