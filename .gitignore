@@ -6,6 +6,8 @@ __pycache__/
 # Temporary folders
 dist/
 temp/
+PasDeLours_manual/
+gricad_cigri/
 
 # Local M2M debugging scripts
 geomulticorr/data_sources/diagnose_m2m.py
@@ -16,6 +18,7 @@ data/
 
 # Temporary LOG files
 devs_logs/
+TO_DO/
 
 # VS code setting
 .vscode/
@@ -29,12 +32,10 @@ CLAUDE.md
 # Unit test cache and coverage reports
 .pytest_cache/
 tests/__pycache__
+.coverage
 
 # Environment variables (API keys, secrets)
 .env
-
-# Logo files
-gmc_logo/
 
 # Sphinx documentation build
 docs/build/
