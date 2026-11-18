@@ -3,6 +3,75 @@
 ## [Unreleased]
 
 ### Added
+- **Georeferenced Planet thumbnails: `georeference_thumbnails(thumbs, images_gdf)`**
+  (`geomulticorr.data_sources`). It turns the free PNG quicklooks into RGB + alpha GeoTIFFs
+  (`<image_id>.tif`), using the footprints from the search frame or the GPKG it was saved to.
+  - A thumbnail is the footprint's EPSG:3857 bounding box, drawn north-up with square pixels and
+    letterboxed into the frame. The geotransform is therefore exact from the footprint
+    (`thumbnail_transform`), with no corner detection. The alpha channel only checks it: the
+    footprint/alpha IoU, ~0.98 on real thumbnails, is reported in `iou`, with a warning below
+    `min_iou`.
+  - `dst_crs=None` keeps EPSG:3857 (no resampling). `"utm"` is resolved once per batch, so the
+    outputs share a CRS. `crop_to=` clips to an AOI bounding box. An AOI that misses the scene
+    footprint writes nothing (`status="outside"`).
+  - `resolution=` puts every output on one grid: the pixel size is fixed and the origin is
+    snapped to a multiple of it, as with `gdalwarp -tr -tap`. With `crop_to`, every date gets the
+    same bounds and shape: the whole AOI box, transparent where a scene does not reach. On
+    rasuwa, 259 thumbnails at 50 m gave one 88 × 121 grid. `resampling=` (default `"nearest"`)
+    sets the warp method.
+  - Parallel through `concurrent.futures`: threads by default, `n_jobs=`, and
+    `executor="process"` as an option. On 259 real thumbnails: 4.0 s serial, 1.7 s with threads.
+    One failing PNG does not stop the others (`status="failed"`, error text in `message`).
+  - `georeference_thumbnail(png, footprint)` does a single file.
+- **`PlanetImageFinder(workdir=)`: the search table is saved by default.** With a workdir,
+  `search_metadata()` writes the table to `<workdir>/footprints.gpkg`, which is rewritten on each
+  search. `save=False` only searches, and `save=True` without a workdir raises. **No image is
+  downloaded by the search.** Clean the table, then run `finder.download_thumbnails(gdf)`, which
+  now defaults to `<workdir>/thumbnails/<image_id>.png`. `search_metadata(download_thumbnails=True)`
+  downloads every found scene at search time when that is really wanted, and a failed download is
+  logged without losing the search. `finder.georeference_thumbnails(**kw)` defaults to those two
+  places and to the finder's AOI as `crop_to`. Without a workdir nothing changes.
+- **Planet thumbnails wider than 512 px no longer abort the batch.** Planet serves them only for
+  scenes whose visual asset the account may download, and this varies per scene (a recent
+  preview scene, or one outside the plan's area of access). `search_metadata` now records it in
+  a `visual_download` column, read from each scene's `_permissions`. `download_thumbnails(width>512)`
+  fetches the scenes without that permission at 512 px instead: directly when the column says so,
+  otherwise after Planet answers 400/403. Their ids go to `finder.last_thumbnail_fallbacks`, and
+  one warning lists them. Other HTTP errors still raise.
+- **`PlanetClient.info()`**: account summary covering the organisation, plan and validity, area
+  quota (total / used / remaining per interval), scene and basemap tile quotas, global or
+  restricted area of access, and one line per plan policy (item types, assets, **download
+  delay**, GeoTIFF flag). It is read from the experimental `auth/v1` subscriptions and plans
+  endpoints and the documented `account/v1/my/products`. A failing call goes to `errors` and
+  never raises. `verbose=False` only returns the dict. **`PlanetClient.item_permissions(id)`**
+  gives one scene's `_permissions` and `visual_download`. Education & Research plans delay
+  PlanetScope download rights by **30 days**. Measured live on 2026-11-18, the cut-off fell
+  between 2026-10-19 (allowed) and 2026-10-27 (refused). That delay is why recent scenes refuse
+  thumbnails wider than 512 px, and the fallback warning now says so.
+
+- **CiGri grid as a correlation target: `cluster="cigri"`.** It is chosen like `gricad` or
+  `isterre`, in `prepare_pairs_correlation` and `launch_pairs_correlation`. Instead of one
+  `oarsub` per pair, every pair of a pzone (and image type) goes into **one** CiGri campaign,
+  which runs best-effort on idle cores and re-submits killed jobs by itself.
+  - Spellings: `"cigri"` (grid cluster `dahu`), `"cigri:dahu,luke"`, and `"cigri-test[:…]"`
+    for CiGri's test mode (one job at a time per cluster). `walltime` and `nodes`/`cores` become
+    the JDL `walltime`/`resources`; the project is `rgdyn`.
+  - Files are written flat in `<pz>/image_correlation/` (no new folder): `cigri_<name>.jdl`,
+    `cigri_<name>_params.txt`, the runner `gmc_cigri_job.sh` and, after submission,
+    `cigri_campaign_<id>.json`. Each job logs to `<pa_key>_cigri.log` in its pair folder.
+  - The runner is idempotent: a job whose `-F.tif`/`-F-ncc.tif` exist exits 0, and a job that
+    ends without them exits 3, so CiGri raises an event.
+  - `gridsub` runs here when it is on `PATH` (killeen), otherwise through
+    `ssh killeen.ciment` with the JDL piped on stdin. `$GMC_CIGRI_HOST` overrides this
+    (`local` forces here).
+  - `Session.cigri_status()` reads the campaigns of the last launch, or the latest record of
+    each pzone after a restart. `sync_pairs_after_cluster` collects the results, as for OAR.
+  - The TIO inversion keeps rejecting `cigri`: an inversion is one job.
+- New package `geomulticorr.scheduler`: `profiles` (one cluster-profile table,
+  `parse_cluster`), `oar`, and `cigri` (`build_jdl`, `write_campaign`, `submit_campaign`,
+  `campaign_status`, `campaign_events`, `fix_campaign_events`, `cancel_campaign`).
+  `geomulticorr.utils.hpc_tools` now re-exports from it, so every existing import works, and
+  the GRICAD/ISTerre job scripts are byte-identical to before.
 - **Similarity after correlation: `similarity_validation(pz, validation=True)`.** It measures the
   similarity of every correlated pair again, once ASP has aligned it, with the same thumbs,
   parameters and stable-ground mask as the similarity run:
@@ -30,10 +99,57 @@
   `update_pair_stats` now writes through it, atomically (`.part` then rename).
 
 ### Changed
+- `PlanetImageFinder.download_thumbnails` names files `<image_id>.png` instead of
+  `<YYYY-MM-DD>_<image_id>.png`, because the PSScene id already starts with the date. Folders
+  downloaded before this change need their `YYYY-MM-DD_` prefix removed before they are
+  georeferenced.
 - `Session._similarity_outcomes` now scans the pairs through `_correlated_pair_folders`, which the
   after-correlation step shares, so both agree on which pairs count. Its output is unchanged.
+  - **DINAMIS SPOT 6/7 collection `dinamis-openspot-6-7`.** `spot-6-7-drs` was removed in 2026, and
+  an unknown collection returns 0 items rather than an error, so `search_metadata` now checks the
+  collection and raises. Asset keys were renamed; `_ASSET_ALIASES` maps the old keys, so both
+  spellings work. Filenames carry `{scene_part}` (empty for `SCENE1`), because the `SCENE1`/`SCENE2`
+  items of one strip share an acquisition stamp. `_plan_downloads` raises on any filename collision
+  before downloading.
+
+### Fixed
+- `launch_pairs_correlation(dry_run=True)` now logs each command, as its docstring promised.
+- **Cleaning a pair no longer deletes results.** `sync_pairs_after_cluster` (`clean=True` by default,
+  also reached through `gmc correlate` with `sync: true`), `ASP.clean_pair_directory` and
+  `ASP.run_correlation(clean=True)` deleted everything outside a keep-list made for fresh ASP output.
+  Run on a pair that had already been extracted or corrected, they removed the EW/NS and corrected
+  maps, masks, the stats JSON and the plots. They now delete only known ASP intermediates, listed in
+  `ASP._INTERMEDIATE_SUFFIXES` from a real ASP 3.6.0 run, so repeating them is safe. Files from other
+  ASP versions that are not listed stay on disk. **If results went missing from a pair folder after
+  such a call, re-run extraction and corrections**: `-F.tif` was always kept.
+- Cleaning no longer needs ASP installed: `ASP.clean_pair_directory` is a classmethod that only deletes
+  files. `launch_pairs_correlation` (dry run, cluster or local) and `sync_pairs_after_cluster` no
+  longer build `ASP`, which raised `FileNotFoundError` on a machine without it on its `PATH`. Their
+  `asp_bin_dir` argument is now unused, and kept so existing calls keep working. If ASP is missing
+  during a real local launch, the failure now appears per pair, through the script's return code.
+- `ASP.run_correlation(clean=True)` no longer deletes the input symlinks in the output folder.
+
+### Deprecated
+- `Session.insert_pzone_to_gdb` (use `insert_pzone`) emit a `DeprecationWarning` and will be removed
+  in a future release.
+
+### Removed
+- **`map_georasters_bank(save_georaster_bank=)`.** It called a method that never existed, so `True`
+  always raised `AttributeError`. `exclude_patterns` moves up one position, so a call passing it
+  by position needs updating.
+- `Session._search_engine_thibaut` (unused) and unused imports in `session.py`.
+- `Session.pr_full` (use `prepare_pairs_correlation` then `launch_pairs_correlation`)
+
+### Known issues
+- `apply_pairs_corrections(filter_pipeline=<a single mask>)` fails on every pair and only logs the
+  error, because a single mask has no `compute()`. Combine masks with `+` into a `FilterPipeline`.
+  Pinned by a strict `xfail`.
 
 ### Tests
+- +20 tests (2834 passing, 1 xfail) in `tests/core/test_session_cleanup.py`: `launch_pairs_correlation`
+  dry and real runs, local and cluster, with no ASP install; `sync_pairs_after_cluster` keeps every
+  product and removes the real ASP 3.6.0 intermediates; both deprecations; corrected maps written
+  from a `FilterPipeline`. The fixtures in `tests/correlation/test_integration.py` now use real names.
 - +35 tests (2815 passing):
   - a known shift recovered by alignment;
   - the corrected-map sign and grid conversion;

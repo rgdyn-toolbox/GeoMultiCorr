@@ -29,9 +29,20 @@
 """Search and bulk-download SPOT 6/7 imagery from the DINAMIS STAC catalog.
 
 DINAMIS (via the Théia ``api.stac.teledetection.fr`` STAC endpoint) hosts the
-French national SPOT 6/7 archive received by the Montpellier ground station:
-metropolitan France, 2017-04 to 2023-10. Assets are Cloud-Optimized GeoTIFFs
-on MinIO object storage plus DIMAP XML metadata and vector cloud masks.
+national SPOT 6/7 ortho coverage (collection ``dinamis-openspot-6-7``):
+metropolitan France and Corsica, 2014-06 onwards (2025-10 at the time of
+writing; the extent grows as new years are ingested). Assets are
+Cloud-Optimized GeoTIFFs on MinIO object storage plus DIMAP XML metadata and
+GML cloud/ROI masks.
+
+The catalogue was restructured in 2026: the former ``spot-6-7-drs`` collection
+(2017-2023, asset keys ``src_pan``/``src_xs``/``dimap_pan``/…) was removed and
+its content re-published under ``dinamis-openspot-6-7`` with the asset keys
+``PAN``/``MS``/``PAN-dimap``/``MS-dimap``/``cld-mask``/``roi-mask``/``QL``/
+``mask``/``lineage``. The old key names are still accepted everywhere as
+aliases (:data:`_ASSET_ALIASES`), so existing calls keep working. A search
+against a collection that no longer exists raises instead of silently
+returning nothing (pystac does the latter).
 
 Two download modes, mirroring :mod:`geomulticorr.data_sources.mpc_image_search_download`:
 
@@ -69,6 +80,14 @@ Downloads are named by :data:`DEFAULT_FILENAME_TEMPLATE`, the Airbus-style
     IMG_S7P_201806231000132.tif            # panchromatic scene
     IMG_S7MS_201806231000132.tif           # multispectral scene
     IMG_S7P_201806231000132_metadata.xml   # its DIMAP sibling
+    IMG_S7P_201806231000132_SCENE2.tif     # 2nd scene cut from the same strip
+
+The acquisition stamp is **not** unique per item: one strip is cut into
+``SCENE1``, ``SCENE2``… items that all carry it. ``{scene_part}`` is empty for
+``SCENE1`` (so single-scene names are unchanged) and ``_SCENE<n>`` otherwise.
+The download methods refuse to start when two assets of one call would render
+to the same filename, since the second would overwrite (or be skipped as
+"existing") without a trace.
 
 ``DinamisImageFinder(..., filename_template=...)`` overrides it with any
 ``str.format`` template over the fields listed in :func:`_name_fields`, so a
@@ -117,10 +136,34 @@ except Exception:
 LOGGER = _logging.getLogger("dinamis_spot_image_search_download")
 
 DINAMIS_STAC_URL = "https://api.stac.teledetection.fr"
-SPOT67_COLLECTION = "spot-6-7-drs"
+SPOT67_COLLECTION = "dinamis-openspot-6-7"
+
+#: pre-2026 asset key (``spot-6-7-drs``) -> current key (``dinamis-openspot-6-7``).
+#: Both spellings are accepted; :func:`_resolve_asset_key` picks whichever the
+#: item actually carries.
+_ASSET_ALIASES = {
+    "src_pan": "PAN",
+    "src_xs": "MS",
+    "dimap_pan": "PAN-dimap",
+    "dimap_xs": "MS-dimap",
+    "cld_msk_vec_pan": "cld-mask",
+    "cld_msk_vec_xs": "cld-mask",
+    "roi_msk_vec_pan": "roi-mask",
+    "roi_msk_vec_xs": "roi-mask",
+    "rendered_preview": "QL",
+}
 
 #: file extension for each STAC asset key
 _ASSET_EXTENSIONS = {
+    "PAN": "tif",
+    "MS": "tif",
+    "PAN-dimap": "xml",
+    "MS-dimap": "xml",
+    "cld-mask": "gml",
+    "roi-mask": "gml",
+    "QL": "jpg",
+    "mask": "zip",
+    "lineage": "zip",
     "src_pan": "tif",
     "src_xs": "tif",
     "dimap_pan": "xml",
@@ -133,6 +176,10 @@ _ASSET_EXTENSIONS = {
 }
 #: sensor label (Panchromatic / Multispectral) for each STAC asset key
 _ASSET_SENSOR = {
+    "PAN": "P",
+    "PAN-dimap": "P",
+    "MS": "MS",
+    "MS-dimap": "MS",
     "src_pan": "P",
     "dimap_pan": "P",
     "cld_msk_vec_pan": "P",
@@ -145,6 +192,13 @@ _ASSET_SENSOR = {
 #: filename suffix for non-primary assets. Every non-image asset needs a distinct
 #: one: the cloud and ROI masks are both .gpkg and would otherwise collide.
 _ASSET_SUFFIX = {
+    "PAN-dimap": "_metadata",
+    "MS-dimap": "_metadata",
+    "cld-mask": "_cloudmask",
+    "roi-mask": "_roimask",
+    "QL": "_preview",
+    "mask": "_masks",
+    "lineage": "_lineage",
     "dimap_pan": "_metadata",
     "dimap_xs": "_metadata",
     "cld_msk_vec_pan": "_cloudmask",
@@ -154,7 +208,12 @@ _ASSET_SUFFIX = {
     "rendered_preview": "_preview",
 }
 #: image asset -> its DIMAP metadata asset
-_METADATA_ASSET_FOR = {"src_pan": "dimap_pan", "src_xs": "dimap_xs"}
+_METADATA_ASSET_FOR = {
+    "PAN": "PAN-dimap",
+    "MS": "MS-dimap",
+    "src_pan": "dimap_pan",
+    "src_xs": "dimap_xs",
+}
 
 #: environment variables the ``teledetection`` SDK reads for its API key pair
 _TLD_ACCESS_KEY_ENV = "TLD_ACCESS_KEY"
@@ -163,7 +222,7 @@ _TLD_SECRET_KEY_ENV = "TLD_SECRET_KEY"
 #: default output naming: ``IMG_S6P_201707261036189.tif`` — the Airbus-style
 #: ``IMG_<mission><sensor>_<acquisition stamp>`` convention. ``{suffix}`` keeps
 #: the metadata/mask siblings from colliding with the image they describe.
-DEFAULT_FILENAME_TEMPLATE = "IMG_{sensor_tag}_{stamp}{suffix}.{ext}"
+DEFAULT_FILENAME_TEMPLATE = "IMG_{sensor_tag}_{stamp}{scene_part}{suffix}.{ext}"
 
 #: the pre-0.4.3 convention, kept for projects already named that way
 LEGACY_FILENAME_TEMPLATE = "IMG_SPOT{platform_num}{sensor_part}_{date}{suffix}.{ext}"
@@ -182,7 +241,60 @@ _ASSET_NAME_RE = _re.compile(
     r"\.[A-Za-z]+$"
 )
 
+#: item ids of ``dinamis-openspot-6-7``, e.g.
+#: ``SPOT67_FRANCE_202411171007349_GS1_E006N46_SCENE1_ORTHO-HPQ``. The stamp is
+#: shared by every scene cut from one strip; ``(stamp, scene)`` is unique.
+_ITEM_ID_RE = _re.compile(r"_(?P<stamp>\d{15})_.*?(?:_(?P<scene>SCENE\d+)_|$)")
+
+#: search_metadata column -> STAC property (acquisition geometry, which matters
+#: for correlation: off-nadir incidence × DEM error is a per-image artefact)
+_VIEW_COLUMNS = {
+    "snow_percent": "eo:snow_cover",
+    "off_nadir_deg": "view:off_nadir",
+    "incidence_deg": "view:incidence_angle",
+    "sun_azimuth_deg": "view:sun_azimuth",
+    "sun_elevation_deg": "view:sun_elevation",
+}
+
 _WGS84_GEOD = _Geod(ellps="WGS84")
+
+
+def _resolve_asset_key(item: dict, asset_key: str) -> str:
+    """Return the spelling of ``asset_key`` that ``item`` actually carries.
+
+    Accepts the current keys (``PAN``) and the pre-2026 ones (``src_pan``) in
+    both directions; a key the item has under neither spelling is returned
+    unchanged, so the caller's "asset not found" path still reports what was
+    asked for.
+    """
+    assets = item.get("assets", {})
+    if asset_key in assets:
+        return asset_key
+    current = _ASSET_ALIASES.get(asset_key)
+    if current and current in assets:
+        return current
+    for legacy, cur in _ASSET_ALIASES.items():
+        if cur == asset_key and legacy in assets:
+            return legacy
+    return asset_key
+
+
+def _mission_num(props: Mapping) -> str:
+    """SPOT mission number (``"6"``/``"7"``) from STAC properties.
+
+    ``dinamis-openspot-6-7`` reports ``platform: "SPOT"`` plus ``mission: "6"``;
+    the removed ``spot-6-7-drs`` reported ``platform: "SPOT-6"``.
+    """
+    mission = props.get("mission")
+    if mission not in (None, ""):
+        return str(mission)
+    return str(props.get("platform", "spot")).upper().split("-")[-1]
+
+
+def _platform_label(props: Mapping) -> Optional[str]:
+    """``"spot-6"``/``"spot-7"`` whichever catalogue generation the item comes from."""
+    num = _mission_num(props)
+    return f"spot-{num}" if num.isdigit() else props.get("platform")
 
 
 def _geodesic_area_km2(geom: _BaseGeometry) -> float:
@@ -209,25 +321,34 @@ def _name_fields(item: dict, asset_key: str) -> Dict[str, str]:
         ``date`` (``20180623``), ``year``, ``month``, ``day``, ``time``
         (``1000132``), ``stamp`` (``201806231000132`` — the full acquisition
         timestamp Airbus uses as a scene identifier), ``geom_level`` (``ORT``),
-        ``job`` (the production job id), ``item_id``, ``asset`` (the STAC asset
-        key), ``suffix`` (``_metadata``/``_cloudmask``/``_preview``) and
-        ``ext``.
+        ``job`` (the production job id), ``scene`` (``SCENE2``, ``""`` when
+        the item id has none), ``scene_part`` (``""`` for ``SCENE1``,
+        ``_SCENE<n>`` otherwise), ``item_id``, ``asset`` (the STAC asset key
+        the item carries), ``suffix`` (``_metadata``/``_cloudmask``/``_preview``)
+        and ``ext``.
     """
+    asset_key = _resolve_asset_key(item, asset_key)
     props = item.get("properties", {})
     dt = pd.to_datetime(props.get("datetime"))
-    platform = str(props.get("platform", "spot")).upper()  # "SPOT-7"
-    platform_num = platform.split("-")[-1]
 
     href = item.get("assets", {}).get(asset_key, {}).get("href", "")
     basename = _os.path.basename(href.split("?")[0])
     parsed = _ASSET_NAME_RE.match(basename)
     grp = parsed.groupdict() if parsed else {}
 
-    mission = grp.get("mission") or f"SPOT{platform_num}"
+    mission = grp.get("mission") or f"SPOT{_mission_num(props)}"
+    platform_num = mission[len("SPOT") :]
     sensor = _ASSET_SENSOR.get(asset_key) or grp.get("sensor") or ""
     mission_short = f"S{platform_num}"
 
-    stamp = grp.get("stamp", "")
+    id_match = _ITEM_ID_RE.search(item.get("id", ""))
+    id_grp = id_match.groupdict() if id_match else {}
+    scene = id_grp.get("scene") or ""
+
+    # Sidecars such as the MASKS/LINEAGE zips are named after the item, not the
+    # Airbus product, so the stamp comes from the item id — exact, unlike the
+    # STAC datetime, which this collection rounds to midnight.
+    stamp = grp.get("stamp") or id_grp.get("stamp") or ""
     if not stamp:
         # The default template keys on {stamp}; leaving it empty would collapse
         # every scene of a campaign onto one filename and silently overwrite.
@@ -258,6 +379,8 @@ def _name_fields(item: dict, asset_key: str) -> Dict[str, str]:
         "stamp": stamp,
         "geom_level": grp.get("geom_level", ""),
         "job": grp.get("job", ""),
+        "scene": scene,
+        "scene_part": f"_{scene}" if scene and scene != "SCENE1" else "",
         "item_id": item.get("id", ""),
         "asset": asset_key,
         "suffix": _ASSET_SUFFIX.get(asset_key, ""),
@@ -394,14 +517,15 @@ class DinamisImageFinder:
         Authenticated STAC client.
     aoi : GeoDataFrame | shapely geometry | GeoJSON-like mapping | (w, s, e, n)
         Area of interest. A GeoDataFrame is re-projected to WGS84 and dissolved.
-    year_range : tuple[int, int], default (2017, 2023)
-        Inclusive year range filter (collection spans 2017-04 to 2023-10).
+    year_range : tuple[int | None, int | None], default (2014, None)
+        Inclusive year range filter; ``None`` leaves that end open (the
+        collection spans 2014-06 to the latest ingested year).
     month_range : tuple[int, int], default (1, 12)
         Inclusive month (1-12) range filter (applied client-side).
     cloud_max : float, default 100
         Maximum ``eo:cloud_cover`` percentage. Scenes with no reported cloud
-        cover (frequently the case in this collection) are always kept.
-    collection : str, default "spot-6-7-drs"
+        cover are always kept.
+    collection : str, default "dinamis-openspot-6-7"
         STAC collection id.
     filename_template : str, optional
         ``str.format``-style template for downloaded filenames. Defaults to
@@ -416,7 +540,7 @@ class DinamisImageFinder:
         client: DinamisClient,
         aoi: Union[gpd.GeoDataFrame, _BaseGeometry, Mapping, Sequence[float]],
         *,
-        year_range: Tuple[int, int] = (2017, 2023),
+        year_range: Tuple[Optional[int], Optional[int]] = (2014, None),
         month_range: Tuple[int, int] = (1, 12),
         cloud_max: float = 100.0,
         collection: str = SPOT67_COLLECTION,
@@ -459,14 +583,27 @@ class DinamisImageFinder:
         -------
         geopandas.GeoDataFrame
             One row per scene: ``image_id``, ``acquisition_date``, ``platform``
-            (``"spot-6"`` / ``"spot-7"``), ``cloud_percent``, ``assets`` (list
-            of available asset keys), ``geometry`` (footprint, EPSG:4326).
-            Sorted by date ascending.
+            (``"spot-6"`` / ``"spot-7"``), ``cloud_percent``, ``snow_percent``,
+            ``off_nadir_deg``, ``incidence_deg``, ``sun_azimuth_deg``,
+            ``sun_elevation_deg`` (``None`` when the item does not report
+            them), ``assets`` (list of available asset keys), ``geometry``
+            (footprint, EPSG:4326). Sorted by date ascending.
+
+        Raises
+        ------
+        ValueError
+            If the search is empty because ``collection`` does not exist on the
+            server. pystac returns zero items for an unknown collection, which
+            is indistinguishable from "no scene here" — exactly how the 2026
+            removal of ``spot-6-7-drs`` went unnoticed.
         """
         if date_start or date_end:
             datetime_range = f"{date_start or '..'}/{date_end or '..'}"
         else:
-            datetime_range = f"{self.year_range[0]}-01-01/{self.year_range[1]}-12-31"
+            y0, y1 = self.year_range
+            start = f"{y0}-01-01" if y0 is not None else ".."
+            end = f"{y1}-12-31" if y1 is not None else ".."
+            datetime_range = f"{start}/{end}"
 
         search = self.client.stac.search(
             collections=[self.collection],
@@ -475,6 +612,8 @@ class DinamisImageFinder:
             limit=limit,
         )
         items = list(search.items_as_dicts())
+        if not items:
+            self._check_collection_exists()
 
         rows: List[dict] = []
         for it in items:
@@ -492,8 +631,9 @@ class DinamisImageFinder:
                 {
                     "image_id": it["id"],
                     "acquisition_date": dt,
-                    "platform": props.get("platform"),
+                    "platform": _platform_label(props),
                     "cloud_percent": cloud,
+                    **{col: props.get(key) for col, key in _VIEW_COLUMNS.items()},
                     "assets": list(it["assets"].keys()),
                     "geometry": _shape(it["geometry"]),
                 }
@@ -506,6 +646,7 @@ class DinamisImageFinder:
                     "acquisition_date",
                     "platform",
                     "cloud_percent",
+                    *_VIEW_COLUMNS,
                     "assets",
                     "geometry",
                 ],
@@ -522,7 +663,7 @@ class DinamisImageFinder:
         images_gdf: gpd.GeoDataFrame,
         *,
         output_dir: Union[str, Path],
-        assets: Sequence[str] = ("src_pan",),
+        assets: Sequence[str] = ("PAN",),
         download_metadata: bool = True,
         max_images: Optional[int] = None,
         show_progress: bool = True,
@@ -542,9 +683,11 @@ class DinamisImageFinder:
         output_dir : str | Path
             Destination directory (flat — filenames already encode platform,
             sensor and date).
-        assets : sequence[str], default ("src_pan",)
-            STAC asset keys to download. Common choices: ``"src_pan"``
-            (panchromatic, 1.5 m), ``"src_xs"`` (multispectral, 6 m), or both.
+        assets : sequence[str], default ("PAN",)
+            STAC asset keys to download. Common choices: ``"PAN"``
+            (panchromatic, 1.5 m), ``"MS"`` (multispectral, 6 m), or both;
+            ``("PAN-dimap",)`` with ``download_metadata=False`` fetches the
+            metadata alone. The pre-2026 names (``"src_pan"``…) are accepted.
         download_metadata : bool, default True
             Also fetch each image asset's DIMAP XML metadata sibling.
         max_images : int, optional
@@ -560,6 +703,12 @@ class DinamisImageFinder:
         -------
         list[pathlib.Path]
             Paths of all files written.
+
+        Raises
+        ------
+        ValueError
+            If two assets would be written to the same filename (see
+            :meth:`_plan_downloads`). Nothing is downloaded in that case.
         """
         if "image_id" not in images_gdf.columns:
             raise ValueError("images_gdf must contain an 'image_id' column")
@@ -570,29 +719,26 @@ class DinamisImageFinder:
         rows = list(images_gdf.itertuples(index=False))
         if max_images is not None:
             rows = rows[: int(max_images)]
+
+        def keys_for(item: dict) -> List[str]:
+            keys = [_resolve_asset_key(item, k) for k in assets]
+            if download_metadata:
+                for key in list(keys):
+                    meta_key = _METADATA_ASSET_FOR.get(key)
+                    if meta_key:
+                        keys.append(_resolve_asset_key(item, meta_key))
+            return list(dict.fromkeys(keys))
+
+        plan = self._plan_downloads(rows, keys_for, out_dir)
         iterator = (
-            _tqdm(rows, desc="Scenes", unit="scene")
+            _tqdm(plan, desc="Scenes", unit="scene")
             if (_HAS_TQDM and show_progress)
-            else rows
+            else plan
         )
 
-        asset_keys = list(assets)
-        if download_metadata:
-            for key in list(asset_keys):
-                meta_key = _METADATA_ASSET_FOR.get(key)
-                if meta_key and meta_key not in asset_keys:
-                    asset_keys.append(meta_key)
-
         written: List[Path] = []
-        for row in iterator:
-            image_id: str = getattr(row, "image_id")
-            item = self._resolve_item(image_id)
-            for asset_key in asset_keys:
-                href = item["assets"].get(asset_key, {}).get("href")
-                if not href:
-                    LOGGER.warning("asset %r not found on item %s", asset_key, image_id)
-                    continue
-                out_path = out_dir / self._clean_filename(item, asset_key)
+        for image_id, jobs in iterator:
+            for href, out_path in jobs:
                 if out_path.exists() and not overwrite:
                     LOGGER.info("skip existing %s", out_path)
                     written.append(out_path)
@@ -607,7 +753,7 @@ class DinamisImageFinder:
         images_gdf: gpd.GeoDataFrame,
         *,
         output_dir: Union[str, Path],
-        assets: Sequence[str] = ("src_xs",),
+        assets: Sequence[str] = ("MS",),
         max_images: Optional[int] = None,
         show_progress: bool = True,
         overwrite: bool = False,
@@ -628,8 +774,9 @@ class DinamisImageFinder:
             Output of :meth:`search_metadata` (possibly filtered).
         output_dir : str | Path
             Destination directory.
-        assets : sequence[str], default ("src_xs",)
-            Raster asset keys to clip (``"src_xs"`` or ``"src_pan"``).
+        assets : sequence[str], default ("MS",)
+            Raster asset keys to clip (``"MS"`` or ``"PAN"``; the pre-2026
+            ``"src_xs"``/``"src_pan"`` are accepted).
         max_images : int, optional
             Limit the number of scenes processed.
         show_progress : bool, default True
@@ -649,29 +796,27 @@ class DinamisImageFinder:
         rows = list(images_gdf.itertuples(index=False))
         if max_images is not None:
             rows = rows[: int(max_images)]
+
+        # Same template as download_images, with "_clip" folded into the
+        # suffix so a clip is never mistaken for a full scene.
+        plan = self._plan_downloads(
+            rows,
+            lambda item: [_resolve_asset_key(item, k) for k in assets],
+            out_dir,
+            overrides=lambda key: {
+                "suffix": f"{_ASSET_SUFFIX.get(key, '')}_clip",
+                "ext": "tif",
+            },
+        )
         iterator = (
-            _tqdm(rows, desc="COG clips", unit="scene")
+            _tqdm(plan, desc="COG clips", unit="scene")
             if (_HAS_TQDM and show_progress)
-            else rows
+            else plan
         )
 
         written: List[Path] = []
-        for row in iterator:
-            image_id: str = getattr(row, "image_id")
-            item = self._resolve_item(image_id)
-            for asset_key in assets:
-                href = item["assets"].get(asset_key, {}).get("href")
-                if not href:
-                    LOGGER.warning("asset %r not found on item %s", asset_key, image_id)
-                    continue
-                # Same template as download_images, with "_clip" folded into the
-                # suffix so a clip is never mistaken for a full scene.
-                out_path = out_dir / self._clean_filename(
-                    item,
-                    asset_key,
-                    suffix=f"{_ASSET_SUFFIX.get(asset_key, '')}_clip",
-                    ext="tif",
-                )
+        for image_id, jobs in iterator:
+            for href, out_path in jobs:
                 if out_path.exists() and not overwrite:
                     LOGGER.info("skip existing %s", out_path)
                     written.append(out_path)
@@ -717,6 +862,68 @@ class DinamisImageFinder:
         return written
 
     # ---- internals
+    def _check_collection_exists(self) -> None:
+        """Raise if ``self.collection`` is unknown to the server.
+
+        Called only after an empty search, so a normal search costs nothing
+        extra. Any failure other than "not found" is left alone: an empty
+        result is then reported as such.
+        """
+        try:
+            self.client.stac.get_collection(self.collection)
+        except Exception as exc:
+            msg = str(exc).lower()
+            if not any(s in msg for s in ("notfound", "not found", "does not exist")):
+                return
+            try:
+                ids = sorted(c.id for c in self.client.stac.get_collections())
+            except Exception:
+                ids = []
+            spot = [i for i in ids if "spot" in i.lower()]
+            raise ValueError(
+                f"STAC collection {self.collection!r} does not exist on "
+                f"{getattr(self.client, 'stac_url', DINAMIS_STAC_URL)}"
+                + (f"; SPOT collections available: {', '.join(spot)}" if spot else "")
+                + f". The default is {SPOT67_COLLECTION!r}."
+            ) from exc
+
+    def _plan_downloads(self, rows, keys_for, out_dir: Path, overrides=None):
+        """Resolve every (item, asset) → (href, path) before anything is fetched.
+
+        Returns ``[(image_id, [(href, out_path), ...]), ...]``. Missing assets
+        are warned about and dropped. Two assets rendering to the same path
+        raise ``ValueError``: written in sequence, the second would overwrite
+        the first, or be skipped as "existing" — a scene lost either way. That
+        happened with the stamp-only default name, whose stamp is shared by the
+        ``SCENE1``/``SCENE2`` items of one strip.
+        """
+        plan = []
+        owner: Dict[Path, Tuple[str, str]] = {}
+        for row in rows:
+            image_id: str = getattr(row, "image_id")
+            item = self._resolve_item(image_id)
+            jobs = []
+            for asset_key in keys_for(item):
+                href = item["assets"].get(asset_key, {}).get("href")
+                if not href:
+                    LOGGER.warning("asset %r not found on item %s", asset_key, image_id)
+                    continue
+                extra = overrides(asset_key) if overrides else {}
+                out_path = out_dir / self._clean_filename(item, asset_key, **extra)
+                if out_path in owner and owner[out_path] != (image_id, asset_key):
+                    other_id, other_key = owner[out_path]
+                    raise ValueError(
+                        f"filename collision: {other_id!r}[{other_key}] and "
+                        f"{image_id!r}[{asset_key}] both render to {out_path.name!r} "
+                        f"with template {self.filename_template!r}. Add "
+                        "{scene_part} (or {item_id}) to the template so each "
+                        "scene gets its own file."
+                    )
+                owner[out_path] = (image_id, asset_key)
+                jobs.append((href, out_path))
+            plan.append((image_id, jobs))
+        return plan
+
     def _resolve_item(self, image_id: str) -> dict:
         """Return the raw STAC item dict, from cache or a targeted id search."""
         cached = self._item_cache.get(image_id)
@@ -738,7 +945,7 @@ class DinamisImageFinder:
         Useful for discovering what a template can reference::
 
             item = finder._resolve_item(gdf.loc[0, "image_id"])
-            finder.name_fields(item, "src_pan")
+            finder.name_fields(item, "PAN")
 
         See :func:`_name_fields` for the full list of keys.
         """
@@ -748,7 +955,7 @@ class DinamisImageFinder:
         self,
         images_gdf: gpd.GeoDataFrame,
         *,
-        assets: Sequence[str] = ("src_pan",),
+        assets: Sequence[str] = ("PAN",),
         max_images: Optional[int] = None,
     ) -> pd.DataFrame:
         """Render the output filenames a download *would* produce, without downloading.
