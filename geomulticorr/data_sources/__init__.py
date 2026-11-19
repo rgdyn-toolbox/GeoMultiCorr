@@ -57,7 +57,10 @@ from geomulticorr.data_sources.mpc_image_search_download import (
 from geomulticorr.data_sources.planet_image_search_download import (
     PlanetClient,
     PlanetImageFinder,
+    georeference_thumbnail,
+    georeference_thumbnails,
     plot_thumbnail_grid,
+    thumbnail_transform,
 )
 from geomulticorr.data_sources.usgs_m2m_image_search_download import (
     M2MClient,
@@ -90,6 +93,9 @@ __all__ = [
     "PlanetClient",
     "PlanetImageFinder",
     "plot_thumbnail_grid",
+    "georeference_thumbnail",
+    "georeference_thumbnails",
+    "thumbnail_transform",
     # USGS M2M
     "M2MClient",
     "M2MImageFinder",
