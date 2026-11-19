@@ -19,11 +19,25 @@ classifiers = [
     "Operating System :: MacOS",
 ]
 
+[project.scripts]
+gmc = "geomulticorr.cli.main:main"
+
+[project.optional-dependencies]
+# the CLI and its reports; gmc_env.yml installs all of them
+cli = ["pyyaml", "pydantic>=2", "jinja2"]
+report = ["plutoprint"]
+
 [tool.hatch.version]
 path = "geomulticorr/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["geomulticorr"]
+
+[tool.pytest.ini_options]
+markers = [
+    "realdata: reads a real dataset from geomulticorr.examples (skipped when unavailable, unless GMC_REQUIRE_DATA=1)",
+    "asp: runs a real ASP correlation (skipped when ASP is absent)",
+]
 
 [tool.black]
 line-length = 88

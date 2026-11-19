@@ -1,0 +1,39 @@
+/* GeoMultiCorr report — print-first (plutoprint renders A4), readable on screen. */
+:root {
+  --ink: #1d2433;
+  --muted: #5d6677;
+  --rule: #d8dce4;
+  --band: #f3f5f8;
+  --accent: #2f5d8a;
+  --ok: #2e7d4f;
+  --warn: #a86400;
+  --bad: #b3261e;
+}
+html { font-family: "DejaVu Sans", "Helvetica", "Arial", sans-serif; color: var(--ink); font-size: 10pt; background: #fff; }
+body { margin: 0 auto; max-width: 190mm; line-height: 1.4; background: #fff; }
+h1 { font-size: 18pt; margin: 0 0 2pt; color: var(--accent); }
+h2 { font-size: 13pt; margin: 18pt 0 6pt; padding-bottom: 3pt; border-bottom: 1.5pt solid var(--accent); page-break-after: avoid; }
+h3 { font-size: 10.5pt; margin: 10pt 0 4pt; color: var(--muted); page-break-after: avoid; }
+p.meta { color: var(--muted); margin: 0 0 10pt; }
+table { border-collapse: collapse; width: 100%; margin: 4pt 0 8pt; font-size: 8.5pt; page-break-inside: auto; }
+th, td { border-bottom: 0.5pt solid var(--rule); padding: 2pt 5pt; text-align: left; vertical-align: top; }
+th { background: var(--band); font-weight: bold; }
+tr { page-break-inside: avoid; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.kv th { width: 35%; background: none; color: var(--muted); font-weight: normal; }
+.badge { display: inline-block; padding: 0 5pt; border-radius: 3pt; font-size: 8pt; color: #fff; vertical-align: middle; }
+.badge.ok { background: var(--ok); }
+.badge.partial { background: var(--warn); }
+.badge.failed, .badge.running { background: var(--bad); }
+.note { color: var(--muted); font-size: 8.5pt; }
+.alert { border-left: 3pt solid var(--warn); background: #fff6e8; padding: 4pt 8pt; margin: 6pt 0; }
+.error { border-left: 3pt solid var(--bad); background: #fdeceb; padding: 4pt 8pt; margin: 6pt 0; }
+figure { margin: 8pt 0; text-align: center; page-break-inside: avoid; }
+figure img { max-width: 100%; max-height: 120mm; }
+figcaption { font-size: 8pt; color: var(--muted); margin-top: 2pt; }
+code { font-family: "DejaVu Sans Mono", monospace; font-size: 8pt; word-break: break-all; overflow-wrap: anywhere; }
+td { overflow-wrap: anywhere; }
+table.files { table-layout: fixed; }
+table.files td:first-child { width: 30%; }
+table.files code { display: block; white-space: pre-wrap; word-break: break-all; }
+section.stage { page-break-before: auto; }
