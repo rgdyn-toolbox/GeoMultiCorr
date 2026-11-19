@@ -86,6 +86,7 @@ import pandas as pd
 import xarray as xr
 
 from geomulticorr._logging import logger
+from geomulticorr._profiling import profile as gmc_profile
 from geomulticorr.inversion._run_parameters import _jsonable
 from geomulticorr.inversion._stack import (
     COMPONENTS,
@@ -158,6 +159,7 @@ def _as_timestamp(value) -> pd.Timestamp:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+@gmc_profile("gmc.fusion.calibrate_to_reference", memprof=True)
 def calibrate_to_reference(
     secondary: xr.Dataset,
     reference: xr.Dataset,
@@ -618,6 +620,7 @@ def build_fusion_parameters(
     }
 
 
+@gmc_profile("gmc.fusion.fuse_inversions", memprof=True)
 def fuse_inversions(
     reference,
     secondary,
