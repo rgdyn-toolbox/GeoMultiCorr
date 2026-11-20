@@ -178,6 +178,9 @@
   - a failing write does not raise;
   - forward and backward pairs are averaged.
 
+### CI
+- CI installs the test environment from an explicit lock file (`ci/gmc_env.linux-64.lock`) plus pinned pip packages (`ci/requirements-pip.txt`), with no solve.
+
 ## [0.8.1] — 2026-10-30
 
 ### Added
