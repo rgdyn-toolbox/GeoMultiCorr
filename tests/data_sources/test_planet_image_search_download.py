@@ -19,6 +19,7 @@ import json
 import geopandas as gpd
 import numpy as np
 import pytest
+import requests
 from shapely.geometry import box, mapping
 
 from geomulticorr.data_sources.planet_image_search_download import (
@@ -367,11 +368,13 @@ def test_feature_outside_the_aoi_is_dropped(monkeypatch):
 
 
 class _ThumbResp:
-    def __init__(self, content=b"png"):
+    def __init__(self, content=b"png", status_code=200):
         self.content = content
+        self.status_code = status_code
 
     def raise_for_status(self):
-        pass
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code} error")
 
 
 def _thumb_frame(ids=("a", "b")):
@@ -400,7 +403,7 @@ class TestDownloadThumbnails:
         paths = finder.download_thumbnails(
             _thumb_frame(), output_dir=tmp_path / "t", width=256, show_progress=False
         )
-        assert [p.name for p in paths] == ["2022-07-01_a.png", "2022-07-02_b.png"]
+        assert [p.name for p in paths] == ["a.png", "b.png"]
         assert all(p.read_bytes() == b"PNGDATA" for p in paths)
         assert calls[0][1] == {"width": 256} and "/items/a/thumb" in calls[0][0]
 
@@ -423,7 +426,7 @@ class TestDownloadThumbnails:
         gdf = _thumb_frame(("a",))
         gdf["acquisition_date"] = ["2022-07-01T10:00:00"]  # plain strings, no strftime
         (p,) = finder.download_thumbnails(gdf, output_dir=tmp_path, show_progress=True)
-        assert p.name == "2022-07-01_a.png"
+        assert p.name == "a.png"  # id only, no duplicated date
 
 
 class TestOrderWithoutScenesFrame:
@@ -577,3 +580,353 @@ class TestPlotThumbnailGrid:
             assert fig.axes[0].get_title() == "2022-07-01 PS2"
         finally:
             plt.close(fig)
+
+
+class TestWorkdirSaving:
+    """search_metadata() saves footprints.gpkg; thumbnails only when asked."""
+
+    _feature = TestSearchMetadata._feature
+
+    def _setup(self, monkeypatch, tmp_path, ids=("a", "b"), fail_on=None, **kw):
+        finder = _finder(workdir=tmp_path / "rasuwa", **kw)
+        feats = [
+            self._feature(i, f"2022-07-0{k + 1}T10:00:00Z") for k, i in enumerate(ids)
+        ]
+        calls = []
+
+        def get(url, params=None, timeout=None):
+            calls.append(url)
+            if fail_on and f"/items/{fail_on}/" in url:
+                raise requests.HTTPError("503")
+            return _ThumbResp(b"PNG")
+
+        monkeypatch.setattr(
+            finder._client.session, "post", lambda *a, **k: _Resp({"features": feats})
+        )
+        monkeypatch.setattr(finder._client.session, "get", get)
+        return finder, calls
+
+    def test_saves_only_the_footprints_by_default(self, monkeypatch, tmp_path):
+        finder, calls = self._setup(monkeypatch, tmp_path)
+        gdf = finder.search_metadata()
+        wd = tmp_path / "rasuwa"
+        assert finder.footprints_path == wd / "footprints.gpkg"
+        saved = gpd.read_file(finder.footprints_path, layer="footprints")
+        assert sorted(saved["image_id"]) == sorted(gdf["image_id"])
+        assert saved.crs.to_epsg() == 4326
+        assert calls == [] and not (wd / "thumbnails").exists()  # nothing fetched
+        assert not list(wd.glob("*.part*"))
+
+    def test_thumbnails_only_when_asked(self, monkeypatch, tmp_path):
+        finder, calls = self._setup(monkeypatch, tmp_path)
+        finder.search_metadata(download_thumbnails=True, show_progress=False)
+        wd = tmp_path / "rasuwa"
+        assert sorted(p.name for p in (wd / "thumbnails").iterdir()) == [
+            "a.png",
+            "b.png",
+        ]
+        finder.search_metadata(download_thumbnails=True, show_progress=False)
+        assert len(calls) == 2  # existing PNGs were not fetched again
+
+    def test_thumbnails_without_saving_the_table(self, monkeypatch, tmp_path):
+        finder, calls = self._setup(monkeypatch, tmp_path)
+        finder.search_metadata(
+            save=False, download_thumbnails=True, show_progress=False
+        )
+        assert len(calls) == 2 and not finder.footprints_path.exists()
+
+    def test_later_download_of_the_cleaned_table(self, monkeypatch, tmp_path):
+        finder, calls = self._setup(monkeypatch, tmp_path)
+        gdf = finder.search_metadata()
+        kept = gdf[gdf["image_id"] == "a"]
+        (p,) = finder.download_thumbnails(kept, show_progress=False)
+        assert p == tmp_path / "rasuwa" / "thumbnails" / "a.png" and len(calls) == 1
+
+    def test_save_false_and_no_workdir_write_nothing(self, monkeypatch, tmp_path):
+        finder, calls = self._setup(monkeypatch, tmp_path)
+        finder.search_metadata(save=False)
+        assert not (tmp_path / "rasuwa").exists() and calls == []
+        bare = _finder()
+        monkeypatch.setattr(
+            bare._client.session, "post", lambda *a, **k: _Resp({"features": []})
+        )
+        bare.search_metadata()  # no workdir → no save, no error
+        assert bare.footprints_path is None and bare.thumbnail_dir is None
+
+    def test_save_true_without_workdir_raises(self):
+        with pytest.raises(ValueError, match="workdir"):
+            _finder().search_metadata(save=True)
+        with pytest.raises(ValueError, match="workdir"):
+            _finder().search_metadata(download_thumbnails=True)
+        with pytest.raises(ValueError, match="workdir"):
+            _finder().download_thumbnails(_thumb_frame())
+
+    def test_empty_search_writes_nothing(self, monkeypatch, tmp_path):
+        finder, _ = self._setup(monkeypatch, tmp_path, ids=())
+        assert finder.search_metadata().empty
+        assert not (tmp_path / "rasuwa" / "footprints.gpkg").exists()
+
+    def test_failed_thumbnail_keeps_the_search(self, monkeypatch, tmp_path, caplog):
+        finder, _ = self._setup(monkeypatch, tmp_path, fail_on="a")
+        with caplog.at_level("WARNING"):
+            gdf = finder.search_metadata(download_thumbnails=True, show_progress=False)
+        assert len(gdf) == 2 and finder.footprints_path.exists()
+        assert "download_thumbnails" in caplog.text
+
+    def test_finder_georeference_uses_workdir_defaults(self, monkeypatch, tmp_path):
+        finder, _ = self._setup(monkeypatch, tmp_path)
+        seen = {}
+
+        def fake(thumbs, images_gdf, **kw):
+            seen.update(thumbs=thumbs, images_gdf=images_gdf, **kw)
+            return pd.DataFrame()
+
+        monkeypatch.setattr(pmod, "georeference_thumbnails", fake)
+        finder.georeference_thumbnails(resolution=50)
+        assert seen["thumbs"] == tmp_path / "rasuwa" / "thumbnails"
+        assert seen["images_gdf"] == tmp_path / "rasuwa" / "footprints.gpkg"
+        assert seen["crop_to"].equals(finder.aoi_geom) and seen["resolution"] == 50
+        finder.georeference_thumbnails(crop_to=None)
+        assert seen["crop_to"] is None
+
+
+class TestWideThumbnails:
+    """Thumbnails > 512 px need visual-asset download rights, per scene."""
+
+    def test_search_records_the_permission(self, monkeypatch):
+        finder = _finder()
+        f_ok = TestSearchMetadata()._feature("ok", "2022-07-01T10:00:00Z")
+        f_ok["_permissions"] = ["assets.ortho_visual:download", "assets.udm2:download"]
+        f_no = TestSearchMetadata()._feature("no", "2022-07-02T10:00:00Z")
+        f_no["_permissions"] = ["assets.basic_udm2:download"]
+        f_none = TestSearchMetadata()._feature("none", "2022-07-03T10:00:00Z")
+        monkeypatch.setattr(
+            finder._client.session,
+            "post",
+            lambda *a, **k: _Resp({"features": [f_ok, f_no, f_none]}),
+        )
+        gdf = finder.search_metadata().set_index("image_id")
+        assert gdf["visual_download"].to_dict() == {
+            "ok": True,
+            "no": False,
+            "none": False,
+        }
+
+    def test_empty_search_has_the_column(self, monkeypatch):
+        finder = _finder()
+        monkeypatch.setattr(
+            finder._client.session, "post", lambda *a, **k: _Resp({"features": []})
+        )
+        assert "visual_download" in finder.search_metadata().columns
+
+    def _get(self, refused=(), status=400):
+        calls = []
+
+        def get(url, params=None, timeout=None):
+            iid = url.split("/items/")[1].split("/")[0]
+            calls.append((iid, params["width"]))
+            if iid in refused and params["width"] > 512:
+                return _ThumbResp(status_code=status)
+            return _ThumbResp(f"{iid}@{params['width']}".encode())
+
+        return get, calls
+
+    def test_fallback_to_512(self, tmp_path, monkeypatch, caplog):
+        finder = _finder()
+        get, calls = self._get(refused=("old",))
+        monkeypatch.setattr(finder._client.session, "get", get)
+        gdf = _thumb_frame(("ok", "no"))
+        gdf["visual_download"] = [True, False]
+        with caplog.at_level("WARNING"):
+            finder.download_thumbnails(
+                gdf, output_dir=tmp_path, width=1024, show_progress=False
+            )
+            # an older frame without the column: try 1024, refused → 512
+            finder.download_thumbnails(
+                _thumb_frame(("old",)),
+                output_dir=tmp_path,
+                width=1024,
+                show_progress=False,
+            )
+        assert calls == [("ok", 1024), ("no", 512), ("old", 1024), ("old", 512)]
+        assert (tmp_path / "ok.png").read_bytes() == b"ok@1024"
+        assert (tmp_path / "no.png").read_bytes() == b"no@512"
+        assert (tmp_path / "old.png").read_bytes() == b"old@512"
+        assert finder.last_thumbnail_fallbacks == ["old"]
+        assert caplog.text.count("instead of 1024") == 2
+
+    def test_403_also_falls_back(self, tmp_path, monkeypatch):
+        finder = _finder()
+        get, _ = self._get(refused=("a",), status=403)
+        monkeypatch.setattr(finder._client.session, "get", get)
+        finder.download_thumbnails(
+            _thumb_frame(("a",)), output_dir=tmp_path, width=2048, show_progress=False
+        )
+        assert finder.last_thumbnail_fallbacks == ["a"]
+
+    def test_other_errors_still_raise(self, tmp_path, monkeypatch):
+        finder = _finder()
+        get, _ = self._get(refused=("a",), status=500)
+        monkeypatch.setattr(finder._client.session, "get", get)
+        with pytest.raises(requests.HTTPError, match="500"):
+            finder.download_thumbnails(
+                _thumb_frame(("a",)), output_dir=tmp_path, width=1024
+            )
+
+    def test_512_never_falls_back(self, tmp_path, monkeypatch):
+        finder = _finder()
+        get, calls = self._get()
+        monkeypatch.setattr(finder._client.session, "get", get)
+        gdf = _thumb_frame(("a",))
+        gdf["visual_download"] = [False]
+        finder.download_thumbnails(gdf, output_dir=tmp_path, show_progress=False)
+        assert calls == [("a", 512)] and finder.last_thumbnail_fallbacks == []
+
+
+class TestClientInfo:
+    """client.info() / item_permissions(): payloads shaped like the live API, values made up."""
+
+    SUBS = [
+        {
+            "id": 11,
+            "state": "active",
+            "active_from": "2026-01-01T00:00:00+00:00",
+            "active_to": "2027-01-01T00:00:00+00:00",
+            "organization": {"id": 7, "name": "lab"},
+            "plan": {
+                "id": 99,
+                "name": "Education and Research Basic",
+                "meta": {"item_types": ["PSScene"], "union_aoi": 511207893.4},
+            },
+            "plan_id": 99,
+            "quota_sqkm": 3000,
+            "quota_used": 1200.0,
+            "quota_interval": "monthly",
+            "quota_anchor_date": "2026-01-01T00:00:00+00:00",
+            "quota_reset_at": None,
+            "quota_enable_overage": False,
+            "scene_tile_quota": {"current": 10, "limit": 100000, "reset": "2026-12-01"},
+            "basemap_tile_quota": None,
+        }
+    ]
+    PLAN = {
+        "id": 99,
+        "policies": [
+            {
+                "name": "PlanetScope",
+                "constraints": [
+                    {
+                        "key": "type_permissions",
+                        "value": {"map": {"PSScene": ["ortho_visual", "basic_udm2"]}},
+                    },
+                    {"key": "toi", "value": {"delay": 30, "ranges": [{}]}},
+                    {"key": "flags", "value": {"geotiff_download": False}},
+                ],
+            },
+            {
+                "name": "Basemaps",
+                "constraints": [
+                    {"key": "type_permissions", "value": {"map": {"series": ["quad"]}}},
+                    {"key": "toi", "value": {"delay": 0, "ranges": [{}]}},
+                ],
+            },
+        ],
+    }
+
+    def _client(self, monkeypatch, fail=()):
+        client = PlanetClient(api_key="secret-key")
+        routes = {
+            pmod.PLANET_QUOTA_URL: self.SUBS,
+            f"{pmod.PLANET_PLANS_URL}/99": self.PLAN,
+            pmod.PLANET_PRODUCTS_URL: {"results": []},
+        }
+
+        def get(url, timeout=None, **kw):
+            if any(f in url for f in fail):
+                return _ThumbResp(status_code=500)
+            resp = _Resp(routes[url])
+            resp.raise_for_status = lambda: None
+            return resp
+
+        monkeypatch.setattr(client.session, "get", get)
+        return client
+
+    def test_summary(self, monkeypatch, capsys):
+        info = self._client(monkeypatch).info()
+        (sub,) = info["subscriptions"]
+        assert sub["plan_name"] == "Education and Research Basic"
+        assert sub["global_aoi"] is True
+        assert sub["quota_km2"]["remaining"] == pytest.approx(1800)
+        assert sub["tile_quota"] == {
+            "scene": {"current": 10, "limit": 100000, "reset": "2026-12-01"}
+        }
+        ps, bm = sub["policies"]
+        assert (ps["delay_days"], ps["visual_download"], ps["geotiff_download"]) == (
+            30,
+            True,
+            False,
+        )
+        assert bm["delay_days"] == 0 and bm["visual_download"] is False
+        assert info["organization"]["name"] == "lab" and info["errors"] == {}
+        out = capsys.readouterr().out
+        assert "Education and Research Basic" in out and "30 days" in out
+        assert "global" in out and "secret-key" not in out
+
+    def test_quiet(self, monkeypatch, capsys):
+        self._client(monkeypatch).info(verbose=False)
+        assert capsys.readouterr().out == ""
+
+    def test_a_failing_plan_does_not_lose_the_rest(self, monkeypatch, capsys):
+        info = self._client(monkeypatch, fail=("/plans/",)).info()
+        assert "plan:99" in info["errors"]
+        assert info["subscriptions"][0]["quota_km2"]["total"] == 3000
+        assert info["subscriptions"][0]["policies"] == []
+        assert "! plan:99" in capsys.readouterr().out
+
+    def test_failing_subscriptions_still_return(self, monkeypatch):
+        info = self._client(monkeypatch, fail=("subscriptions", "products")).info(
+            verbose=False
+        )
+        assert set(info["errors"]) == {"subscriptions", "products"}
+        assert info["subscriptions"] == []
+
+    @pytest.mark.parametrize(
+        "perms, visual",
+        [
+            (["assets.ortho_visual:download", "assets.basic_udm2:download"], True),
+            ([], False),
+        ],
+    )
+    def test_item_permissions(self, monkeypatch, perms, visual):
+        client = PlanetClient(api_key="k")
+        seen = []
+
+        def get(url, timeout=None, **kw):
+            seen.append(url)
+            return _Resp(
+                {
+                    "id": "x",
+                    "_permissions": perms,
+                    "properties": {
+                        "acquired": "2026-11-15",
+                        "publishing_stage": "finalized",
+                    },
+                }
+            )
+
+        monkeypatch.setattr(client.session, "get", get)
+        rec = client.item_permissions("x")
+        assert seen == [f"{pmod.PLANET_DATA_URL}/item-types/PSScene/items/x"]
+        assert rec["visual_download"] is visual and rec["permissions"] == perms
+        assert rec["publishing_stage"] == "finalized"
+
+    def test_fallback_warning_points_to_info(self, tmp_path, monkeypatch, caplog):
+        finder = _finder()
+        monkeypatch.setattr(finder._client.session, "get", lambda *a, **k: _ThumbResp())
+        gdf = _thumb_frame(("a",))
+        gdf["visual_download"] = [False]
+        with caplog.at_level("WARNING"):
+            finder.download_thumbnails(
+                gdf, output_dir=tmp_path, width=1024, show_progress=False
+            )
+        assert "client.info()" in caplog.text and "30 days" in caplog.text
