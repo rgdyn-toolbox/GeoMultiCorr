@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.9.0] — 2026-11-20
 
 ### Added
 - **Georeferenced Planet thumbnails: `georeference_thumbnails(thumbs, images_gdf)`**

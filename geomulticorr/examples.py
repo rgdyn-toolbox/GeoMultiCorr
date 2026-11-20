@@ -40,7 +40,12 @@ DATA_VERSION = "v2"
 BASE_URL = "https://github.com/rgdyn-toolbox/geomulticorr-data/releases/download/{version}/{asset}.tar.gz"
 
 #: name → SHA-256 of the tarball, copied from ``registry.json`` in the data repository.
-REGISTRY: dict[str, str] = {}
+REGISTRY: dict[str, str] = {
+    "bank_PierreBrune_sentinel2": "01434f9583252f05e8a53954b73678359f7b0802a407d036958df52b26035958",
+    "MS_PierreBrune_Sentinel2": "c13612f5edd8184bf5958d16e3d39930610dc63193c125f6fb6392407c0fd57b",
+    "bank_PierreBrune_landsat": "85b9f1023b3c38f44a1f20ff1a55a33ad0026eb937814408591a892e334f15cc",
+    "MS_PierreBrune_Landsat": "9cfda41ac4a675bf062f2478e80eb539de652573f245f762a14e92ad331ccafa",
+}
 
 #: Placeholders the data repository writes in place of absolute paths.
 PROJECT_TOKEN = "@GMC_PROJECT@"
