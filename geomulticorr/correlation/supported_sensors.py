@@ -30,6 +30,7 @@
 Utilities for normalizing and extracting information from satellite sensor names.
 """
 
+import json
 import os
 import re
 
@@ -70,6 +71,7 @@ SENSOR_CATALOG = [
         "patterns": [
             r"planetscope",
             r"psscene",
+            r"psorthotile",
             r"superdove",
             r"ps2(sd)?",
             r"pscope",
@@ -219,6 +221,7 @@ supported_sensors = [
     "planetscope",
     "planet",
     "psscene",
+    "psorthotile",
     "superdove",
     "ps2",
     "ps2sd",
@@ -491,6 +494,57 @@ def sensors(sensors_names: Optional[Iterable[str]] = None) -> str:
     return s
 
 
+#: Planet's ``properties.item_type`` values for PlanetScope products.
+PLANET_ITEM_TYPE_PREFIX = "PS"
+#: Suffix of the per-item sidecar Planet ships next to each asset.
+PLANET_SIDECAR_SUFFIX = "_metadata.json"
+
+
+def planet_sidecar_sensor(path) -> str | None:
+    """``"planetscope"`` when a Planet ``<item>_metadata.json`` sits next to *path*.
+
+    Planet names an asset ``<item_id>_<asset>.tif`` (``219088_3260007_2016-08-11_0e20_BGRN_SR_clip.tif``)
+    and ships ``<item_id>_metadata.json`` beside it, whose ``properties.item_type`` is
+    ``PSScene``/``PSOrthoTile``/``PSScene4Band``. Never raises: an unreadable sidecar is no answer.
+    """
+    p = pathlib.Path(path)
+    for sidecar in p.parent.glob(f"*{PLANET_SIDECAR_SUFFIX}"):
+        item_id = sidecar.name[: -len(PLANET_SIDECAR_SUFFIX)]
+        if not p.name.startswith(f"{item_id}_"):
+            continue
+        try:
+            with sidecar.open() as handle:
+                item_type = json.load(handle).get("properties", {}).get("item_type")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(item_type, str) and item_type.startswith(PLANET_ITEM_TYPE_PREFIX):
+            return "planetscope"
+    return None
+
+
+def detect_sensor_token(path, root=None) -> str:
+    """Sensor token of an optical image, or ``"unknown"``; feed it to :func:`sensor_normalize`.
+
+    Looked for, in order: the file name, then each folder up to *root* (the bank folder, included;
+    only the parent when *root* is None), nearest first, then a Planet ``<item>_metadata.json``
+    beside the file. The folder walk is what finds Planet orders as delivered,
+    ``Planet_<site>_..._psorthotile_.../files/<item>_SR_clip.tif``, where neither the name nor
+    ``files`` names a sensor. It stops at *root* so a folder above the bank, such as a home or
+    project directory, can never decide the sensor.
+    """
+    p = pathlib.Path(path)
+    pattern = re.compile(sensors(supported_sensors))
+    folders = [p.parent]
+    if root is not None:
+        root = pathlib.Path(root)
+        folders = [f for f in p.parents if f == root or root in f.parents]
+    for text in [p.name] + [f.name for f in folders]:
+        match = pattern.search(text.lower())
+        if match:
+            return match.group()
+    return planet_sidecar_sensor(p) or "unknown"
+
+
 # * Works properly
 def sensor_normalize(text: Optional[str]) -> dict:
     """Normalize sensor names to a canonical form.
@@ -555,7 +609,8 @@ def sensor_normalize(text: Optional[str]) -> dict:
 
     # --- PlanetScope (PS2, PS2.SD / SuperDove, PSScene)
     m = re.search(
-        r"\b(superdove|ps2\.?sd|psscene|planetscope|ps2|psb|planet|analyticms)\b", t
+        r"\b(superdove|ps2\.?sd|psscene|psorthotile|planetscope|ps2|psb|planet|analyticms)\b",
+        t,
     )
     if m:
         token = m.group(1)

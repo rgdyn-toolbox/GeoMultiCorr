@@ -36,23 +36,9 @@ It provides methods to initialize a session, access project data such as process
 from __future__ import annotations
 
 import collections
-import copy
 import pathlib
 import warnings
-from collections import abc
-from contextlib import ExitStack
-from typing import (
-    IO,
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Iterable,
-    Iterator,
-    Mapping,
-    Optional,
-    Sequence,
-    overload,
-)
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 import re
 from shapely.geometry import Polygon, MultiPolygon
@@ -71,11 +57,8 @@ import pandas as pd
 import geopandas as gpd
 import rasterio.crs as rio_crs
 import rasterio.transform as rio_transform
-import shapely.wkt as _wkt
-from shapely.geometry.base import BaseGeometry
 from shapely.geometry import shape
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from alive_progress import alive_bar
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from rich.console import Group as _RichGroup
 from rich.live import Live as _RichLive
 from rich.progress import (
@@ -84,7 +67,6 @@ from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
     TimeElapsedColumn,
-    TimeRemainingColumn,
 )
 from rich.text import Text as _RichText
 
@@ -137,7 +119,6 @@ from geomulticorr.utils._durations import (
     format_dt_days,
     parse_dt_days,
 )
-from geomulticorr._typing import DTypeLike, MArrayNum, NDArrayBool, NDArrayNum, Number
 
 file_location = pathlib.Path(__file__)
 package_root = file_location.parent.parent  # geomulticorr/core/ -> geomulticorr/
@@ -3902,6 +3883,7 @@ class Session:
         ta: pathlib.Path | list[str] | str | None,
         target_crs: str,
         image_types: set[str],
+        bank_root: pathlib.Path | str | None = None,
     ) -> dict | None:
         """Map a single georaster to the target CRS and image types.
 
@@ -3909,6 +3891,11 @@ class Session:
             ta (pathlib.Path | list[str] | str | None): The input raster file(s) to process.
             target_crs (str): The target coordinate reference system (CRS) to which the raster should be transformed.
             image_types (set[str]): A set of image types to consider during processing.
+            bank_root (pathlib.Path | str | None, optional): The bank folder being mapped. An
+                optical sensor is then also looked for in every folder between the file and it,
+                and in a Planet ``<item>_metadata.json`` sidecar, which is how Planet orders
+                (``Planet_…/files/<item>_SR_clip.tif``) are recognised as delivered. Without
+                it, only the file name and its parent folder are read.
 
         Returns:
             dict | None: A dictionary containing the processed raster information, or None if processing fails.
@@ -3935,14 +3922,7 @@ class Session:
             georaster_metadata["rows"] = r.shape[0]
             georaster_metadata["cols"] = r.shape[1]
             if "opt" in image_types:
-                sensor = re_searcher(
-                    ta.name.lower(), gmc_sensors.sensors(gmc_sensors.supported_sensors)
-                )
-                if sensor == "unknown":
-                    sensor = re_searcher(
-                        ta.parent.name.lower(),
-                        gmc_sensors.sensors(gmc_sensors.supported_sensors),
-                    )
+                sensor = gmc_sensors.detect_sensor_token(ta, root=bank_root)
                 sensor_normalized = gmc_sensors.sensor_normalize(sensor)
             elif "dem" in image_types:
                 # A DEM carries no readable sensor metadata: the source
@@ -4028,7 +4008,6 @@ class Session:
         epsg_code: str | int | None = None,
         suffix: str = "",
         max_workers: int = None,
-        save_georaster_bank: bool = False,
         exclude_patterns: list[str] | None = None,
     ) -> gpd.GeoDataFrame:
         """Map georasters in the specified bank directory using parallel processing.
@@ -4045,7 +4024,6 @@ class Session:
             epsg_code (str | int | None, optional): EPSG code for the target CRS. Defaults to None.
             suffix (str, optional): Suffix to append to output files. Defaults to "".
             max_workers (int, optional): Maximum number of workers for parallel processing. Defaults to None.
-            save_georaster_bank (bool, optional): Whether to save the georaster bank. Defaults to False.
             exclude_patterns (list[str] | None, optional): Substrings to match against filenames for exclusion.
                 Defaults to ``AUXILIARY_FILE_EXCLUDE_PATTERNS`` from ``supported_sensors.py``.
                 Pass ``[]`` to disable filtering.
@@ -4110,7 +4088,13 @@ class Session:
 
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = [
-                ex.submit(self.map_single_georaster, ta, target_crs, _image_types)
+                ex.submit(
+                    self.map_single_georaster,
+                    ta,
+                    target_crs,
+                    _image_types,
+                    georasters_bank_path,
+                )
                 for ta in targets
             ]
             rows = []
@@ -4151,8 +4135,6 @@ class Session:
         )
         features_gdf = gpd.GeoDataFrame(df, geometry="geometry", crs=layer_crs)
         features_gdf.to_file(self.path_geodb, layer=protomap_layer)
-        if save_georaster_bank:
-            self.save_georaster_bank(features_gdf)
         return features_gdf
 
     # * Works properly
@@ -4168,10 +4150,19 @@ class Session:
         Returns:
             gpd.GeoDataFrame: The updated Pzones layer as a GeoDataFrame.
 
+        Deprecated: use :meth:`insert_pzone`. This method will be removed in a
+        future release.
+
         # * Works properly
         # TODO: Implement unittests.
         # TODO: Test on other machines.
         """
+        warnings.warn(
+            "Session.insert_pzone_to_gdb is deprecated and will be removed in a "
+            "future release; use Session.insert_pzone.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         # Read the current Pzones layer
         gdf = gpd.read_file(self.path_geodb, layer="Pzones", engine="pyogrio")
         # Prepare new row with all required columns
@@ -7289,7 +7280,9 @@ class Session:
 
         Args:
             criterias: Passed to :meth:`get_pairs` to filter pairs.
-            cluster: ``None`` / ``"local"`` / ``"gricad"`` / ``"isterre"``.
+            cluster: ``None`` / ``"local"`` / ``"gricad"`` / ``"isterre"`` /
+                ``"cigri"`` (``"cigri:<grid clusters>"``, ``"cigri-test[:…]"``): the
+                CiGri scripts get GRICAD's environment and no ``#OAR`` header.
             overwrite: If *True*, redo pairs that are already complete.
             asp_bin_dir: Optional path to the ASP bin directory.
             nodes / cores / walltime / besteffort / conda_env: OAR cluster options.
@@ -7549,6 +7542,17 @@ class Session:
 
         - **local** (``cluster=None`` or ``"local"``): ``bash <pa_key>_CorrelationJob.sh``
         - **cluster** (``"gricad"`` or ``"isterre"``): ``oarsub -S ./<pa_key>_CorrelationJob.sh``
+        - **grid** (``"cigri"``, ``"cigri:dahu,luke"``, ``"cigri-test[:…]"``): **one**
+          CiGri campaign per pzone (and image type) holding all its pairs, best-effort,
+          with automatic re-submission of killed jobs. Prepare the scripts with the same
+          ``cluster`` value. *walltime* and *nodes*/*cores* become the JDL
+          ``walltime`` / ``resources``. The files are written flat in the pzone's
+          ``image_correlation/`` folder (``cigri_<name>.jdl``,
+          ``cigri_<name>_params.txt``, ``gmc_cigri_job.sh``, ``cigri_campaign_<id>.json``);
+          each job logs to ``<pa_key>_cigri.log`` in its pair folder. ``gridsub`` runs
+          here if it is on ``PATH`` (killeen), otherwise through ``ssh killeen.ciment``;
+          ``$GMC_CIGRI_HOST`` overrides that. Follow with :meth:`cigri_status`, then
+          :meth:`sync_pairs_after_cluster` once the campaign is terminated.
 
         ``corr_eval`` is embedded in the bash script itself (written by
         :meth:`prepare_pairs_correlation`) — it is not run as a separate step here.
@@ -7557,11 +7561,14 @@ class Session:
 
         Args:
             criterias: Passed to :meth:`get_pairs` to filter pairs.
-            cluster: ``None`` / ``"local"`` / ``"gricad"`` / ``"isterre"``.
-            dry_run: Print the launch command for each pair without executing.
+            cluster: ``None`` / ``"local"`` / ``"gricad"`` / ``"isterre"`` /
+                ``"cigri"`` (or ``"cigri:<grid clusters>"``, ``"cigri-test[:…]"``).
+            dry_run: Print the launch command for each pair without executing. With
+                ``"cigri"``, the campaign files are written but nothing is submitted.
             overwrite: Redo pairs whose ASP outputs are already complete.
             overwrite_scripts: Rewrite the bash script and params file even if they exist.
-            asp_bin_dir: Optional path to the ASP bin directory.
+            asp_bin_dir: No longer used: each script already holds the ASP path chosen in
+                :meth:`prepare_pairs_correlation`. Kept so existing calls keep working.
             nodes / cores / walltime / besteffort / conda_env: OAR cluster options.
             processes / threads_* / corr_memory_limit_mb / corr_tile_size:
                 Forwarded to ``parallel_stereo`` inside the script.
@@ -7578,14 +7585,9 @@ class Session:
             logger.warning("No pairs found matching criterias.")
             return []
 
+        from geomulticorr.correlation import ASP
+
         use_cluster = cluster in ("gricad", "isterre")
-
-        if clean:
-            from geomulticorr.correlation import ASP
-
-            asp = ASP(session=self, asp_bin_dir=asp_bin_dir)
-        else:
-            asp = None
 
         # Resolve bash script paths and warn for any that are missing.
         ready: list[tuple] = []  # (pair, script_path)
@@ -7601,6 +7603,20 @@ class Session:
         if not ready:
             logger.warning("No launch scripts found. Aborting.")
             return []
+
+        from geomulticorr.scheduler.profiles import is_grid_cluster
+
+        if is_grid_cluster(cluster):
+            return self._launch_cigri_campaigns(
+                ready,
+                cluster=cluster,
+                dry_run=dry_run,
+                nodes=nodes,
+                cores=cores,
+                walltime=walltime,
+                correval=correval,
+                print_summary=print_summary,
+            )
 
         logger.info(
             f"Launching {len(ready)}/{len(pairs)} pair(s) "
@@ -7637,7 +7653,7 @@ class Session:
                     cmd = ["bash", str(script)]
 
                 if dry_run:
-                    status = f"DRY RUN: {' '.join(cmd)}"
+                    logger.info(f"DRY RUN: {' '.join(cmd)}")
                     return_codes.append(0)
                     summary_rows.append({"pair": pair.pa_key, "status": "dry run"})
                     progress.advance(task)
@@ -7663,7 +7679,7 @@ class Session:
                     logger.error(f"Failed [{pair.pa_key}]: {result.stderr.strip()}")
                 else:
                     if clean and not use_cluster:
-                        asp.clean_pair_directory(pair)
+                        ASP.clean_pair_directory(pair)
                     summary_rows.append(
                         {"pair": pair.pa_key, "status": "[green]launched[/green]"}
                     )
@@ -7681,6 +7697,171 @@ class Session:
             self._sync_pairs_status([p for p, _ in ready])
 
         return return_codes
+
+    def _launch_cigri_campaigns(
+        self,
+        ready: list[tuple],
+        *,
+        cluster: str,
+        dry_run: bool,
+        nodes: int,
+        cores: int,
+        walltime: str,
+        correval: bool,
+        print_summary: bool,
+    ) -> list[int]:
+        """Submit *ready* ``(pair, script)`` items as CiGri campaigns.
+
+        One campaign per ``(pzone, image type)``: ``pa_key`` is unique only within
+        one type, and CiGri needs unique job names. Each job requires the pair's
+        ``-F.tif`` (and ``-F-ncc.tif`` with *correval*) to count as a success.
+        Returns one code per pair, in the order of *ready*: 0 = submitted (or
+        written, in a dry run), 1 = its campaign failed to submit.
+        """
+        from geomulticorr.scheduler import cigri as gmc_cigri
+        from geomulticorr.scheduler.profiles import get_profile, parse_cluster
+
+        spec = parse_cluster(cluster)
+        host = gmc_cigri.resolve_host()
+        where = f"ssh {host}" if host else "this machine"
+
+        groups: dict[tuple[str, str], list[tuple]] = {}
+        for pair, script in ready:
+            key = (pair.pa_pz_name, getattr(pair, "pa_type", IMAGE_TYPE_OPTICAL))
+            groups.setdefault(key, []).append((pair, script))
+
+        code_by_pair: dict[int, int] = {}
+        summary_rows: list[dict] = []
+        self._last_cigri_campaigns = {}
+        for (pz, img_type), items in groups.items():
+            name = f"gmc_{pz}" + (
+                f"_{img_type}" if img_type != IMAGE_TYPE_OPTICAL else ""
+            )
+            jobs = []
+            for pair, script in items:
+                prefix = pathlib.Path(pair.pa_path).absolute() / pair.pa_key
+                outputs = [pathlib.Path(f"{prefix}-F.tif")]
+                if correval:
+                    outputs.append(pathlib.Path(f"{prefix}-F-ncc.tif"))
+                jobs.append(
+                    gmc_cigri.CigriJob(
+                        pair.pa_key, pathlib.Path(script).absolute(), tuple(outputs)
+                    )
+                )
+            status, code = "", 0
+            try:
+                campaign = gmc_cigri.write_campaign(
+                    jobs,
+                    self.pz_dir(pz, PZ_KIND_IMAGE_CORRELATION),
+                    gmc_cigri.CigriOptions(
+                        clusters=spec.grid_clusters,
+                        test_mode=spec.test_mode,
+                        host=host,
+                    ),
+                    name=name,
+                    walltime=walltime,
+                    resources=f"/nodes={nodes}/core={cores}",
+                    project=get_profile("cigri").project,
+                )
+                if dry_run:
+                    logger.info(
+                        f"DRY RUN: gridsub -f {campaign.jdl_path} on {where} "
+                        f"({len(jobs)} job(s), grid clusters "
+                        f"{', '.join(spec.grid_clusters)}"
+                        f"{', TEST MODE' if spec.test_mode else ''})"
+                    )
+                    status = "dry run (JDL written)"
+                else:
+                    campaign_id = gmc_cigri.submit_campaign(campaign, host)
+                    self._last_cigri_campaigns[name] = (campaign_id, host)
+                    status = f"[green]campaign {campaign_id}[/green]"
+            except (gmc_cigri.CigriError, OSError, ValueError) as exc:
+                logger.error(f"CiGri campaign {name} not submitted: {exc}")
+                status, code = "[red]not submitted[/red]", 1
+            for pair, _ in items:
+                code_by_pair[id(pair)] = code
+                summary_rows.append({"pair": pair.pa_key, "status": status})
+
+        print_launch_correlation_summary(summary_rows, print_summary=print_summary)
+        if self._last_cigri_campaigns:
+            logger.info(
+                "Follow the campaign(s) with session.cigri_status(); once terminated, "
+                "run session.sync_pairs_after_cluster(...)"
+            )
+        return [code_by_pair[id(pair)] for pair, _ in ready]
+
+    def cigri_status(
+        self,
+        campaign_id: int | None = None,
+        host: str | None = None,
+        print_summary: bool = True,
+    ) -> list:
+        """Status of CiGri campaigns (``gridstat -c <id> -d``).
+
+        Args:
+            campaign_id: One campaign. ``None`` → the campaigns submitted by the last
+                ``launch_pairs_correlation(cluster="cigri…")`` of this session or, after
+                a kernel restart, the latest ``cigri_campaign_<id>.json`` record of each
+                pzone's ``image_correlation/`` folder.
+            host: ssh alias of the frontend; ``None`` → the record's host, or the same
+                auto-detection as the launch.
+            print_summary: Log one line per campaign.
+
+        Returns:
+            List of :class:`~geomulticorr.scheduler.cigri.CampaignStatus`. A campaign
+            whose status cannot be read is logged and left out.
+        """
+        from geomulticorr.scheduler import cigri as gmc_cigri
+
+        targets: list[tuple[int, str | None]] = []
+        if campaign_id is not None:
+            targets = [(int(campaign_id), host)]
+        elif getattr(self, "_last_cigri_campaigns", None):
+            targets = list(self._last_cigri_campaigns.values())
+        else:
+            names = self.get_pzones_overview()["pz_name"].tolist()
+            for pz in names:
+                try:
+                    folder = pathlib.Path(self.pz_dir(pz, PZ_KIND_IMAGE_CORRELATION))
+                except ValueError:
+                    continue
+                records = sorted(
+                    folder.glob("cigri_campaign_*.json"),
+                    key=lambda p: p.stat().st_mtime,
+                )
+                latest: dict[str, tuple[int, str | None]] = {}
+                for path in records:
+                    try:
+                        rec = gmc_cigri.read_campaign_record(path)
+                    except (OSError, ValueError):
+                        continue
+                    if rec.get("campaign_id") is not None:
+                        latest[rec.get("name")] = (
+                            int(rec["campaign_id"]),
+                            rec.get("host"),
+                        )
+                targets += list(latest.values())
+        if not targets:
+            logger.warning(
+                "cigri_status: no campaign known; pass campaign_id= (see the "
+                "cigri_campaign_<id>.json files in image_correlation/)"
+            )
+            return []
+
+        statuses = []
+        for cid, cid_host in targets:
+            use_host = host if host is not None else cid_host
+            if use_host is None and campaign_id is not None:
+                use_host = gmc_cigri.resolve_host()
+            try:
+                status = gmc_cigri.campaign_status(cid, use_host)
+            except gmc_cigri.CigriError as exc:
+                logger.error(f"cigri_status: campaign {cid}: {exc}")
+                continue
+            statuses.append(status)
+            if print_summary:
+                logger.info(str(status))
+        return statuses
 
     def sync_pairs_after_cluster(
         self,
@@ -7703,7 +7884,10 @@ class Session:
             criterias: Same filter syntax as :meth:`get_pairs`.
             image_type: Keep only pairs of this image type (``"opt"``, ``"hillshade"``, ``"mdhillshade"``, ``"slope"``, ``"dem"``); ANDed with *criterias*. Prefer it over a criterias string: ``"hillshade"`` is also a substring of ``"mdhillshade"``.
             clean: Delete intermediate ASP files for completed pairs (default ``True``).
-            asp_bin_dir: Optional path to the ASP bin directory (only used when *clean* is ``True``).
+                Safe to repeat at any stage: extracted maps, corrections, masks, stats
+                and plots are kept.
+            asp_bin_dir: No longer used, since cleaning runs no ASP program. Kept so
+                existing calls keep working.
         """
         from geomulticorr.correlation import ASP
 
@@ -7711,8 +7895,6 @@ class Session:
         if not pairs:
             logger.warning("sync_pairs_after_cluster: no pairs found.")
             return
-
-        asp = ASP(session=self, asp_bin_dir=asp_bin_dir) if clean else None
 
         summary_rows: list[dict] = []
 
@@ -7740,8 +7922,8 @@ class Session:
                 status = pair.get_status()
                 n_deleted = 0
 
-                if clean and asp is not None and status == "complete":
-                    removed = asp.clean_pair_directory(pair)
+                if clean and status == "complete":
+                    removed = ASP.clean_pair_directory(pair)
                     n_deleted = len(removed)
 
                 summary_rows.append(
@@ -8147,11 +8329,8 @@ class Session:
         """
         import geoutils as gu
         import matplotlib.pyplot as plt
-        from geomulticorr.corrections.corrections import (
-            CorrectionPipeline,
-            make_corrections,
-        )
-        from geomulticorr.corrections.masks import FilterPipeline, BaseMask
+        from geomulticorr.corrections.corrections import CorrectionPipeline
+        from geomulticorr.corrections.masks import FilterPipeline
 
         if correction_pipeline is None and filter_pipeline is None:
             raise ValueError(
@@ -8482,100 +8661,6 @@ class Session:
                 )
 
         return results
-
-    # TODO: to be completed with the other parameters
-    def pr_full(self, corr_algorithm=2, corr_kernel_size=7, corr_xthreshold=10):
-        """Launch all the possible correlations accross all the valid images among the project pzones"""
-        logs = []
-        for pzone in self.get_pzones():
-            logs.append(
-                pzone.pz_full(
-                    self.epsg, corr_algorithm, corr_kernel_size, corr_xthreshold
-                )
-            )
-        return pd.DataFrame(logs)
-
-    def _search_engine_thibaut(
-        self, layername: str, criterias: str | list[str] = ""
-    ) -> gpd.GeoDataFrame:
-        """A search engine among project layers
-
-        Args:
-            layername (str): layer name.
-            criterias (str | list[str], optional): criterias to filter data. Defaults to "".
-
-        Returns:
-            gpd.GeoDataFrame: return a dataframe with the filtered data.
-        """
-
-        # if there is only one criteria we store it in a list
-        # if type(criterias) in (str, int):
-        #     criterias = [criterias]
-        criterias = (
-            []
-            if criterias in ("", [])
-            else ([criterias] if isinstance(criterias, (str, int)) else list(criterias))
-        )
-
-        # # add an "and" statement between each criteria
-        # pattern = ""
-        # for c in criterias:
-        #     if type(c) == int:
-        #         c = str(c)
-        #     pattern += f"(?=.*{c.lower()})"
-        # pattern = re.compile(pattern)
-        pattern = (
-            None
-            if not criterias
-            else "^" + "".join(f"(?=.*{re.escape(str(c))})" for c in criterias)
-        )
-
-        match layername:
-            case "Thumbs":
-                normal_th = self._thumbs
-                lower_th = normal_th.apply(lambda x: x.str.lower(), 1)
-                return normal_th[lower_th.th_path.str.contains(pattern)]
-
-            case "Pairs":
-                normal_pa = self._pairs
-                lower_pa = normal_pa.apply(lambda x: x.str.lower(), 1)
-                return normal_pa[lower_pa.pa_path.str.contains(pattern)]
-
-            case "Pzones":
-                pz_layer = self._pzones
-                if criterias != [""]:
-                    requested_pz_name = criterias[0].lower()
-                    return pz_layer[pz_layer.pz_name == requested_pz_name]
-                else:
-                    return pz_layer
-
-            case "Geomorphs":
-                # We suppose than the criteria can only be a Geomorph ID or a pz_name
-                selection = self._geomorphs
-                if criterias != [""]:
-                    for criteria in criterias:
-                        if criteria in self.pz_names:
-                            selection = selection[selection.ge_pz_name == criteria]
-                        else:
-                            selection = selection[selection.ge_frogi_id == criteria]
-                    return selection
-                else:
-                    return selection
-        # if layername == "Thumbs":
-        #     s = self._thumbs.th_path
-        #     return self._thumbs if pattern is None else self._thumbs[s.str.contains(pattern, case=False, regex=True, na=False)]
-        # if layername == "Pairs":
-        #     s = self._pairs.pa_path
-        #     return self._pairs if pattern is None else self._pairs[s.str.contains(pattern, case=False, regex=True, na=False)]
-        # if layername == "Pzones":
-        #     return self._pzones if pattern is None else self._pzones[self._pzones.pz_name.str.contains(pattern, case=False, regex=True, na=False)]
-        # if layername == "Geomorphs":
-        #     df = self._geomorphs
-        #     if pattern is None: return df
-        #     m1 = df.ge_pz_name.str.contains(pattern, case=False, regex=True, na=False)
-        #     m2 = df.ge_frogi_id.astype(str).str.contains(pattern, case=False, regex=True, na=False)
-        #     return df[m1 | m2]
-        # raise ValueError(f"Unknown layer: {layername}")
 
     def _search_engine(
         self, layername: str, criterias: str | list[str] = ""

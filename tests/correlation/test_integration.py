@@ -244,9 +244,9 @@ class TestRunCorrelationIntegration:
         assert ret == 0
 
     def test_run_correlation_clean_keeps_required_suffixes(self, temp_dir, asp_helper):
-        """Test clean=True removes intermediate files but keeps KEEP_SUFFIXES.
+        """Test clean=True removes intermediate files and nothing else.
 
-        Verifies that files matching _KEEP_SUFFIXES are preserved.
+        Verifies that outputs, later products and other prefixes are preserved.
 
         :param temp_dir: Temporary directory for test files.
         :type temp_dir: pathlib.Path
@@ -271,8 +271,10 @@ class TestRunCorrelationIntegration:
             # Create some test files before correlation
             (out_dir / "pair-F.tif").write_text("keep")
             (out_dir / "pair-L.tif").write_text("keep")
-            (out_dir / "pair-temp.txt").write_text("remove")
-            (out_dir / "pair-intermediate.tif").write_text("remove")
+            (out_dir / "pair-F_EW.tif").write_text("keep")
+            (out_dir / "other-D.tif").write_text("keep")
+            (out_dir / "pair-info.txt").write_text("remove")
+            (out_dir / "pair-D.tif").write_text("remove")
 
             ret = asp_helper.run_correlation(
                 left, right, out_prefix, processes=1, correval=False, clean=True
@@ -281,8 +283,10 @@ class TestRunCorrelationIntegration:
         assert ret == 0
         assert (out_dir / "pair-F.tif").exists()
         assert (out_dir / "pair-L.tif").exists()
-        assert not (out_dir / "pair-temp.txt").exists()
-        assert not (out_dir / "pair-intermediate.tif").exists()
+        assert (out_dir / "pair-F_EW.tif").exists()
+        assert (out_dir / "other-D.tif").exists()
+        assert not (out_dir / "pair-info.txt").exists()
+        assert not (out_dir / "pair-D.tif").exists()
 
 
 # ------------------------------------------------------------------
@@ -488,6 +492,7 @@ class TestCleanPairDirectory:
         pair_dir = temp_dir / "pair_output"
         pair_dir.mkdir(parents=True, exist_ok=True)
         pair.pa_path = pair_dir
+        pair.pa_key = "pair"
 
         # Create various test files
         files = [
@@ -499,9 +504,11 @@ class TestCleanPairDirectory:
             pair_dir / "pair-L-R-disp-diff.tif",  # KEEP
             pair_dir / "pair_CorrelationJob.sh",  # KEEP
             pair_dir / "pair_CorrParameters.txt",  # KEEP
+            pair_dir / "pair-F_EW.tif",  # KEEP (written by a later step)
+            pair_dir / "pair.json",  # KEEP (written by a later step)
             pair_dir / "pair-D.tif",  # REMOVE
-            pair_dir / "pair-temp.txt",  # REMOVE
-            pair_dir / "pair-mask.tif",  # REMOVE
+            pair_dir / "pair-info.txt",  # REMOVE
+            pair_dir / "pair-lMask.tif",  # REMOVE
         ]
 
         for f in files:
@@ -510,9 +517,9 @@ class TestCleanPairDirectory:
         return pair, files
 
     def test_clean_directory_removes_intermediate_files(self, temp_dir, asp_helper):
-        """Test non-KEEP_SUFFIXES files are deleted.
+        """Test ASP intermediate files are deleted.
 
-        Verifies that only intermediate files (not in KEEP_SUFFIXES) are removed.
+        Verifies that only known intermediates are removed, not later products.
 
         :param temp_dir: Temporary directory for test files.
         :type temp_dir: pathlib.Path
@@ -567,7 +574,7 @@ class TestCleanPairDirectory:
             removed = asp_helper.clean_pair_directory(pair, dry_run=True)
 
         assert (pair.pa_path / "pair-D.tif").exists()
-        assert (pair.pa_path / "pair-temp.txt").exists()
+        assert (pair.pa_path / "pair-info.txt").exists()
         assert "DRY RUN" in caplog_gmc.text
         assert len(removed) == 3
 

@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>{{ css }}</style>
+</head>
+<body>
+
+{% macro kv(mapping) %}
+{% set items = scalar_items(mapping) %}
+{% if items %}
+<table class="kv">
+{% for k, v in items %}<tr><th>{{ k }}</th><td>{{ v | fmt }}</td></tr>
+{% endfor %}
+</table>
+{% endif %}
+{% endmacro %}
+
+{% macro grid(rows, columns=None, limit=None) %}
+{% set cols, body = table(rows, columns, limit) %}
+{% if body %}
+<table>
+<tr>{% for c in cols %}<th>{{ c }}</th>{% endfor %}</tr>
+{% for row in body %}<tr>{% for v in row %}<td{% if v is number %} class="num"{% endif %}>{{ v | fmt }}</td>{% endfor %}</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% endmacro %}
+
+{% macro per_pzone(summary) %}
+{% set pzones = summary.get("pzones") %}
+{% if pzones is mapping %}
+{% for pz, entry in pzones.items() %}
+<h3>{{ pz }}</h3>
+{{ kv(entry) }}
+{% endfor %}
+{% endif %}
+{% endmacro %}
+
+{% macro figures_of(stage) %}
+{% for f in figures.get(stage, []) %}
+<figure><img src="{{ f.src }}" alt="{{ f.caption }}"><figcaption>{{ f.caption }}</figcaption></figure>
+{% endfor %}
+{% endmacro %}
+
+<h1>{{ title }}</h1>
+<p class="meta">Project <code>{{ project }}</code> · GeoMultiCorr {{ gmc_version }} · generated {{ generated_utc }}</p>
+
+<h2>Run summary</h2>
+<table>
+<tr><th>Stage</th><th>Status</th><th>Started (UTC)</th><th>Elapsed (s)</th><th>Pzones</th><th>Warnings</th></tr>
+{% for rec in stages %}
+<tr>
+<td>{{ titles.get(rec.stage, rec.stage) }}</td>
+<td><span class="badge {{ rec.status }}">{{ rec.status }}</span></td>
+<td>{{ rec.started_utc[:19] | replace("T", " ") }}</td>
+<td class="num">{{ rec.elapsed_s | fmt }}</td>
+<td>{{ rec.pzones | join(", ") }}</td>
+<td class="num">{{ rec.warnings | length }}</td>
+</tr>
+{% endfor %}
+<tr><th colspan="3">Total</th><th class="num">{{ total_elapsed_s | fmt }}</th><th colspan="2"></th></tr>
+</table>
+{% if n_failed %}<div class="error">{{ n_failed }} stage(s) failed — see the stage sections below.</div>{% endif %}
+
+{% for rec in stages %}
+{% set s = rec.summary %}
+<section class="stage">
+<h2>{{ titles.get(rec.stage, rec.stage) }} <span class="badge {{ rec.status }}">{{ rec.status }}</span></h2>
+{% if rec.error %}<div class="error"><code>{{ rec.error }}</code></div>{% endif %}
+
+{% if rec.stage == "prepare" %}
+{{ grid(s.get("pzones", [])) }}
+
+{% elif rec.stage == "crop" %}
+{{ kv(s) }}
+
+{% elif rec.stage == "similarity" %}
+{% for pz, entry in s.get("pzones", {}).items() %}
+<h3>{{ pz }}</h3>
+{{ kv(entry) }}
+{% if entry.get("top") %}<p class="note">Best couples by the leading predictor:</p>{{ grid(entry.top, limit=10 if level == 1 else None) }}{% endif %}
+{% endfor %}
+
+{% elif rec.stage == "pairs" %}
+{% for pz, entry in s.get("pzones", {}).items() %}
+<h3>{{ pz }}</h3>
+{{ kv(entry) }}
+{% if entry.get("n_components", 1) > 1 %}<div class="alert">The pair network of {{ pz }} has {{ entry.n_components }} disconnected components: their relative displacement is not measured by any pair.</div>{% endif %}
+{% endfor %}
+
+{% elif rec.stage == "correlate" %}
+{{ per_pzone(s) }}
+{% for pz, groups in s.get("plans", {}).items() %}
+<h3>{{ pz }} — correlation plan groups</h3>
+{{ grid(groups) }}
+{% endfor %}
+
+{% elif rec.stage == "extract" %}
+{{ per_pzone(s) }}
+
+{% elif rec.stage == "correct" %}
+<table class="kv"><tr><th>masks</th><td>{% for c in s.get("masks", []) %}{{ c if c is string else (c.keys() | first) }}{% if not loop.last %} + {% endif %}{% else %}—{% endfor %}</td></tr>
+<tr><th>corrections</th><td>{% for c in s.get("corrections", []) %}{{ c if c is string else (c.keys() | first) }}{% if not loop.last %} + {% endif %}{% endfor %}</td></tr></table>
+{{ per_pzone(s) }}
+{% if rec.pairs %}
+<h3>Pairs with the largest corrected NMAD</h3>
+{{ grid(worst_pairs(rec.pairs, worst_n), ["pa_key", "dt_days", "ew_nmad_raw", "ew_nmad_corr", "ns_nmad_raw", "ns_nmad_corr"]) }}
+{% endif %}
+
+{% elif rec.stage == "invert" %}
+{% for run in s.get("runs", []) %}
+<h3>{{ run.pz }} / {{ run.name }}</h3>
+{{ kv(run) }}
+{% if run.get("disconnected") %}<div class="alert">This pair network has {{ run.network | length }} components: the offset between them is set by the smoothing prior, not measured.</div>{% endif %}
+{% if run.get("network") %}{{ grid(run.network) }}{% endif %}
+{% for d in ("EW", "NS") %}{% if run.get(d ~ "_weights") %}
+<p class="note">{{ d }} weights: {{ run[d ~ "_weights"].get("mode") | fmt }}{% if run[d ~ "_weights"].get("summary") %} — {{ run[d ~ "_weights"].summary | dictsort | map("join", ": ") | join(", ") }}{% endif %}</p>
+{% endif %}{% endfor %}
+{% endfor %}
+
+{% elif rec.stage == "fuse" %}
+{% for run in s.get("runs", []) %}
+<h3>{{ run.pz }} / {{ run.name }}</h3>
+{{ kv(run.get("fusion", {})) }}
+{% for side in ("reference", "secondary") %}{% set c = run.get("closure_" ~ side ~ "_pairs") %}{% if c %}
+<p class="note">Closure of the {{ side }} pairs against the other series:</p>{{ kv(c) }}
+{% for comp, v in c.items() %}{% if v is mapping %}<p class="note">{{ comp }}: {{ v | dictsort | map("join", ": ") | join(", ") }}</p>{% endif %}{% endfor %}
+{% endif %}{% endfor %}
+{% endfor %}
+{% endif %}
+
+{{ figures_of(rec.stage) }}
+
+{% if level == 2 and rec.pairs %}
+<h3>All pairs ({{ rec.pairs | length }})</h3>
+{{ grid(rec.pairs) }}
+{% endif %}
+
+{% if files.get(rec.stage) %}
+<h3>Files</h3>
+<table class="files">{% for f in files[rec.stage] %}<tr><td>{{ f.label }}</td><td><code>{{ f.path }}</code>{% if not f.exists %} <span class="note">(missing)</span>{% endif %}</td></tr>{% endfor %}</table>
+{% endif %}
+</section>
+{% endfor %}
+
+{% if warnings %}
+<h2>Warnings</h2>
+<table>
+<tr><th>Stage</th><th>Message</th><th>×</th></tr>
+{% for w in warnings[:200] %}<tr><td>{{ w.stage }}</td><td>{{ w.message }}</td><td class="num">{{ w.count }}</td></tr>
+{% endfor %}
+</table>
+{% endif %}
+
+{% if profiling %}
+<h2>Profiling</h2>
+<p class="note">GeoUtils profiler; times are inclusive of nested calls.{% if profiling_graph %} Interactive time graph: <code>{{ profiling_graph }}</code>{% endif %}</p>
+{{ grid(profiling[:30], ["name", "calls", "total_s", "max_s", "peak_mb"]) }}
+{% endif %}
+
+<h2>Configuration</h2>
+<p class="note">The fully resolved configuration is in <code>{{ run_dir }}/used_config.yaml</code>.</p>
+{% set outs = config.get("outputs", {}) %}
+{{ kv({"level": outs.get("level"), "profiling": outs.get("profiling"), "image_type": config.get("image_type"), "pzones": config.get("pzones")}) }}
+
+</body>
+</html>

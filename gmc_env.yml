@@ -43,6 +43,10 @@ dependencies:
   - geodatasets
   - contextily
   - rich
+  # CLI (`gmc`): YAML configs, validation, HTML reports
+  - pyyaml
+  - pydantic>=2
+  - jinja2
   - alive-progress
   - black
   - flake8
@@ -52,3 +56,5 @@ dependencies:
       - earthengine-api
       # presigns DINAMIS/Théia MinIO asset URLs (SPOT 6/7 downloads)
       - teledetection
+      # HTML → PDF for the `gmc` reports (not on conda-forge)
+      - plutoprint

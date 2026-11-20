@@ -1,0 +1,44 @@
+# GeoMultiCorr CLI example — Pas de l'Ours (SPOT 6/7 + PlanetScope).
+#   gmc run pasdelours.yaml --dry-run
+#   gmc run pasdelours.yaml --only pairs,correlate
+# Relative paths are resolved against this file's folder.
+project: {path: /home/cusicand/03_Data/GMC_projects/MS_MultiSensor_030_BIS}
+pzones: [PasDeLours]
+image_type: opt
+outputs:
+  level: 1
+  profiling: false
+  report: {title: "Pas de l'Ours — multi-sensor processing", pdf: true}
+
+similarity:
+  process: false            # slow; switch on to rank cross-sensor bridges
+  cross_sensor_only: true
+
+pairs:
+  groups:
+    - {strategy: redundancy, max_step: 2, sensor_filter: planetscope}
+    - {strategy: redundancy, max_step: 1, sensor_filter: spot}
+  figures: [chord, baseline]
+
+correlate:
+  explore: {velocity_m_yr: 2.0}
+  plan_name: pdl
+  launch: false             # write the ASP scripts only
+
+extract:
+  target_resolution: 3.0
+
+correct:
+  masks: [{CCFilter: {cc_threshold: 0.5}}, {SlopeMask: {max_slope: 40}}, {StableAreaMask: auto}]
+  corrections: [MedianCentering, RampCorrection]
+
+invert:
+  runs:
+    - {name: PDL_spot, criterias: spot, weights: {weight_mode: quality_spatial}, mode: python}
+    - {name: PDL_ps, criterias: planetscope, weights: {weight_mode: quality_spatial}, mode: python}
+
+fuse:
+  process: false
+  runs:
+    - {name: PDL_fused, reference: PDL_spot, secondary: PDL_ps,
+       closure_reference_criterias: spot, closure_secondary_criterias: planetscope}

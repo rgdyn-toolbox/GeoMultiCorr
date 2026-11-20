@@ -11,21 +11,33 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 60 
     steps:
       - uses: actions/checkout@v4
 
       - uses: mamba-org/setup-micromamba@v2
         with:
-          environment-file: gmc_env.yml
+          environment-file: ci/gmc_env.linux-64.lock
           environment-name: gmc_env
           cache-environment: true
 
       - name: Install GeoMultiCorr
         shell: micromamba-shell {0}
-        run: pip install -e . --no-deps
+        run: |
+          pip install -r ci/requirements-pip.txt
+          pip install -e . --no-deps
+
+      # The cache key follows the data version and checksums pinned in examples.py.
+      - name: Cache the real test datasets
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/geomulticorr/data
+          key: gmc-data-${{ hashFiles('geomulticorr/examples.py') }}
 
       - name: Tests with coverage
         shell: micromamba-shell {0}
+        env:
+          GMC_REQUIRE_DATA: "1"
         run: pytest tests/ --cov=geomulticorr --cov-report=xml -q
 
       - name: Coveralls

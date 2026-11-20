@@ -606,3 +606,187 @@ class TestResolveAndNames:
         assert DinamisImageFinder.name_fields(ITEM, "src_pan") == mod._name_fields(
             ITEM, "src_pan"
         )
+
+
+# ---------------------------------------------------------------------------
+# dinamis-openspot-6-7: the catalogue generation that replaced spot-6-7-drs
+# ---------------------------------------------------------------------------
+_OPEN = "https://minio.example/dinamis-openspot-6-7/{id}/"
+
+
+def _open_item(stamp="202411171007349", scene="SCENE1", tile="E006N46", job=23784):
+    item_id = f"SPOT67_FRANCE_{stamp}_GS1_{tile}_{scene}_ORTHO-HPQ"
+    base = _OPEN.format(id=item_id)
+    return {
+        "id": item_id,
+        "geometry": mapping(AOI),
+        "properties": {  # as served: platform "SPOT", the number in "mission"
+            "datetime": f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]}T00:00:00Z",
+            "platform": "SPOT",
+            "mission": "6",
+            "eo:cloud_cover": 4.5,
+            "eo:snow_cover": 0.0,
+            "view:off_nadir": 4.07,
+            "view:incidence_angle": 4.47,
+            "view:sun_azimuth": 161.6,
+            "view:sun_elevation": 22.9,
+        },
+        "assets": {
+            "PAN": {"href": f"{base}COG_SPOT6_P_{stamp}_ORT_ORTHO-PAN-{job}.TIF"},
+            "PAN-dimap": {"href": f"{base}DIM_SPOT6_P_{stamp}_ORT_ORTHO-PAN-{job}.XML"},
+            "MS": {"href": f"{base}COG_SPOT6_MS_{stamp}_ORT_ORTHO-MS-{job - 1}.TIF"},
+            "MS-dimap": {
+                "href": f"{base}DIM_SPOT6_MS_{stamp}_ORT_ORTHO-MS-{job - 1}.XML"
+            },
+            "cld-mask": {
+                "href": f"{base}CLD_SPOT6_MS_{stamp}_ORT_ORTHO-MS-{job - 1}_MSK.GML"
+            },
+            "mask": {"href": f"{base}{item_id}_MASKS.ZIP"},
+        },
+    }
+
+
+class TestOpenSpotCollection:
+    def test_default_collection_is_the_live_one(self, mk):
+        assert mod.SPOT67_COLLECTION == "dinamis-openspot-6-7"
+        assert mk().collection == "dinamis-openspot-6-7"
+
+    def test_mission_comes_from_the_mission_property(self):
+        f = mod._name_fields(_open_item(), "PAN")
+        assert f["mission"] == "SPOT6" and f["platform_num"] == "6"
+        assert f["sensor_tag"] == "S6P" and f["stamp"] == "202411171007349"
+        assert f["scene"] == "SCENE1" and f["scene_part"] == ""
+        assert f["ext"] == "tif"
+
+    def test_sidecar_named_after_the_item_takes_the_stamp_from_the_id(self, caplog):
+        with caplog.at_level(logging.WARNING, logger=mod.LOGGER.name):
+            f = mod._name_fields(_open_item(), "mask")
+        # the STAC datetime is midnight; the id carries the real stamp
+        assert f["stamp"] == "202411171007349" and f["suffix"] == "_masks"
+        assert f["ext"] == "zip" and not caplog.records
+
+    def test_legacy_key_names_resolve_to_the_new_assets(self):
+        item = _open_item()
+        assert mod._resolve_asset_key(item, "src_pan") == "PAN"
+        assert mod._resolve_asset_key(item, "dimap_xs") == "MS-dimap"
+        assert mod._resolve_asset_key(ITEM, "PAN") == "src_pan"  # and backwards
+        assert mod._resolve_asset_key(item, "nope") == "nope"
+        assert mod._name_fields(item, "src_pan") == mod._name_fields(item, "PAN")
+
+    def test_default_names_match_the_pre_2026_files(self, stub_stac):
+        f = _finder(stub_stac)
+        assert f._clean_filename(_open_item(), "PAN") == "IMG_S6P_202411171007349.tif"
+        assert (
+            f._clean_filename(_open_item(), "PAN-dimap")
+            == "IMG_S6P_202411171007349_metadata.xml"
+        )
+        two = _open_item(scene="SCENE2", job=23790)
+        assert f._clean_filename(two, "PAN") == "IMG_S6P_202411171007349_SCENE2.tif"
+
+    def test_search_reports_platform_and_view_geometry(self, mk):
+        f = mk()
+        _stub_search(f, [_open_item()])
+        row = f.search_metadata().iloc[0]
+        assert row["platform"] == "spot-6"
+        assert row["incidence_deg"] == 4.47 and row["sun_elevation_deg"] == 22.9
+        assert "PAN-dimap" in row["assets"]
+
+    def test_empty_frame_carries_the_view_columns(self, mk):
+        f = mk()
+        _stub_search(f, [])
+        assert set(mod._VIEW_COLUMNS) <= set(f.search_metadata().columns)
+
+    def test_open_ended_default_year_range(self, mk):
+        f = mk()
+        seen = _stub_search(f, [_open_item()])
+        f.search_metadata()
+        assert seen["datetime"] == "2014-01-01/.."
+
+    def test_unknown_collection_raises_instead_of_returning_nothing(self, mk):
+        f = mk(collection="spot-6-7-drs")
+
+        def get_collection(cid):
+            raise RuntimeError(
+                '{"code":"NotFoundError","description":"Collection '
+                f'{cid} does not exist."}}'
+            )
+
+        f.client._stac = SimpleNamespace(
+            search=lambda **kw: SimpleNamespace(items_as_dicts=lambda: iter([])),
+            get_collection=get_collection,
+            get_collections=lambda: [SimpleNamespace(id="dinamis-openspot-6-7")],
+        )
+        with pytest.raises(ValueError, match="spot-6-7-drs.*dinamis-openspot-6-7"):
+            f.search_metadata()
+
+    def test_other_collection_errors_leave_an_empty_result(self, mk):
+        f = mk()
+
+        def get_collection(cid):
+            raise RuntimeError("connection reset")
+
+        f.client._stac = SimpleNamespace(
+            search=lambda **kw: SimpleNamespace(items_as_dicts=lambda: iter([])),
+            get_collection=get_collection,
+        )
+        assert f.search_metadata().empty
+
+
+class TestFilenameCollisions:
+    def _patch_stream(self, monkeypatch):
+        calls = []
+
+        def fake(self, href, out_path, timeout=300.0):
+            calls.append(Path(out_path).name)
+            Path(out_path).write_bytes(b"x")
+
+        monkeypatch.setattr(DinamisImageFinder, "_stream_download", fake)
+        return calls
+
+    def _two_scenes(self, f):
+        one = _open_item(scene="SCENE1")
+        two = _open_item(scene="SCENE2", job=23790)
+        f._item_cache.update({one["id"]: one, two["id"]: two})
+        return pd.DataFrame({"image_id": [one["id"], two["id"]]})
+
+    def test_scenes_of_one_strip_get_distinct_files(self, mk, tmp_path, monkeypatch):
+        calls = self._patch_stream(monkeypatch)
+        f = mk()
+        out = f.download_images(
+            self._two_scenes(f), output_dir=tmp_path, show_progress=False
+        )
+        assert len(set(out)) == 4 == len(calls)
+        assert "IMG_S6P_202411171007349_SCENE2_metadata.xml" in calls
+
+    def test_colliding_template_raises_before_any_download(
+        self, mk, tmp_path, monkeypatch
+    ):
+        calls = self._patch_stream(monkeypatch)
+        f = mk(filename_template="IMG_{sensor_tag}_{stamp}{suffix}.{ext}")
+        with pytest.raises(ValueError, match="collision.*scene_part"):
+            f.download_images(
+                self._two_scenes(f), output_dir=tmp_path, show_progress=False
+            )
+        assert calls == []
+
+    def test_clip_path_is_guarded_too(self, mk, tmp_path):
+        f = mk(filename_template=LEGACY_FILENAME_TEMPLATE)
+        with pytest.raises(ValueError, match="collision"):
+            f.download_cog_clip(
+                self._two_scenes(f),
+                output_dir=tmp_path,
+                assets=("PAN",),
+                show_progress=False,
+            )
+
+    def test_metadata_only_download(self, mk, tmp_path, monkeypatch):
+        calls = self._patch_stream(monkeypatch)
+        f = mk()
+        f.download_images(
+            self._two_scenes(f).iloc[:1],
+            output_dir=tmp_path,
+            assets=("PAN-dimap",),
+            download_metadata=False,
+            show_progress=False,
+        )
+        assert calls == ["IMG_S6P_202411171007349_metadata.xml"]

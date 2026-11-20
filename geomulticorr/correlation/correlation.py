@@ -38,11 +38,14 @@ from geomulticorr.correlation.corr_params import (
     SGM_KERNEL,
     sgm_kernel_override,
 )
-from geomulticorr.utils.hpc_tools import (
+from geomulticorr.utils.hpc_tools import (  # noqa: F401  (CLUSTER_CHOICES re-export)
     CLUSTER_CHOICES,
-    validate_cluster,
-    oar_header,
+    CORRELATION_CLUSTER_CHOICES,
+    asp_env_lines,
     cluster_base_env,
+    get_profile,
+    oar_header,
+    validate_cluster,
 )
 
 
@@ -427,12 +430,9 @@ class ASP:
                 logger.error(f"ASP corr_eval error:\n{ce_result.stderr}")
 
         if clean:
-            out_dir = Path(out_prefix).parent
-            for f in sorted(out_dir.iterdir()):
-                if f.is_file() and not any(
-                    f.name.endswith(s) for s in self._KEEP_SUFFIXES
-                ):
-                    f.unlink()
+            prefix = Path(out_prefix)
+            for f in self._intermediate_files(prefix.parent, prefix.name):
+                f.unlink()
 
         return result.returncode
 
@@ -537,7 +537,9 @@ class ASP:
 
         :param pair: A ``geomulticorr.pair.Pair`` instance.
         :param corr_params_file: Path to ASP settings file (from :meth:`build_correlation_params`). If None, uses default.
-        :param cluster: Cluster target: ``None``, ``"local"``, ``"gricad"``, or ``"isterre"``.
+        :param cluster: Cluster target: ``None``, ``"local"``, ``"gricad"``, ``"isterre"``
+            or ``"cigri"`` (GRICAD environment, no ``#OAR`` header: the CiGri JDL carries
+            the OAR options).
         :param nodes: Number of OAR nodes (cluster mode only).
         :param cores: Number of cores per node (cluster mode only).
         :param walltime: OAR walltime in ``HH:MM:SS`` format (cluster mode only).
@@ -554,7 +556,8 @@ class ASP:
         :param metric: Metric for ``corr_eval`` (default: ``ncc``).
         :return: Path to the written bash script.
         """
-        validate_cluster(cluster)
+        validate_cluster(cluster, CORRELATION_CLUSTER_CHOICES)
+        is_local = get_profile(cluster).is_local
 
         left = pair.pa_left_link_path
         right = pair.pa_right_link_path
@@ -565,7 +568,7 @@ class ASP:
 
         # For cluster scripts, the binary is loaded via module load / PATH.
         # For local, use the resolved full path so the script is self-contained.
-        if cluster in (None, "local"):
+        if is_local:
             stereo_bin = self.find_asp_executable("parallel_stereo")
         else:
             stereo_bin = "parallel_stereo"
@@ -597,22 +600,15 @@ class ASP:
             besteffort=besteffort,
             output_dir=pair.pa_path,
         )
-        if cluster in ("gricad", "isterre"):
-            lines += ["\n"] + cluster_base_env(cluster)
-            if cluster == "gricad":
-                lines += [f"conda activate {conda_env}\n"]
-            else:  # isterre
-                lines += [
-                    "module load stereopipeline/3.6.0\n",
-                    "\n",
-                    f"micromamba activate {conda_env}\n",
-                ]
-            lines.append("\n")
+        # Environment block from the profile table (empty for a local run, which
+        # uses resolved binary paths). "cigri" gets GRICAD's environment and no
+        # #OAR header: CiGri passes the OAR options itself, from the JDL.
+        lines += asp_env_lines(cluster, conda_env)
 
         lines.append(f"{cmd_str}\n")
 
         if correval:
-            if cluster in (None, "local"):
+            if is_local:
                 correval_bin = self.find_asp_executable("corr_eval")
             else:
                 correval_bin = "corr_eval"
@@ -647,11 +643,59 @@ class ASP:
         "_CorrParameters.txt",
     )
 
-    def clean_pair_directory(self, pair, dry_run: bool = False) -> list[Path]:
+    #: What ASP 3.6.0 writes after ``<key>`` and GMC does not need
+    #: run. Cleaning removes only these. A keep-list would also delete everything the
+    #: later steps write into the pair folder (EW/NS maps, corrections, masks, stats,
+    #: plots). A file missing here is only left on disk, which is the safe way to fail.
+    _INTERMEDIATE_SUFFIXES = (
+        "-D.tif",
+        "-D_sub.tif",
+        "-GoodPixelMap.tif",
+        "-L.vwip",
+        "-L__R.match",
+        "-L_sub.tif",
+        "-R.vwip",
+        "-R_sub.tif",
+        "-stats.tif",
+        "-dirList.txt",
+        "-info.txt",
+        "-lMask.tif",
+        "-lMask_sub.tif",
+        "-rMask.tif",
+        "-rMask_sub.tif",
+        "-stereo-status.txt",
+        "-stereo.default",
+        "-tiles-index.txt",
+        "-tiles.dbf",
+        "-tiles.qml",
+        "-tiles.shp",
+        "-tiles.shx",
+    )
+
+    @classmethod
+    def _intermediate_files(cls, out_dir: Path, key: str) -> list[Path]:
+        """Return the ASP intermediates of the output prefix *key* in *out_dir*.
+
+        The name is matched after ``<key>``, because a pzone name may itself contain
+        ``-log-``. Symlinks (the input thumbs) are never returned.
+        """
+        files = []
+        for f in sorted(out_dir.iterdir()):
+            if not f.is_file() or f.is_symlink() or not f.name.startswith(f"{key}-"):
+                continue
+            tail = f.name[len(key) :]
+            if tail.startswith("-log-") or tail.endswith(cls._INTERMEDIATE_SUFFIXES):
+                files.append(f)
+        return files
+
+    @classmethod
+    def clean_pair_directory(cls, pair, dry_run: bool = False) -> list[Path]:
         """Delete intermediate ASP files from *pair*'s output directory.
 
-        Keeps only files whose names end with one of:
-        ``-F.tif``, ``-L-R-disp-diff.tif``, ``-L.tif``, ``-R.tif``, ``-RD.tif``, ``-F-ncc.tif``.
+        Removes only the files listed by :attr:`_INTERMEDIATE_SUFFIXES` plus the
+        ``-log-*`` files, so it is safe to call at any stage of a pair: what the later
+        steps wrote into the folder stays. Runs no ASP program, so it is a classmethod
+        and needs no ASP install: ``ASP.clean_pair_directory(pair)``.
 
         :param pair: A ``geomulticorr.pair.Pair`` instance.
         :param dry_run: List files that would be deleted without removing them.
@@ -663,11 +707,7 @@ class ASP:
             return []
 
         removed: list[Path] = []
-        for f in sorted(asp_dir.iterdir()):
-            if not f.is_file() or f.is_symlink():
-                continue
-            if any(f.name.endswith(suffix) for suffix in self._KEEP_SUFFIXES):
-                continue
+        for f in cls._intermediate_files(asp_dir, pair.pa_key):
             if dry_run:
                 logger.info(f"DRY RUN — would delete: {f.name}")
             else:

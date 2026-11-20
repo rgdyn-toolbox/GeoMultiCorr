@@ -59,6 +59,7 @@ import geoutils as gu
 from geomulticorr.core.console import BatchProgress, print_tio_export_summary
 from geomulticorr.stats import load_pair_stats
 from geomulticorr._logging import logger
+from geomulticorr._profiling import profile as gmc_profile
 from geomulticorr.inversion.pytio.config import TIOConfig, input_tio_text
 from geomulticorr.utils._weights_frame import (
     WEIGHT_MODE_KEYS,
@@ -1093,6 +1094,7 @@ class TIOInversion:
 
     # ── Per-pair data export ──────────────────────────────────────────────────
 
+    @gmc_profile("gmc.tio.export_pair_to_binary")
     def export_pair_to_binary(self, pair, overwrite: bool = False) -> tuple[Path, Path]:
         """Load, filter, and export one pair's displacements to ENVI Float32 binary.
 
@@ -2777,6 +2779,7 @@ class TIOInversion:
             written[direction] = write_run_parameters(path, document)
         return written
 
+    @gmc_profile("gmc.tio.prepare_inversion", memprof=True)
     def prepare_inversion(
         self,
         weight_mode: str | None = None,
@@ -3070,6 +3073,7 @@ class TIOInversion:
         )
         return self.prepare_inversion(*args, **kwargs)
 
+    @gmc_profile("gmc.tio.launch", memprof=True)
     def launch(
         self,
         direction: str = "both",
@@ -3191,6 +3195,7 @@ class TIOInversion:
         ("n_images", "n_images"),
     )
 
+    @gmc_profile("gmc.tio._launch_python", memprof=True)
     def _launch_python(
         self,
         targets: tuple[str, ...],
@@ -3318,6 +3323,7 @@ class TIOInversion:
         logger.info(f"TIO ── python backend done in {elapsed:.1f} s.")
         return results
 
+    @gmc_profile("gmc.tio.post_process", memprof=True)
     def post_process(self, direction: str = "both", overwrite: bool = False) -> None:
         """Convert TOT binary inversion outputs to GeoTIFF and compute magnitude maps.
 

@@ -55,6 +55,7 @@ from geomulticorr.utils._image_types import (
 from geomulticorr.utils.gmc_functions import plot_show_raw_results
 from geomulticorr.correlation.correlation import ASP
 from geomulticorr._logging import logger
+from geomulticorr._profiling import profile as gmc_profile
 
 # ASP cannot write his outputs everywhere
 # In the temp (for temporary) directory, we know it will be ok
@@ -485,6 +486,7 @@ status    : {self.pa_status}
     # def define_parameters(self):
 
     # ! This function is useless because the new implementation on correlation.py replace Should be removed
+    @gmc_profile("gmc.pair.launch_correlation")
     def launch_correlation(
         self,
         corr_algorithm="asp_mgm",
@@ -745,6 +747,7 @@ status    : {self.pa_status}
 
         return magn_in_meters
 
+    @gmc_profile("gmc.pair.save_correction_masks")
     def save_correction_masks(
         self,
         x_stable: np.ndarray | None,
@@ -787,6 +790,7 @@ status    : {self.pa_status}
 
         return written
 
+    @gmc_profile("gmc.pair.extract_raw_displacements", memprof=True)
     def extract_raw_displacements(
         self,
         save_plot: bool = True,
