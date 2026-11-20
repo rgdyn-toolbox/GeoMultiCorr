@@ -48,6 +48,15 @@
   PlanetScope download rights by **30 days**. Measured live on 2026-11-18, the cut-off fell
   between 2026-10-19 (allowed) and 2026-10-27 (refused). That delay is why recent scenes refuse
   thumbnails wider than 512 px, and the fallback warning now says so.
+- **`gmc` command line.** `gmc <stage> cfg.yaml` for `prepare`, `crop`, `similarity`, `pairs`, `correlate`,
+  `extract`, `correct`, `invert` and `fuse`; `gmc run cfg.yaml [--only a,b]` for the chain; plus
+  `--template-config`, `--dry-run`, `--profile` and `--no-report`. The config is a YAML file validated by
+  pydantic (unknown keys are rejected); section fields are the method parameter names. Each stage writes a
+  record under `<project>/gmc_runs/<config stem>/records/`. Example: `examples/cli/pasdelours.yaml`.
+- **Automatic run reports.** `gmc report RUN_DIR|cfg.yaml` renders `report.html`, and `report.pdf` when
+  `plutoprint` is installed, from the stage records. Install the extras with `pip install -e .[cli,report]`.
+- `@gmc_profile` on `Pair.launch_correlation`, `Pair.extract_raw_displacements`, `Pair.save_correction_masks`,
+  `fuse_inversions`, `calibrate_to_reference` and the `TIOInversion` prepare, launch and post-process methods.
 
 - **CiGri grid as a correlation target: `cluster="cigri"`.** It is chosen like `gricad` or
   `isterre`, in `prepare_pairs_correlation` and `launch_pairs_correlation`. Instead of one
