@@ -24,7 +24,7 @@ jobs:
       - name: Install GeoMultiCorr
         shell: micromamba-shell {0}
         run: |
-          pip install teledetection==1.11.0 plutoprint==0.23.0
+          pip install -r ci/requirements-pip.txt
           pip install -e . --no-deps
 
       # The cache key follows the data version and checksums pinned in examples.py.
