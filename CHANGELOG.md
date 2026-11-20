@@ -128,6 +128,14 @@
   `asp_bin_dir` argument is now unused, and kept so existing calls keep working. If ASP is missing
   during a real local launch, the failure now appears per pair, through the script's return code.
 - `ASP.run_correlation(clean=True)` no longer deletes the input symlinks in the output folder.
+- **Planet orders are recognised as delivered.** An order unpacked as
+  `Planet_<site>_…_psorthotile_…/files/<item>_BGRN_SR_clip.tif` names its sensor in neither the file
+  name nor `files/`, so `map_georasters_bank` mapped it as `unknown`. Sensor detection
+  (`supported_sensors.detect_sensor_token`) now reads the file name, then every folder up to the bank
+  folder (never above it), then a Planet `<item>_metadata.json` sidecar (`item_type` starting with
+  `PS`). `psorthotile` is a new Planet alias. `map_single_georaster` takes a new optional `bank_root`
+  argument; without it, only the file name and its parent folder are read, as before.
+
 
 ### Deprecated
 - `Session.insert_pzone_to_gdb` (use `insert_pzone`) emit a `DeprecationWarning` and will be removed

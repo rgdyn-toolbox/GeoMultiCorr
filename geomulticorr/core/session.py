@@ -3883,6 +3883,7 @@ class Session:
         ta: pathlib.Path | list[str] | str | None,
         target_crs: str,
         image_types: set[str],
+        bank_root: pathlib.Path | str | None = None,
     ) -> dict | None:
         """Map a single georaster to the target CRS and image types.
 
@@ -3890,6 +3891,11 @@ class Session:
             ta (pathlib.Path | list[str] | str | None): The input raster file(s) to process.
             target_crs (str): The target coordinate reference system (CRS) to which the raster should be transformed.
             image_types (set[str]): A set of image types to consider during processing.
+            bank_root (pathlib.Path | str | None, optional): The bank folder being mapped. An
+                optical sensor is then also looked for in every folder between the file and it,
+                and in a Planet ``<item>_metadata.json`` sidecar, which is how Planet orders
+                (``Planet_…/files/<item>_SR_clip.tif``) are recognised as delivered. Without
+                it, only the file name and its parent folder are read.
 
         Returns:
             dict | None: A dictionary containing the processed raster information, or None if processing fails.
@@ -3916,14 +3922,7 @@ class Session:
             georaster_metadata["rows"] = r.shape[0]
             georaster_metadata["cols"] = r.shape[1]
             if "opt" in image_types:
-                sensor = re_searcher(
-                    ta.name.lower(), gmc_sensors.sensors(gmc_sensors.supported_sensors)
-                )
-                if sensor == "unknown":
-                    sensor = re_searcher(
-                        ta.parent.name.lower(),
-                        gmc_sensors.sensors(gmc_sensors.supported_sensors),
-                    )
+                sensor = gmc_sensors.detect_sensor_token(ta, root=bank_root)
                 sensor_normalized = gmc_sensors.sensor_normalize(sensor)
             elif "dem" in image_types:
                 # A DEM carries no readable sensor metadata: the source
@@ -4089,7 +4088,13 @@ class Session:
 
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = [
-                ex.submit(self.map_single_georaster, ta, target_crs, _image_types)
+                ex.submit(
+                    self.map_single_georaster,
+                    ta,
+                    target_crs,
+                    _image_types,
+                    georasters_bank_path,
+                )
                 for ta in targets
             ]
             rows = []
