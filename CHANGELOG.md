@@ -97,6 +97,8 @@
   `with_asp_twins`, `ASP_VARIANTS`, `RASTER_OUTCOMES`. `geomulticorr.similarity.trace.json_tree`.
 - `stats.update_stats_file(path, section, data)`, a path-based section writer that needs no `Pair`.
   `update_pair_stats` now writes through it, atomically (`.part` then rename).
+- **Real test data: `geomulticorr.examples`.** `get_project(name, dest)` installs a copy of a published GMC project with its paths rewritten, `get_bank(site, sensor)` returns an image bank for `map_georasters_bank`, plus `get_path`, `download`, `relocate_project` and `available`. Each asset is a release tarball of the `geomulticorr-data` repository, pinned by SHA-256 in `REGISTRY` and cached in `$GMC_DATA_DIR`, else `~/.cache/geomulticorr/data/<version>/`. Extraction rejects unsafe archive members. First site: Pierre Brune (Vanoise), one project per sensor (PlanetScope, SPOT, Sentinel-2, Landsat), same-sensor pairs only.
+
 
 ### Changed
 - `PlanetImageFinder.download_thumbnails` names files `<image_id>.png` instead of
@@ -149,9 +151,9 @@
 - `Session.pr_full` (use `prepare_pairs_correlation` then `launch_pairs_correlation`)
 
 ### Known issues
-- `apply_pairs_corrections(filter_pipeline=<a single mask>)` fails on every pair and only logs the
-  error, because a single mask has no `compute()`. Combine masks with `+` into a `FilterPipeline`.
-  Pinned by a strict `xfail`.
+- `apply_pairs_corrections(filter_pipeline=<a single mask>)` fails on every pair and only logs the error, because a single mask has no `compute()`. Combine masks with `+` into a `FilterPipeline`. Pinned by a strict `xfail`.
+- `apply_pairs_corrections` uses one pipeline both for the fit pixels and for masking its output, so adding `StableAreaMask` erases the moving ground from the corrected maps. Fit with `make_corrections` and separate masks for now. Pinned by a strict `xfail` in `tests/realdata/test_projects.py`.
+
 
 ### Tests
 - +20 tests (2834 passing, 1 xfail) in `tests/core/test_session_cleanup.py`: `launch_pairs_correlation`

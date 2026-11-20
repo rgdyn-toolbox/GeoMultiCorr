@@ -24,8 +24,17 @@ jobs:
         shell: micromamba-shell {0}
         run: pip install -e . --no-deps
 
+      # The cache key follows the data version and checksums pinned in examples.py.
+      - name: Cache the real test datasets
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/geomulticorr/data
+          key: gmc-data-${{ hashFiles('geomulticorr/examples.py') }}
+
       - name: Tests with coverage
         shell: micromamba-shell {0}
+        env:
+          GMC_REQUIRE_DATA: "1"
         run: pytest tests/ --cov=geomulticorr --cov-report=xml -q
 
       - name: Coveralls
