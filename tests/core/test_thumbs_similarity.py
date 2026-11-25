@@ -518,3 +518,10 @@ def test_forward_and_backward_pairs_are_averaged(session):
         for p in _pair_jsons(session).values()
     }
     assert orients == {"forward", "backward"}
+
+
+def test_real_pair_fit_masks_are_named_stable(correlated):
+    """The fit masks are -F_EW_stable.tif / -F_NS_stable.tif (not the old *mask names)."""
+    pair = correlated.get_pairs()[0]
+    assert pair.pa_ew_mask_path.name == f"{pair.pa_key}-F_EW_stable.tif"
+    assert pair.pa_ns_mask_path.name == f"{pair.pa_key}-F_NS_stable.tif"

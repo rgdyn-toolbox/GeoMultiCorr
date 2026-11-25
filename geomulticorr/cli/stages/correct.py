@@ -62,16 +62,29 @@ def run(ctx: StageContext, section, rec) -> None:
                 save_plot=section.save_plot,
                 plot_level=section.plot_level,
                 verbose=section.verbose,
+                moving_areas=section.moving_areas,
                 image_type=image_type,
                 **resolve_options(session, pz, section.options),
             )
             or {}
         )
+        if section.derived:
+            derived = session.write_derived_rasters(
+                criterias=crit,
+                image_type=image_type,
+                products=tuple(section.derived),
+                overwrite=section.overwrite,
+                print_summary=False,
+            )
+            n_derived_failed = sum(v is None for v in derived.values())
+        else:
+            n_derived_failed = 0
         failed = sorted(k for k, v in results.items() if not v)
         rows = pairs_table(session, crit, image_type)
         per_pz[pz] = {
             "n_pairs": len(results),
             "n_failed": len(failed),
+            "n_derived_failed": n_derived_failed,
             "failed": failed,
             **_nmad_summary(rows),
         }
@@ -83,6 +96,7 @@ def run(ctx: StageContext, section, rec) -> None:
     rec.summary["image_type"] = image_type
     rec.summary["masks"] = section.masks
     rec.summary["corrections"] = describe_steps(corrections)
+    rec.summary["derived"] = list(section.derived)
     rec.summary["pzones"] = per_pz
 
 

@@ -39,5 +39,6 @@ from geomulticorr.core.console.tables import (
     print_reset_outputs_summary,
     print_extract_displacements_summary,
     print_apply_corrections_summary,
+    print_derived_rasters_summary,
     print_tio_export_summary,
 )

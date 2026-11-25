@@ -46,6 +46,7 @@ import matplotlib.pyplot as plt
 import geomulticorr.core.thumb as gmc_thumb
 import geomulticorr.stats.stats as gmc_stats
 from geomulticorr.utils._grid import write_binary_raster
+from geomulticorr.utils import _derived
 from geomulticorr.utils._image_types import (
     IMAGE_TYPE_OPTICAL,
     IMAGE_TYPES,
@@ -226,9 +227,11 @@ class Pair:
         self.pa_cc_path = Path(self.pa_path, f"{self.pa_key}-F_CC.tif")
         self.pa_ew_corr_path = Path(self.pa_path, f"{self.pa_key}-F_EW_corr.tif")
         self.pa_ns_corr_path = Path(self.pa_path, f"{self.pa_key}-F_NS_corr.tif")
-        # Stable-ground keep-masks used to fit the corrections (1-bit GeoTIFFs)
-        self.pa_ew_mask_path = Path(self.pa_path, f"{self.pa_key}-F_EWmask.tif")
-        self.pa_ns_mask_path = Path(self.pa_path, f"{self.pa_key}-F_NSmask.tif")
+        # Stable-ground fit masks the corrections were fitted on (1-bit GeoTIFFs).
+        # Attribute names kept (``*_mask_path``); only the file names changed from
+        # ``-F_EWmask.tif`` / ``-F_NSmask.tif``.
+        self.pa_ew_mask_path = Path(self.pa_path, f"{self.pa_key}-F_EW_stable.tif")
+        self.pa_ns_mask_path = Path(self.pa_path, f"{self.pa_key}-F_NS_stable.tif")
         self.pa_plot_raw_path = Path(self.pa_path, f"{self.pa_key}_raw_disp.jpg")
         self.pa_magn_path = Path(self.pa_path, f"{self.pa_key}_magn.tif")
         self.pa_vect_path = Path(self.pa_path, f"{self.pa_key}_vect.gpkg")
@@ -747,6 +750,119 @@ status    : {self.pa_status}
 
         return magn_in_meters
 
+    # Derived rasters of the corrected maps (``write_derived``). Properties, so
+    # they follow ``pa_path`` / ``pa_key`` and exist on any Pair.
+    @property
+    def pa_mag_corr_path(self) -> Path:
+        """``<pa_key>-F_MAG_corr.tif``: corrected displacement magnitude (m)."""
+        return self.derived_path("magnitude")
+
+    @property
+    def pa_vel_corr_path(self) -> Path:
+        """``<pa_key>-F_VEL_corr.tif``: corrected velocity magnitude (m/yr)."""
+        return self.derived_path("velocity")
+
+    @property
+    def pa_ew_vel_corr_path(self) -> Path:
+        """``<pa_key>-F_EW_VEL_corr.tif``: corrected EW velocity (m/yr)."""
+        return self.derived_path("ew_velocity")
+
+    @property
+    def pa_ns_vel_corr_path(self) -> Path:
+        """``<pa_key>-F_NS_VEL_corr.tif``: corrected NS velocity (m/yr)."""
+        return self.derived_path("ns_velocity")
+
+    def derived_path(self, product: str) -> Path:
+        """Path of a derived raster: ``<pa_key>-F_<MAG|VEL|EW_VEL|NS_VEL>_corr.tif``.
+
+        :param product: One of ``"magnitude"``, ``"velocity"``, ``"ew_velocity"``,
+            ``"ns_velocity"`` (see :mod:`geomulticorr.utils._derived`).
+        :raises ValueError: Unknown product.
+        """
+        (product,) = _derived.check_products(product)
+        return Path(
+            self.pa_path, f"{self.pa_key}-F_{_derived.DERIVED_PRODUCTS[product]}.tif"
+        )
+
+    def write_derived(
+        self,
+        products=("magnitude", "velocity"),
+        overwrite: bool = False,
+    ) -> dict[str, Path]:
+        """Write magnitude and velocity rasters computed from the corrected maps.
+
+        Reads ``-F_EW_corr.tif`` and ``-F_NS_corr.tif``; nothing is recomputed
+        from the correlation. Outputs are float32 GeoTIFFs on the same grid,
+        with nodata ``-9999`` (0 is a real velocity), wherever an input they
+        need is nodata.
+
+        =============== ============================ ===========================
+        product          file                         formula
+        =============== ============================ ===========================
+        ``magnitude``    ``-F_MAG_corr.tif``          sqrt(EW² + NS²), m
+        ``velocity``     ``-F_VEL_corr.tif``          magnitude / ``pa_dt_years``, m/yr
+        ``ew_velocity``  ``-F_EW_VEL_corr.tif``       EW / ``pa_dt_years``, m/yr
+        ``ns_velocity``  ``-F_NS_VEL_corr.tif``       NS / ``pa_dt_years``, m/yr
+        =============== ============================ ===========================
+
+        :param products: Product names (a name or an iterable).
+        :param overwrite: Rewrite files that already exist. Without it they are
+            left alone and not reported.
+        :returns: ``{product: path}`` of the files **written** by this call.
+        :raises FileNotFoundError: The corrected EW or NS raster is missing.
+        :raises ValueError: Unknown product, a non-positive ``pa_dt_years``, or
+            EW and NS on different grids.
+        """
+        import numpy.ma as ma
+
+        names = _derived.check_products(products)
+        todo = [p for p in names if overwrite or not self.derived_path(p).exists()]
+        if not todo:
+            return {}
+        for src in (self.pa_ew_corr_path, self.pa_ns_corr_path):
+            if not Path(src).exists():
+                raise FileNotFoundError(f"Corrected raster not found: {src}")
+        if not self.pa_dt_years or self.pa_dt_years <= 0:
+            raise ValueError(
+                f"Pair '{self.pa_key}' has a non-positive time span "
+                f"({self.pa_dt_years} years): no velocity can be computed."
+            )
+
+        with (
+            rasterio.open(self.pa_ew_corr_path) as ew_src,
+            rasterio.open(self.pa_ns_corr_path) as ns_src,
+        ):
+            if (ew_src.shape, ew_src.transform, ew_src.crs) != (
+                ns_src.shape,
+                ns_src.transform,
+                ns_src.crs,
+            ):
+                raise ValueError(
+                    f"EW and NS corrected rasters of '{self.pa_key}' are not on the same grid."
+                )
+            profile = ew_src.profile
+            # nodata is 0 in the corrected maps; honour the tag, and treat NaN as nodata
+            ew = ma.masked_invalid(ew_src.read(1, masked=True).astype("float64"))
+            ns = ma.masked_invalid(ns_src.read(1, masked=True).astype("float64"))
+
+        profile.update(
+            driver="GTiff",
+            dtype="float32",
+            count=1,
+            nodata=_derived.DERIVED_NODATA,
+            compress="deflate",
+        )
+        written: dict[str, Path] = {}
+        arrays = _derived.compute_derived(todo, ew, ns, self.pa_dt_years)
+        for product, array in arrays.items():
+            out_path = self.derived_path(product)
+            filled = ma.filled(array.astype("float32"), _derived.DERIVED_NODATA)
+            filled[~np.isfinite(filled)] = _derived.DERIVED_NODATA
+            with rasterio.open(out_path, "w", **profile) as dst:
+                dst.write(filled, 1)
+            written[product] = out_path
+        return written
+
     @gmc_profile("gmc.pair.save_correction_masks")
     def save_correction_masks(
         self,
@@ -1255,14 +1371,14 @@ status    : {self.pa_status}
         match mode.lower():
             case "m":
                 x, y = self.get_xDisp_raster(), self.get_yDisp_raster()
-                return (x * x + y * y) ** 0.5
+                return _derived.magnitude(x, y)
             case "x":
                 return self.get_xDisp_raster()
             case "y":
                 return self.get_yDisp_raster()
             case "vm":
                 x, y = self.get_xDisp_raster(), self.get_yDisp_raster()
-                return ((x * x + y * y) ** 0.5) / self.pa_dt_years
+                return _derived.velocity(_derived.magnitude(x, y), self.pa_dt_years)
             case "vx":
                 return self.get_xVel()
             case "vy":

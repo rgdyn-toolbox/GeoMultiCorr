@@ -158,6 +158,12 @@ def test_reverse_pair_measures_the_opposite_motion(sensor):
     assert checked > 0
 
 
+def _stable_path(folder, key, comp):
+    """Fit-mask file of a pair: ``-F_<comp>_stable.tif``, or the old ``-F_<comp>mask.tif``."""
+    new = folder / f"{key}-F_{comp}_stable.tif"
+    return new if new.exists() else folder / f"{key}-F_{comp}mask.tif"
+
+
 @pytest.mark.parametrize("sensor", SENSORS)
 def test_corrections_reproduce_and_center_stable_ground(sensor):
     root = load_asset(PROJECTS[sensor])
@@ -168,8 +174,9 @@ def test_corrections_reproduce_and_center_stable_ground(sensor):
     x_raw = gu.Raster(str(folder / f"{key}-F_EW.tif"), nodata=0)
     y_raw = gu.Raster(str(folder / f"{key}-F_NS.tif"), nodata=0)
     cc = gu.Raster(str(folder / f"{key}-F_CC.tif"))
-    x_stable = read_band(folder / f"{key}-F_EWmask.tif") == 1
-    y_stable = read_band(folder / f"{key}-F_NSmask.tif") == 1
+    # the pinned dataset (v2) predates the -F_*_stable.tif names
+    x_stable = read_band(_stable_path(folder, key, "EW")) == 1
+    y_stable = read_band(_stable_path(folder, key, "NS")) == 1
     x_kept, y_kept = (CCFilter(CC_THRESHOLD) + OutlierFilter(OUTLIER_BOUNDS_M)).apply(
         x_raw, y_raw, cc=cc
     )
@@ -275,14 +282,6 @@ def test_inversion_reproduces_the_stored_series(project_from, sensor):
     assert np.nanpercentile(np.abs(difference), 99) < 0.05
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "apply_pairs_corrections uses one pipeline for the fit pixels and the output "
-        "mask, so StableAreaMask (the CLI template and docs/cli.md) erases moving ground"
-    ),
-)
 def test_apply_pairs_corrections_keeps_moving_ground_with_stable_area_mask(
     project_from,
 ):

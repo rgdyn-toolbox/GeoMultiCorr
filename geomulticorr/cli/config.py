@@ -2,27 +2,27 @@
 # -*- coding: utf-8 -*-
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # config.py
 # creation date: 2026-10-29.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -370,7 +370,7 @@ StepSpec = str | dict[str, Any]
 
 class CorrectConfig(_Section):
     _targets = ("Session.apply_pairs_corrections",)
-    _cli_only = _Section._cli_only | {"masks", "corrections", "options"}
+    _cli_only = _Section._cli_only | {"masks", "corrections", "options", "derived"}
 
     criterias: str | list[str] = ""
     masks: list[StepSpec] = Field(default_factory=list)
@@ -381,8 +381,16 @@ class CorrectConfig(_Section):
     save_plot: bool = True
     plot_level: Literal["light", "full"] = "light"
     verbose: bool = False
+    #: ``"auto"``: fit outside the pzone's stored moving areas when ``masks`` holds
+    #: no ``StableAreaMask``; a path to a vector file; ``null`` fits on all ground.
+    moving_areas: str | None = "auto"
     #: Forwarded as ``**kwargs`` to the corrections (e.g. ``dem: auto``).
     options: dict[str, Any] = Field(default_factory=dict)
+    #: Rasters written after the corrections (``Session.write_derived_rasters``):
+    #: any of ``magnitude``, ``velocity``, ``ew_velocity``, ``ns_velocity``. Empty = none.
+    derived: list[Literal["magnitude", "velocity", "ew_velocity", "ns_velocity"]] = (
+        Field(default_factory=list)
+    )
 
 
 # ── invert ──────────────────────────────────────────────────────────────── #
