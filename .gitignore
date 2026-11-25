@@ -19,6 +19,7 @@ data/
 # Temporary LOG files
 devs_logs/
 TO_DO/
+GIT_WORKFLOW.md
 
 # VS code setting
 .vscode/

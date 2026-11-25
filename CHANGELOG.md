@@ -933,4 +933,3 @@ Updates on email. No important changes.
 - Add tool config to pyproject.toml (199bcd1)
 - Add tool config to pyproject.toml (380291d)
 - Add zenodo badge on README (12189f5)
-
