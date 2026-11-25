@@ -108,6 +108,16 @@ def _compute_hillshade(
 
 
 # --------------------------------------------------------------------------- #
+# Roles
+# --------------------------------------------------------------------------- #
+
+#: The pixel is removed from the fit **and** from the output.
+ROLE_QUALITY = "quality"
+#: The pixel is removed from the fit only; it stays in the output.
+ROLE_FIT = "fit"
+
+
+# --------------------------------------------------------------------------- #
 # FilterPipeline
 # --------------------------------------------------------------------------- #
 
@@ -175,9 +185,103 @@ class FilterPipeline:
             yDisp, new_y
         )
 
+    # ── Roles: quality vs fit ───────────────────────────────────────────────
+
+    def quality_masks(self) -> list[BaseMask]:
+        """Masks whose role is ``"quality"`` (removed from fit **and** output)."""
+        return [m for m in self.masks if m.ROLE == ROLE_QUALITY]
+
+    def fit_masks(self) -> list[BaseMask]:
+        """Masks whose role is ``"fit"`` (removed from the fit only)."""
+        return [m for m in self.masks if m.ROLE == ROLE_FIT]
+
+    def compute_split(
+        self, raster: gu.Raster, **kwargs
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return ``(quality_keep, fit_keep)`` for *raster*, one pass per mask.
+
+        - ``quality_keep``: AND of the ``quality`` masks. Pixels where it is
+          ``False`` are removed from the fit **and** from the output.
+        - ``fit_keep``: ``quality_keep`` AND the ``fit`` masks. This is the
+          stable-ground mask the corrections are fitted on. Pixels that are
+          in ``quality_keep`` but not in ``fit_keep`` (moving or steep ground)
+          are kept in the output.
+
+        Each mask's :meth:`~BaseMask.generate_mask` is called exactly once.
+        ``fit_keep`` is always a subset of ``quality_keep``. With only
+        ``quality`` masks the two arrays are equal to :meth:`compute`.
+
+        :param raster: Displacement raster defining the grid.
+        :type raster: geoutils.Raster
+        :param kwargs: Forwarded to each ``generate_mask`` (``cc=``, ``dem=``, …).
+        :returns: ``(quality_keep, fit_keep)``, both boolean arrays.
+        :rtype: tuple[np.ndarray, np.ndarray]
+        """
+        quality = np.ones(raster.data.shape, dtype=bool)
+        fit = np.ones(raster.data.shape, dtype=bool)
+        for m in self.masks:
+            keep = m.generate_mask(raster, **kwargs)
+            if m.ROLE == ROLE_FIT:
+                fit = fit & keep
+            else:
+                quality = quality & keep
+        return quality, quality & fit
+
+    def apply_quality(
+        self,
+        xDisp: gu.Raster,
+        yDisp: gu.Raster,
+        **kwargs,
+    ) -> tuple[gu.Raster, gu.Raster]:
+        """Apply only the ``quality`` masks to both displacement rasters.
+
+        Unlike :meth:`apply`, ``fit`` masks (e.g. :class:`StableAreaMask`) do not
+        remove pixels, so moving ground stays in the output.
+        """
+        x_keep = FilterPipeline(self.quality_masks()).compute(xDisp, **kwargs)
+        y_keep = FilterPipeline(self.quality_masks()).compute(yDisp, **kwargs)
+
+        return mask_raster(xDisp, x_keep), mask_raster(yDisp, y_keep)
+
     def __repr__(self) -> str:
         names = " + ".join(type(m).__name__ for m in self.masks)
         return f"FilterPipeline([{names}])"
+
+
+def mask_raster(raster: gu.Raster, keep: np.ndarray) -> gu.Raster:
+    """Return a copy of *raster* with the pixels where *keep* is ``False`` masked.
+
+    Pixels already masked stay masked.
+
+    :param raster: Raster to mask.
+    :type raster: geoutils.Raster
+    :param keep: Boolean array, ``True`` = keep the pixel.
+    :type keep: np.ndarray
+    :rtype: geoutils.Raster
+    """
+    data = raster.data
+    return BaseCorrection._copy_raster(
+        raster, ma.array(data.data, mask=np.ma.getmaskarray(data) | ~keep)
+    )
+
+
+def as_pipeline(m: BaseMask | FilterPipeline | None) -> FilterPipeline | None:
+    """Normalise a mask argument to a :class:`FilterPipeline`.
+
+    ``None`` gives ``None``; a single :class:`BaseMask` is wrapped in a
+    one-element pipeline; a :class:`FilterPipeline` is returned as is. Lets
+    callers accept ``filter_pipeline=CCFilter(0.5)`` as well as
+    ``filter_pipeline=CCFilter(0.5) + OutlierFilter(...)``.
+
+    :raises TypeError: For anything else.
+    """
+    if m is None or isinstance(m, FilterPipeline):
+        return m
+    if isinstance(m, BaseMask):
+        return FilterPipeline([m])
+    raise TypeError(
+        f"Expected a BaseMask, a FilterPipeline or None, got {type(m).__name__}."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -200,6 +304,11 @@ class BaseMask(BaseCorrection):
     """
 
     _is_mask: bool = True
+
+    #: ``"quality"`` (default): removed from the fit and the output.
+    #: ``"fit"``: removed from the fit only (moving or steep ground that is
+    #: still a signal to keep). See :meth:`FilterPipeline.compute_split`.
+    ROLE: str = ROLE_QUALITY
 
     @abstractmethod
     def generate_mask(self, raster: gu.Raster, **kwargs) -> np.ndarray:
@@ -288,6 +397,7 @@ class SlopeMask(BaseMask):
     """
 
     _REQUIRED_KWARGS = ("dem",)
+    ROLE = ROLE_FIT
 
     def __init__(self, min_slope: float = 0.0, max_slope: float = 80.0) -> None:
         self.min_slope = min_slope
@@ -426,6 +536,7 @@ class StableAreaMask(BaseMask):
     """
 
     _REQUIRED_KWARGS: tuple[str, ...] = ()
+    ROLE = ROLE_FIT
 
     def __init__(self, stable_mask) -> None:
         self.stable_mask = stable_mask
