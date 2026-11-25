@@ -6,7 +6,7 @@
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
 #
-# tests/correlation/test_integration.py
+# test_integration.py
 # creation date: 2026-05-21.
 #
 # This program is free software: you can redistribute it and/or modify
