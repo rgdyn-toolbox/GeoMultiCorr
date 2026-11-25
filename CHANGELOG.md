@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.9.1] — 2026-11-20
+## [0.9.1] — 2026-11-25
 
 ### Changed
 - **`apply_pairs_corrections`: corrections are fitted on stable ground only, and moving ground
