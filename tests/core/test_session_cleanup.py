@@ -22,7 +22,7 @@ from geomulticorr.core import session as session_mod
 from geomulticorr.core.session import Session
 from geomulticorr.correlation import correlation as correlation_mod
 from geomulticorr.correlation.correlation import ASP
-from geomulticorr.corrections import CCFilter, OutlierFilter
+from geomulticorr.corrections import CCFilter, OutlierFilter, StableAreaMask
 
 KEY = "Zone_2020-08-15_sentinel2__2021-08-15_sentinel2"
 
@@ -60,8 +60,8 @@ GMC_PRODUCTS = (
     "-F_CC.tif",
     "-F_EW_corr.tif",
     "-F_NS_corr.tif",
-    "-F_EWmask.tif",
-    "-F_NSmask.tif",
+    "-F_EW_stable.tif",
+    "-F_NS_stable.tif",
     ".json",
     "_raw_disp.jpg",
     "_00_MedianCentering_disp.jpg",
@@ -271,8 +271,8 @@ class TestApplyCorrectionsFilterArgument:
             pa_ew_path=paths["EW"],
             pa_ns_path=paths["NS"],
             pa_cc_path=paths["ncc"],
-            pa_ew_mask_path=tmp_path / "k-F_EWmask.tif",
-            pa_ns_mask_path=tmp_path / "k-F_NSmask.tif",
+            pa_ew_mask_path=tmp_path / "k-F_EW_stable.tif",
+            pa_ns_mask_path=tmp_path / "k-F_NS_stable.tif",
             pa_stats_path=tmp_path / "k.json",
             save_correction_masks=lambda x, y, reference: {},
         )
@@ -286,11 +286,255 @@ class TestApplyCorrectionsFilterArgument:
         assert result is not None
         assert result["ew"].exists() and result["ns"].exists()
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="apply_pairs_corrections accepts a single mask, then calls "
-        "filter_pipeline.compute(), which only FilterPipeline has; every pair fails.",
-    )
     def test_single_mask_writes_the_corrected_maps(self, tmp_path):
         assert self._run(tmp_path, CCFilter(0.3)) is not None
+
+
+class TestApplyCorrectionsMovingGround:
+    """Corrections are fitted on stable ground; moving ground stays in the output."""
+
+    STABLE_VALUE, MOVING_VALUE = 1.0, 5.0
+
+    @classmethod
+    def _setup(cls, tmp_path, with_moving_file):
+        import geopandas as gpd
+        import geoutils as gu
+        from shapely.geometry import box
+
+        transform = rasterio.transform.from_origin(0, 100, 10, 10)
+        ew = np.full((10, 10), cls.STABLE_VALUE)
+        ew[:6] = cls.MOVING_VALUE  # 60 % of the scene moves: the global median lies
+        # a small gradient, so a centred stable pixel is not exactly 0 (= nodata)
+        ew[6:] += np.linspace(-0.2, 0.2, 40).reshape(4, 10)
+        paths = {}
+        for name, data in (
+            ("EW", ew),
+            ("NS", np.zeros((10, 10)) + 0.5),
+            ("ncc", np.full((10, 10), 0.9)),
+        ):
+            paths[name] = tmp_path / f"k-F_{name}.tif"
+            with rasterio.open(
+                paths[name],
+                "w",
+                driver="GTiff",
+                height=10,
+                width=10,
+                count=1,
+                dtype="float32",
+                crs="EPSG:32632",
+                transform=transform,
+            ) as dst:
+                dst.write(data.astype("float32"), 1)
+        written = {}
+        pair = types.SimpleNamespace(
+            pa_key="k",
+            pa_pz_name="Z",
+            pa_path=tmp_path,
+            pa_ew_path=paths["EW"],
+            pa_ns_path=paths["NS"],
+            pa_cc_path=paths["ncc"],
+            pa_ew_mask_path=tmp_path / "k-F_EW_stable.tif",
+            pa_ns_mask_path=tmp_path / "k-F_NS_stable.tif",
+            pa_stats_path=tmp_path / "k.json",
+            save_correction_masks=lambda x, y, reference: written.update(x=x, y=y)
+            or {},
+        )
+        moving_file = tmp_path / "moving.gpkg"
+        if with_moving_file:  # the top 6 rows: y from 40 to 100
+            gpd.GeoDataFrame(geometry=[box(0, 40, 100, 100)], crs="EPSG:32632").to_file(
+                moving_file, layer="Z_moving-areas"
+            )
+        stub = types.SimpleNamespace(
+            get_pairs=lambda *a, **k: [pair],
+            moving_areas_path=lambda pz: moving_file,
+            get_moving_areas=lambda pz: gu.Vector(
+                gpd.read_file(moving_file, layer="Z_moving-areas")
+            ),
+        )
+        stub._with_moving_areas = lambda *a: Session._with_moving_areas(stub, *a)
+        return stub, pair, written
+
+    @classmethod
+    def _run(cls, tmp_path, monkeypatch, with_moving_file=True, **kwargs):
+        import geomulticorr.stats.stats as gmc_stats
+        from geomulticorr.corrections import MedianCentering
+
+        stub, pair, written = cls._setup(tmp_path, with_moving_file)
+        # the stats JSON needs a whole Pair; it is covered by its own tests
+        monkeypatch.setattr(gmc_stats, "save_corrected_stats", lambda *a, **k: {})
+        monkeypatch.setattr(gmc_stats, "save_final_corrected_stats", lambda *a, **k: {})
+        monkeypatch.setattr(
+            gmc_stats,
+            "save_stable_stats",
+            lambda *a, **k: {"raw_corr_stats_stable": {}},
+        )
+        result = Session.apply_pairs_corrections(
+            stub,
+            MedianCentering(),
+            save_plot=False,
+            print_summary=False,
+            sync_geodb=False,
+            overwrite=True,
+            **kwargs,
+        )["k"]
+        corrected = rasterio.open(result["ew"]).read(1) if result else None
+        return result, corrected, written
+
+    def test_auto_fits_outside_moving_areas_and_keeps_them(self, tmp_path, monkeypatch):
+        result, corrected, written = self._run(tmp_path, monkeypatch)
+        assert result is not None
+        # stable pixels centred to zero, moving ones keep their signal (5 - 1)
+        assert np.allclose(
+            corrected[6:], np.linspace(-0.2, 0.2, 40).reshape(4, 10), atol=1e-5
+        )
+        assert np.allclose(corrected[:6], self.MOVING_VALUE - self.STABLE_VALUE)
+        # the persisted mask is the fit mask: moving ground excluded
+        assert written["x"][6:].all() and not written["x"][:6].any()
+
+    def test_none_fits_on_all_ground(self, tmp_path, monkeypatch):
+        _, corrected, written = self._run(tmp_path, monkeypatch, moving_areas=None)
+        assert np.allclose(corrected[:6], 0.0)  # centred on the moving median
+        assert written == {}  # no filter pipeline, no mask files
+
+    def test_no_moving_areas_warns_and_fits_everywhere(
+        self, tmp_path, monkeypatch, caplog_gmc
+    ):
+        _, corrected, _ = self._run(tmp_path, monkeypatch, with_moving_file=False)
+        assert np.allclose(corrected[:6], 0.0)
+        assert any("No moving areas loaded" in r.message for r in caplog_gmc.records)
+
+    def test_explicit_stable_area_mask_is_not_duplicated(self, tmp_path):
+        stable = np.ones((10, 10), bool)
+        stable[:6] = False
+        stub, _, _ = self._setup(tmp_path, True)
+        out = Session._with_moving_areas(
+            stub, StableAreaMask(stable) + CCFilter(0.3), "auto", ["Z"]
+        )
+        assert [type(m).__name__ for m in out["Z"].masks] == [
+            "StableAreaMask",
+            "CCFilter",
+        ]
+
+    def test_quality_mask_still_removes_pixels_from_the_output(
+        self, tmp_path, monkeypatch
+    ):
+        result, _, _ = self._run(
+            tmp_path,
+            monkeypatch,
+            filter_pipeline=CCFilter(0.3) + OutlierFilter((0.0, 3.0)),
+        )
+        raw = rasterio.open(result["ew"]).read(1)
+        assert np.all(raw[:6] == 0.0)  # the 5 m/yr block is a quality outlier: nodata
+        assert (raw[6:] != 0.0).sum() >= 38  # the stable rows are still there
+
+    def test_stable_stats_are_written_for_the_raw_field_and_each_step(
+        self, tmp_path, monkeypatch
+    ):
+        import geomulticorr.stats.stats as gmc_stats
+
+        calls = {"raw": [], "step": []}
+        stub, pair, _ = self._setup(tmp_path, True)
+        monkeypatch.setattr(
+            gmc_stats,
+            "save_stable_stats",
+            lambda pair, section, x, y, stable, **k: calls["raw"].append(
+                (section, int(stable[0].sum()))
+            )
+            or {"raw_corr_stats_stable": {}},
+        )
+        monkeypatch.setattr(
+            gmc_stats,
+            "save_corrected_stats",
+            lambda pair, x, y, name, **k: calls["step"].append(
+                (name, int(k["stable"][0].sum()))
+            )
+            or {},
+        )
+        monkeypatch.setattr(gmc_stats, "save_final_corrected_stats", lambda *a, **k: {})
+        from geomulticorr.corrections import MedianCentering
+
+        Session.apply_pairs_corrections(
+            stub,
+            MedianCentering(),
+            save_plot=False,
+            print_summary=False,
+            sync_geodb=False,
+            overwrite=True,
+        )
+        # 40 stable pixels: the 4 rows outside the moving areas
+        assert calls["raw"] == [("raw_corr_stats_stable", 40)]
+        assert calls["step"] == [("MedianCentering", 40)]
+
+
+class TestApplyCorrectionsMemory:
+    """Each pair's memory is released before the next one starts."""
+
+    @staticmethod
+    def _run(tmp_path, monkeypatch, **kwargs):
+        calls = []
+        monkeypatch.setattr(
+            session_mod, "_release_memory", lambda: calls.append("release")
+        )
+        result, corrected, _ = TestApplyCorrectionsMovingGround._run(
+            tmp_path, monkeypatch, **kwargs
+        )
+        return calls, result, corrected
+
+    def test_memory_is_released_once_per_pair(self, tmp_path, monkeypatch):
+        calls, result, _ = self._run(tmp_path, monkeypatch)
+        assert result is not None
+        assert calls == ["release"]
+
+    def test_memory_is_released_when_a_pair_fails(self, tmp_path, monkeypatch):
+        """A missing dem= makes the pair fail; the release still happens."""
+        from geomulticorr.corrections import TopoCorrection
+
+        monkeypatch.setattr(
+            session_mod, "_release_memory", lambda: calls.append("release")
+        )
+        calls: list = []
+        stub, pair, _ = TestApplyCorrectionsMovingGround._setup(tmp_path, False)
+        results = Session.apply_pairs_corrections(
+            stub,
+            TopoCorrection(),
+            save_plot=False,
+            print_summary=False,
+            sync_geodb=False,
+            overwrite=True,
+            moving_areas=None,
+        )
+        assert results["k"] is None
+        assert calls == ["release"]
+
+    def test_no_raster_outlives_the_pair(self, tmp_path, monkeypatch):
+        """After a pair is done nothing keeps its rasters alive (no stray reference)."""
+        import gc
+
+        import geoutils as gu
+
+        alive_after = []
+
+        def check():
+            gc.collect()
+            alive_after.append(sum(isinstance(o, gu.Raster) for o in gc.get_objects()))
+
+        monkeypatch.setattr(session_mod, "_release_memory", check)
+        gc.collect()
+        before = sum(isinstance(o, gu.Raster) for o in gc.get_objects())
+        TestApplyCorrectionsMovingGround._run(tmp_path, monkeypatch)
+        assert alive_after == [before]
+
+    def test_save_and_close_releases_the_figure_even_if_the_write_fails(self, tmp_path):
+        import matplotlib.pyplot as plt
+
+        mine, other = plt.figure(), plt.figure()
+        mine.add_subplot().plot([0, 1])
+        with pytest.raises(Exception):
+            session_mod._save_and_close(mine, tmp_path / "missing" / "f.jpg", 50)
+        assert mine.axes == []  # cleared: its arrays are released
+        assert mine.number not in plt.get_fignums()
+        assert other.number in plt.get_fignums()  # the user's figures stay open
+        plt.close(other)
+
+    def test_release_memory_runs(self):
+        session_mod._release_memory()  # gc + malloc_trim, never raises

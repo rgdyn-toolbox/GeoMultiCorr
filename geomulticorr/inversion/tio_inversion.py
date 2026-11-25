@@ -57,6 +57,7 @@ import rasterio
 import geoutils as gu
 
 from geomulticorr.core.console import BatchProgress, print_tio_export_summary
+from geomulticorr.corrections.masks import as_pipeline
 from geomulticorr.stats import load_pair_stats
 from geomulticorr._logging import logger
 from geomulticorr._profiling import profile as gmc_profile
@@ -689,9 +690,12 @@ class TIOInversion:
         Outputs are stored in ``{pzone_path}/inversion_{inversion_name}``.
         Defaults to ``"inversion"`` if not provided.
     filter_pipeline:
-        Optional FilterPipeline (CCFilter, OutlierFilter, SlopeMask, …) applied
-        to each pair's pre-corrected displacements before binary export.
-        When None, all pixels are kept.
+        Optional FilterPipeline (or a single mask) applied to each pair's
+        pre-corrected displacements before binary export. Only its ``quality``
+        masks (CCFilter, OutlierFilter, SnowMask, …) remove pixels: ``fit``
+        masks (StableAreaMask, SlopeMask) restrict where corrections are
+        fitted, so they never delete the moving ground the inversion exists to
+        measure. When None, all pixels are kept.
     tio_binaries_dir:
         Path to compiled TIO inversion binaries (invers_pixel_omp, lect_depl_cumule_lin).
         Defaults to ``/home/cusicand/TIO_install``.
@@ -1010,7 +1014,9 @@ class TIOInversion:
         when they exist; falls back to raw ASP outputs (``pa_ew_path``,
         ``pa_ns_path``) otherwise. When ``self.filter_pipeline`` is set,
         the pipeline is applied with the correlation-coefficient map if
-        available (``pa_cc_path``).
+        available (``pa_cc_path``). Only the pipeline's ``quality`` masks are
+        applied (:meth:`FilterPipeline.apply_quality`); ``fit`` masks such as
+        ``StableAreaMask`` do not remove pixels here.
 
         :param pair: A GMC Pair object providing raster paths and optional
             correlation-coefficient map.
@@ -1029,13 +1035,14 @@ class TIOInversion:
         xDisp = gu.Raster(str(ew_src))
         yDisp = gu.Raster(str(ns_src))
 
-        if self.filter_pipeline is None:
+        filter_pipeline = as_pipeline(self.filter_pipeline)
+        if filter_pipeline is None:
             return xDisp, yDisp
 
         fp_kwargs = {}
         if pair.pa_cc_path.exists():
             fp_kwargs["cc"] = gu.Raster(str(pair.pa_cc_path))
-        return self.filter_pipeline.apply(xDisp, yDisp, **fp_kwargs)
+        return filter_pipeline.apply_quality(xDisp, yDisp, **fp_kwargs)
 
     def _save_corrected(self, pair, xDisp, yDisp) -> tuple[Path, Path]:
         """Save filtered displacement rasters to the ``corrected/`` subfolder.

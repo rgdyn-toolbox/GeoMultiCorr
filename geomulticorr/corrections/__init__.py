@@ -30,6 +30,8 @@ from geomulticorr.corrections.corrections import (
 from geomulticorr.corrections.masks import (
     BaseMask,
     FilterPipeline,
+    as_pipeline,
+    mask_raster,
     OutlierFilter,
     CCFilter,
     StableAreaMask,
@@ -53,6 +55,8 @@ __all__ = [
     "make_corrections",
     "BaseMask",
     "FilterPipeline",
+    "as_pipeline",
+    "mask_raster",
     "OutlierFilter",
     "CCFilter",
     "StableAreaMask",

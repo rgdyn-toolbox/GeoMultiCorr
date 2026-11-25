@@ -37,6 +37,8 @@ from geomulticorr.stats.stats import (
     save_raw_corr_stats,
     save_corrected_stats,
     save_final_corrected_stats,
+    save_stable_stats,
+    compute_stable_stats,
     save_pair_weight,
 )
 from geomulticorr.stats.inversion_extractor import InversionExtractor

@@ -186,15 +186,39 @@ def print_apply_corrections_summary(rows, *, print_summary=True) -> Table:
     table.add_column("Stats", justify="center")
     table.add_column("EW corr", justify="center")
     table.add_column("NS corr", justify="center")
+    # NMAD on stable ground, raw → corrected (absent for older callers)
+    with_nmad = any("nmad_ew" in rec for rec in rows)
+    if with_nmad:
+        table.add_column("NMAD EW (stable)", justify="center")
+        table.add_column("NMAD NS (stable)", justify="center")
     for rec in rows:
-        table.add_row(
+        cells = [
             rec["pair"],
             rec["median"],
             rec["ramp_topo"],
             rec["stats"],
             rec["ew_corr"],
             rec["ns_corr"],
-        )
+        ]
+        if with_nmad:
+            cells += [rec.get("nmad_ew", "—"), rec.get("nmad_ns", "—")]
+        table.add_row(*cells)
+    if print_summary:
+        _rich_console.print(table)
+    return table
+
+
+def print_derived_rasters_summary(rows, products, *, print_summary=True) -> Table:
+    """Summary for ``Session.write_derived_rasters``.
+
+    ``rows`` is a list of dicts: ``{"pair": key, <product>: status, ...}``.
+    """
+    table = Table(title="write_derived_rasters — summary", show_lines=False)
+    table.add_column("Pair", style="cyan", no_wrap=True)
+    for product in products:
+        table.add_column(product, justify="center")
+    for rec in rows:
+        table.add_row(rec["pair"], *(rec.get(p, "—") for p in products))
     if print_summary:
         _rich_console.print(table)
     return table

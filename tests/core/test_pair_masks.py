@@ -44,8 +44,8 @@ def _make_pair(tmp_path):
     pair = Pair.__new__(Pair)
     pair.pa_key = "TestPz_2024-01-01_planetscope__2024-01-15_planetscope"
     pair.pa_path = tmp_path
-    pair.pa_ew_mask_path = tmp_path / f"{pair.pa_key}-F_EWmask.tif"
-    pair.pa_ns_mask_path = tmp_path / f"{pair.pa_key}-F_NSmask.tif"
+    pair.pa_ew_mask_path = tmp_path / f"{pair.pa_key}-F_EW_stable.tif"
+    pair.pa_ns_mask_path = tmp_path / f"{pair.pa_key}-F_NS_stable.tif"
     return pair
 
 
@@ -54,8 +54,8 @@ class TestMaskPathNaming:
 
     def test_mask_path_names(self, tmp_path):
         pair = _make_pair(tmp_path)
-        assert pair.pa_ew_mask_path.name.endswith("-F_EWmask.tif")
-        assert pair.pa_ns_mask_path.name.endswith("-F_NSmask.tif")
+        assert pair.pa_ew_mask_path.name.endswith("-F_EW_stable.tif")
+        assert pair.pa_ns_mask_path.name.endswith("-F_NS_stable.tif")
         assert pair.pa_ew_mask_path.parent == pair.pa_path
 
 
@@ -185,3 +185,12 @@ class TestSaveCorrectionMasks:
 
         with rasterio.open(pair.pa_ew_mask_path) as ds:
             assert np.array_equal(ds.read(1).astype(bool), ~first)
+
+
+def test_old_mask_names_are_not_written(tmp_path):
+    pair = _make_pair(tmp_path)
+    pair.save_correction_masks(_blobby_mask(), _blobby_mask(), _reference_raster())
+    assert sorted(p.name for p in tmp_path.glob("*.tif")) == [
+        f"{pair.pa_key}-F_EW_stable.tif",
+        f"{pair.pa_key}-F_NS_stable.tif",
+    ]

@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.9.1] — 2026-11-25
+
+### Changed
+- **`apply_pairs_corrections`: corrections are fitted on stable ground only, and moving ground
+  stays in the output. The corrected maps change.** Every mask now has a role. `quality` masks
+  (`CCFilter`, `OutlierFilter`, `SnowMask`, `CloudMask`, `ShadowMask`) remove a pixel from the
+  fit and from the output. `fit` masks (`StableAreaMask`, `SlopeMask`) remove it from the fit
+  only, so a `StableAreaMask` no longer erases the moving ground and `SlopeMask` no longer blanks
+  steep pixels. Re-run with `overwrite=True` to refresh existing projects.
+  - New `moving_areas="auto"` argument (also `CorrectConfig.moving_areas` in the CLI): when
+    no `StableAreaMask` is given, the pzone's stored moving areas are added to the fit side.
+    `None` restores the old behaviour.
+  - `TIOInversion(filter_pipeline=...)` applies the `quality` masks only.
+  - New API: `FilterPipeline.compute_split`, `apply_quality`, `as_pipeline`, `mask_raster`.
+- **The per-pair fit masks are now `<pa_key>-F_EW_stable.tif` / `<pa_key>-F_NS_stable.tif`**
+  (same 1-bit content as the former `-F_EWmask.tif` / `-F_NSmask.tif`, which were quality-only
+  before the change above). The old files are no longer read or written. `pair.pa_ew_mask_path`
+  / `pair.pa_ns_mask_path` keep their names. With `overwrite=False`, a pair that only has the
+  old files is corrected again.
+
+### Added
+- **`Session.write_derived_rasters(criterias, image_type, products, overwrite)`** writes, on demand,
+  float32 rasters (nodata `-9999`) next to the corrected maps: `-F_MAG_corr.tif` (magnitude, m),
+  `-F_VEL_corr.tif` (m/yr), `-F_EW_VEL_corr.tif` and `-F_NS_VEL_corr.tif` (components, m/yr).
+  Backed by `Pair.write_derived` and `pair.derived_path()`; the formulas are shared with
+  `Pair.get_interesting_geoim`. CLI: `correct: {derived: [...]}`.
+- **`InversionExtractor.extract`** accepts a `GeoDataFrame` (or `geoutils.Vector`) as well as a path,
+  `keep_attributes=True` (the input's columns are carried into the long and wide results) and
+  `stats=(...)` to choose the statistic columns.
+- **Stable-ground statistics.** New stats sections `raw_corr_stats_stable`,
+  `correction_stats_stable` and `final_corrected_stats_stable` (NMAD and the rest, on the fit
+  pixels only), the Pairs columns `pa_{ew,ns}_nmad_stable_{raw,corr}` (`STABLE_STATS_SYNC`), and
+  a stable-NMAD column pair in the console summary. The existing sections still cover every
+  valid pixel.
+
+### Fixed
+- **`InversionExtractor.extract` returned the buffer, not the point.** A point layer used with
+  `buffer_m` came back with buffer polygons as geometry; the result now carries the input
+  geometries (the buffer only measures), and the input attributes are no longer dropped.
+  `gpkg_path=` still works but is deprecated in favour of `source`.
+- `apply_pairs_corrections(filter_pipeline=<single mask>)` failed silently on every pair.
+- **`apply_pairs_corrections` memory.** Each pair is processed in its own function, so its
+  rasters, masks and fitted surfaces are released when it ends instead of when the next pair
+  overwrites them. The loop also runs `gc.collect()` and returns freed heap to the OS after
+  every pair (`malloc_trim` on Linux), and each control figure is cleared and closed even when
+  saving fails. Measured on 4 Mpx synthetic pairs, the RSS after the run drops from 990 MB to
+  449 MB without plots, and a GUI matplotlib backend (Qt) grows by ~35 MB per pair instead of ~270 MB.
+  The corrected rasters are bit-identical.
+
 ## [0.9.0] — 2026-11-20
 
 ### Added

@@ -47,6 +47,8 @@ Pair-level API
     save_raw_corr_stats(pair)
     save_corrected_stats(pair, xDisp_corr, yDisp_corr, correction_name)
     save_final_corrected_stats(pair, last_correction_name)
+    save_stable_stats(pair, section, xDisp, yDisp, stable, name)
+    compute_stable_stats(xDisp, yDisp, stable)
     save_pair_weight(pair, ew, ns, mode, combine, params)
 
 Geodatabase-sync helpers
@@ -523,6 +525,7 @@ def save_corrected_stats(
     yDisp_corr: gu.Raster,
     correction_name: str,
     percentiles: list[int] | None = None,
+    stable: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> dict:
     """Persist corrected displacement statistics under a named key.
 
@@ -543,6 +546,13 @@ def save_corrected_stats(
     :param percentiles: Percentile values to compute.
         Defaults to ``[5, 25, 50, 75, 95]``.
     :type percentiles: list[int] | None
+    :param stable: ``(x_stable, y_stable)`` boolean fit masks (``True`` = stable
+        ground the correction was fitted on). When given, the same statistics are
+        also computed **on those pixels only** and stored under
+        ``"correction_stats_stable"[correction_name]``; otherwise a stale entry
+        for *correction_name* from an earlier run is removed. The
+        ``"correction_stats"`` block keeps its meaning (every valid pixel).
+    :type stable: tuple[np.ndarray, np.ndarray] | None
     :returns: The full updated stats dict (all sections).
     :rtype: dict
 
@@ -565,6 +575,20 @@ def save_corrected_stats(
     }
 
     result = update_pair_stats(pair, "correction_stats", corrected)
+    if stable is not None:
+        save_stable_stats(
+            pair,
+            "correction_stats_stable",
+            xDisp_corr,
+            yDisp_corr,
+            stable,
+            name=correction_name,
+            percentiles=percentiles,
+        )
+    elif correction_name in result.get("correction_stats_stable", {}):
+        stale = dict(result["correction_stats_stable"])
+        del stale[correction_name]
+        result = update_pair_stats(pair, "correction_stats_stable", stale)
     ew_valid = corrected[correction_name]["ew"]["count_valid"]
     ns_valid = corrected[correction_name]["ns"]["count_valid"]
     logger.statistics(
@@ -600,12 +624,78 @@ def save_final_corrected_stats(
     js = load_pair_stats(pair)
     if last_correction_name is not None:
         block = js.get("correction_stats", {}).get(last_correction_name, {})
+        stable_block = js.get("correction_stats_stable", {}).get(last_correction_name)
     else:
         block = last_correction_block(js)
+        stable_block = None
+    # Always rewritten, so a run without stable ground cannot leave the
+    # previous run's numbers behind.
+    update_pair_stats(
+        pair, "final_corrected_stats_stable", copy.deepcopy(stable_block or {})
+    )
     return update_pair_stats(pair, "final_corrected_stats", copy.deepcopy(block))
 
 
 # END def
+
+
+def compute_stable_stats(
+    xDisp: gu.Raster,
+    yDisp: gu.Raster,
+    stable: tuple[np.ndarray, np.ndarray],
+    percentiles: list[int] | None = None,
+) -> dict:
+    """Descriptive statistics of both components on the stable-ground pixels.
+
+    :param xDisp: EW displacement raster.
+    :param yDisp: NS displacement raster.
+    :param stable: ``(x_stable, y_stable)`` boolean fit masks, ``True`` = stable
+        ground. A pixel already masked in the raster stays excluded.
+    :param percentiles: See :func:`_compute_array_stats`.
+    :returns: ``{"ew": {...}, "ns": {...}}``, with the same keys as
+        ``correction_stats``. ``nmad`` is the number that judges a correction:
+        it is not moved by the moving ground.
+    :rtype: dict
+    """
+    out = {}
+    for key, raster, keep in (
+        ("ew", xDisp, stable[0]),
+        ("ns", yDisp, stable[1]),
+    ):
+        data = raster.data
+        masked = np.ma.array(
+            data.data, mask=np.ma.getmaskarray(data) | ~np.asarray(keep, dtype=bool)
+        )
+        out[key] = _compute_array_stats(masked, percentiles)
+    return out
+
+
+def save_stable_stats(
+    pair: Pair,
+    section: str,
+    xDisp: gu.Raster,
+    yDisp: gu.Raster,
+    stable: tuple[np.ndarray, np.ndarray],
+    name: str | None = None,
+    percentiles: list[int] | None = None,
+) -> dict:
+    """Persist stable-ground statistics into a pair stats section.
+
+    :param section: ``"raw_corr_stats_stable"`` (the raw field, written once per
+        correction run; the extraction does not know the masks), or
+        ``"correction_stats_stable"`` (one block per correction step, keyed by
+        *name*).
+    :param name: Step name; required for a per-step section, ignored otherwise.
+    :returns: The full updated stats dict.
+    """
+    block = compute_stable_stats(xDisp, yDisp, stable, percentiles)
+    if name is None:
+        return update_pair_stats(pair, section, block)
+    existing = (
+        load_pair_stats(pair).get(section, {}) if pair.pa_stats_path.exists() else {}
+    )
+    existing[name] = block
+    return update_pair_stats(pair, section, existing)
 
 
 def save_pair_weight(

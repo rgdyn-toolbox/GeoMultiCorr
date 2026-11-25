@@ -247,6 +247,280 @@ def _asp_param_kwargs(effective: Mapping[str, Any]) -> dict:
     return kwargs
 
 
+#: Corrections that fit a trend; the summary table lists them under "Ramp/Topo".
+_RAMP_TOPO_CLASSES = frozenset(
+    {
+        "RampCorrection",
+        "TopoCorrection",
+        "TopoRampCorrection",
+        "SlopeRampCorrection",
+    }
+)
+
+
+def _release_memory() -> None:
+    """Hand back what one pair's processing left behind.
+
+    ``gc.collect()`` frees the reference cycles geoutils rasters and
+    matplotlib figures form; ``malloc_trim`` (glibc only, a no-op elsewhere)
+    returns freed heap pages to the OS, so the process RSS drops instead of
+    staying at its high-water mark across hundreds of pairs.
+    """
+    import gc
+
+    gc.collect()
+    try:
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):  # not glibc (macOS, Windows, musl)
+        pass
+
+
+def _save_and_close(fig, path, dpi: int) -> None:
+    """Write *fig* as a JPEG, then release it, whether or not the write worked.
+
+    ``Figure.clear`` drops the axes and the decimated arrays they hold. A
+    closed figure can stay referenced by a GUI backend (Qt keeps the window
+    object until its event loop runs), and without ``clear`` each one would
+    keep ~10 MB of image data alive for the rest of the session. Only this
+    figure is closed, never ``plt.close("all")``: the user's own figures stay.
+    """
+    import matplotlib.pyplot as plt
+
+    try:
+        fig.savefig(str(path), dpi=dpi, format="JPEG")
+    finally:
+        fig.clear()
+        plt.close(fig)
+
+
+def _correct_one_pair(
+    pair,
+    rec: dict,
+    *,
+    fp,
+    correction_pipeline,
+    kwargs: dict,
+    save_plot: bool,
+    plot_opts: dict,
+    ew_corr,
+    ns_corr,
+) -> dict:
+    """Filter, correct and save one pair; the body of ``apply_pairs_corrections``.
+
+    A function of its own, rather than inline in the loop, so every raster,
+    mask, fitted surface and figure of the pair is released when it returns
+    (or raises). Inline, they all stayed referenced until the next iteration
+    overwrote the names, and the process held two pairs at once.
+
+    Args:
+        pair: The pair to correct.
+        rec: Row of the console summary; filled in place.
+        fp: The pair's effective ``FilterPipeline`` (with the moving-area
+            mask when requested), or None.
+        correction_pipeline: A ``CorrectionPipeline``, a single correction, or None.
+        kwargs: Extra keywords forwarded to the masks and the corrections.
+        save_plot: Write the per-step figures and the dashboard.
+        plot_opts: One entry of :data:`PLOT_LEVELS`.
+        ew_corr, ns_corr: Output paths of the corrected rasters.
+
+    Returns:
+        ``{"ew": Path, "ns": Path}``, plus ``"ew_mask"`` / ``"ns_mask"`` when
+        the fit masks were written.
+
+    Raises:
+        ValueError: A required keyword (e.g. ``dem=``) is missing.
+        Exception: Anything the correction raises; the caller records it.
+    """
+    import copy
+
+    import geoutils as gu
+
+    from geomulticorr.corrections.corrections import CorrectionPipeline
+    from geomulticorr.corrections.masks import mask_raster
+
+    x_raw = gu.Raster(str(pair.pa_ew_path), nodata=0)
+    y_raw = gu.Raster(str(pair.pa_ns_path), nodata=0)
+
+    # Auto-inject cc= from the pair folder if not already provided
+    pair_kwargs = dict(kwargs)
+    if "cc" not in pair_kwargs and pair.pa_cc_path.exists():
+        pair_kwargs["cc"] = gu.Raster(str(pair.pa_cc_path))
+
+    # Validate required kwargs upfront
+    all_steps = []
+    if fp is not None:
+        all_steps += fp.masks
+    if correction_pipeline is not None:
+        cp = correction_pipeline
+        all_steps += cp.steps if isinstance(cp, CorrectionPipeline) else [cp]
+    missing = [
+        f"{type(s).__name__} requires '{k}'"
+        for s in all_steps
+        for k in getattr(s, "_REQUIRED_KWARGS", ())
+        if k not in pair_kwargs
+    ]
+    if missing:
+        raise ValueError(
+            "Missing required kwargs — pass them to apply_pairs_corrections():\n  "
+            + "\n  ".join(missing)
+        )
+
+    # Step 1: filter pipeline → two masks per component, each mask evaluated
+    # once. ``quality`` shapes the output; ``fit`` (quality AND stable ground)
+    # only decides what is fitted.
+    x_stable = y_stable = None
+    if fp is not None:
+        x_quality, x_stable = fp.compute_split(x_raw, **pair_kwargs)
+        y_quality, y_stable = fp.compute_split(y_raw, **pair_kwargs)
+        x_corr = mask_raster(x_raw, x_quality)
+        y_corr = mask_raster(y_raw, y_quality)
+        del x_quality, y_quality
+    else:
+        x_corr, y_corr = x_raw, y_raw
+
+    # Step 2: correction pipeline — fit + apply each step, track names
+    ramp_topo_names: list[str] = []
+    stable = (x_stable, y_stable) if x_stable is not None else None
+    nmad_stable: dict = {}
+    if correction_pipeline is not None and stable is not None:
+        # Raw field on stable ground, once per pair: the extraction does not
+        # know the masks, so it cannot compute this.
+        nmad_stable["raw"] = gmc_stats.save_stable_stats(
+            pair, "raw_corr_stats_stable", x_raw, y_raw, stable
+        )["raw_corr_stats_stable"]
+    del x_raw, y_raw  # the filtered rasters carry the georeferencing from here on
+
+    if correction_pipeline is not None:
+        cp_x = copy.deepcopy(correction_pipeline)
+        cp_y = copy.deepcopy(correction_pipeline)
+        steps_x = cp_x.steps if isinstance(cp_x, CorrectionPipeline) else [cp_x]
+        steps_y = cp_y.steps if isinstance(cp_y, CorrectionPipeline) else [cp_y]
+        last_step_name = type(steps_x[-1]).__name__ if steps_x else None
+        for idx, (step_x, step_y) in enumerate(zip(steps_x, steps_y)):
+            step_name = type(step_x).__name__
+            # only the figure needs the state before the step
+            before_x, before_y = (x_corr, y_corr) if save_plot else (None, None)
+            step_x.fit(x_corr, stable_mask=x_stable, **pair_kwargs)
+            x_corr = step_x.apply(x_corr)
+            step_y.fit(y_corr, stable_mask=y_stable, **pair_kwargs)
+            y_corr = step_y.apply(y_corr)
+            gmc_stats.save_corrected_stats(
+                pair, x_corr, y_corr, step_name, stable=stable
+            )
+
+            # Per-step before/after control figure (correct template per
+            # correction type; both EW/NS steps feed the panels)
+            if save_plot:
+                try:
+                    from geomulticorr.utils.gmc_functions import (
+                        plot_correction_result,
+                    )
+
+                    fig = plot_correction_result(
+                        step_x,
+                        step_y,
+                        before_x,
+                        x_corr,
+                        before_y,
+                        y_corr,
+                        fig_name=pair.pa_key,
+                        preview_px=plot_opts["preview_px"],
+                        **pair_kwargs,
+                    )
+                    plot_path = (
+                        pair.pa_path / f"{pair.pa_key}_{idx:02d}_{step_name}_disp.jpg"
+                    )
+                    _save_and_close(fig, plot_path, plot_opts["dpi"])
+                    del fig
+                except Exception as plot_exc:
+                    logger.warning(
+                        f"Could not save control plot for {step_name}: {plot_exc}"
+                    )
+            # Done with this step's inputs and its full-grid fitted surfaces.
+            before_x = before_y = None
+            step_x._surface = step_y._surface = None
+
+            if step_name == "MedianCentering":
+                rec["median"] = "[green]ok[/green]"
+            elif step_name in _RAMP_TOPO_CLASSES:
+                ramp_topo_names.append(step_name)
+
+        # After all corrections: copy the last step's block into the canonical
+        # 'final_corrected_stats' section.
+        if last_step_name is not None:
+            final = gmc_stats.save_final_corrected_stats(
+                pair, last_correction_name=last_step_name
+            )
+            if stable is not None:
+                nmad_stable["corr"] = final.get("final_corrected_stats_stable", {})
+        del cp_x, cp_y, steps_x, steps_y
+
+    if ramp_topo_names:
+        rec["ramp_topo"] = "[green]" + "+".join(ramp_topo_names) + "[/green]"
+    for comp in ("ew", "ns"):
+        rec[f"nmad_{comp}"] = _nmad_before_after(
+            nmad_stable.get("raw"), nmad_stable.get("corr"), comp
+        )
+    rec["stats"] = (
+        "[green]ok[/green]" if pair.pa_stats_path.exists() else "[red]missing[/red]"
+    )
+
+    # Optional corrected-map dashboard (final state + stable areas)
+    if save_plot:
+        try:
+            from geomulticorr.utils.gmc_functions import plot_show_corrected_results
+
+            fig = plot_show_corrected_results(
+                x_corr,
+                y_corr,
+                pair_kwargs.get("cc"),
+                x_stable=x_stable,
+                y_stable=y_stable,
+                fig_name=pair.pa_key,
+                preview_px=plot_opts["preview_px"],
+                hexbin_gridsize=plot_opts["hexbin_gridsize"],
+            )
+            plot_path = pair.pa_path / f"{pair.pa_key}_corrections_disp.jpg"
+            _save_and_close(fig, plot_path, plot_opts["dpi"])
+            del fig
+        except Exception as plot_exc:
+            logger.warning(f"Could not save corrected dashboard: {plot_exc}")
+
+    x_corr.save(str(ew_corr))
+    y_corr.save(str(ns_corr))
+    rec["ew_corr"] = "[green]ok[/green]" if ew_corr.exists() else "[red]missing[/red]"
+    rec["ns_corr"] = "[green]ok[/green]" if ns_corr.exists() else "[red]missing[/red]"
+    pair_result = {"ew": ew_corr, "ns": ns_corr}
+
+    # Persist the stable-ground masks the corrections were fitted on, as 1-bit
+    # GeoTIFFs alongside the rasters they describe. A failure here must not
+    # lose the corrected output.
+    if x_stable is not None or y_stable is not None:
+        try:
+            masks = pair.save_correction_masks(x_stable, y_stable, reference=x_corr)
+            pair_result.update({f"{k}_mask": v for k, v in masks.items()})
+        except Exception as mask_exc:
+            logger.warning(
+                f"Could not save correction masks for '{pair.pa_key}': {mask_exc}"
+            )
+
+    return pair_result
+
+
+def _nmad_before_after(raw: dict | None, corr: dict | None, comp: str) -> str:
+    """``"0.93 → 0.41"`` for the console table; ``"—"`` without stable ground."""
+
+    def _get(block):
+        value = (block or {}).get(comp, {}).get("nmad")
+        return "?" if value is None or value != value else f"{value:.2f}"  # None or NaN
+
+    if raw is None and corr is None:
+        return "—"
+    return f"{_get(raw)} → {_get(corr)}"
+
+
 RAW_STATS_SYNC: dict[str, tuple[str, str]] = {
     "pa_ew_nmad_raw": ("ew", "nmad"),
     "pa_ns_nmad_raw": ("ns", "nmad"),
@@ -255,6 +529,15 @@ RAW_STATS_SYNC: dict[str, tuple[str, str]] = {
 CORR_STATS_SYNC: dict[str, tuple[str, str]] = {
     "pa_ew_nmad_corr": ("ew", "nmad"),
     "pa_ns_nmad_corr": ("ns", "nmad"),
+}
+#: NMAD on **stable ground only**, before and after the corrections.
+#: ``{column: (section, component, stat)}``: unlike the two tables above these
+#: come from two different sections of the stats JSON, hence the extra field.
+STABLE_STATS_SYNC: dict[str, tuple[str, str, str]] = {
+    "pa_ew_nmad_stable_raw": ("raw_corr_stats_stable", "ew", "nmad"),
+    "pa_ns_nmad_stable_raw": ("raw_corr_stats_stable", "ns", "nmad"),
+    "pa_ew_nmad_stable_corr": ("final_corrected_stats_stable", "ew", "nmad"),
+    "pa_ns_nmad_stable_corr": ("final_corrected_stats_stable", "ns", "nmad"),
 }
 
 
@@ -3238,7 +3521,10 @@ class Session:
         Populates ``pa_ew_nmad_corr``/``pa_ns_nmad_corr`` from the canonical
         ``final_corrected_stats`` section (the fully-corrected field, written by
         :func:`~geomulticorr.stats.stats.save_final_corrected_stats`) plus
-        ``pa_n_corrections``.
+        ``pa_n_corrections``, and the stable-ground NMAD columns
+        (:data:`STABLE_STATS_SYNC`, ``pa_{ew,ns}_nmad_stable_{raw,corr}``): the
+        numbers that say whether a correction helped, since they ignore the
+        moving ground. NaN when the pair had no stable-ground mask.
 
         Args:
             pairs: Pairs to sync. Defaults to ``get_pairs(criterias)``.
@@ -3255,6 +3541,12 @@ class Session:
                 else (lambda js: len(js.get("correction_stats", {})))
             )
         }
+        for col, (section, comp, stat) in STABLE_STATS_SYNC.items():
+            extra_cols[col] = (
+                lambda js, section=section, comp=comp, stat=stat: js.get(section, {})
+                .get(comp, {})
+                .get(stat, float("nan"))
+            )
         return self.sync_pairs_stats(
             CORR_STATS_SYNC,
             "final_corrected_stats",
@@ -8253,6 +8545,7 @@ class Session:
         sync_geodb: bool = True,
         verbose: bool = False,
         image_type: str | None = None,
+        moving_areas: Any = "auto",
         **kwargs,
     ) -> dict:
         """Apply a filter and/or correction pipeline to all processed pairs.
@@ -8260,9 +8553,14 @@ class Session:
         Follows the two-pipeline architecture:
 
         1. **filter_pipeline** (:class:`~geomulticorr.corrections.FilterPipeline`):
-           Masks bad pixels (CC threshold, outlier rejection, slope, …).
-           Also produces per-component stable-area masks used when fitting
-           corrections.
+           Every mask has a *role*. ``quality`` masks (``CCFilter``,
+           ``OutlierFilter``, ``SnowMask``, ``CloudMask``, ``ShadowMask``)
+           remove a pixel from the fit **and** from the corrected output, where
+           it is written as nodata. ``fit`` masks (``StableAreaMask``,
+           ``SlopeMask``) remove a pixel from the **fit only**: moving or steep
+           ground is still corrected and kept in the output. The fit mask is
+           ``quality AND fit`` and is what is written as ``-F_EW_stable.tif`` /
+           ``-F_NS_stable.tif``.
 
         2. **correction_pipeline** (:class:`~geomulticorr.corrections.CorrectionPipeline`):
            Fits and subtracts systematic trends (median shift, ramp, topo, …)
@@ -8281,14 +8579,15 @@ class Session:
                 instance (or any :class:`~geomulticorr.corrections.BaseCorrection`).
                 ``None`` skips the correction step.
             filter_pipeline: A :class:`~geomulticorr.corrections.FilterPipeline`
-                instance (or any :class:`~geomulticorr.corrections.BaseMask`).
-                ``None`` skips filtering (all valid pixels used as stable ground).
+                instance, or a single :class:`~geomulticorr.corrections.BaseMask`.
+                ``None`` skips filtering (all valid pixels, plus the moving-area
+                exclusion below, are used as stable ground).
             criterias: Same filter syntax as :meth:`get_pairs`.
             image_type: Keep only pairs of this image type (``"opt"``, ``"hillshade"``, ``"mdhillshade"``, ``"slope"``, ``"dem"``); ANDed with *criterias*. Prefer it over a criterias string: ``"hillshade"`` is also a substring of ``"mdhillshade"``.
             overwrite: Re-process pairs whose corrected files already exist.
                 Pairs corrected before the stable-ground masks were persisted
                 are re-processed regardless when a *filter_pipeline* is given,
-                so their ``*EWmask``/``*NSmask`` files get written.
+                so their ``*EW_stable``/``*NS_stable`` files get written.
             save_plot: Save a before/after control figure for each pair.
             plot_level: Rendering cost of those figures — ``"light"`` (default)
                 decimates rasters to 1400 px on the long axis, uses a 200-bin
@@ -8299,6 +8598,15 @@ class Session:
                 Statistics written to the pair stats JSON are unaffected by this
                 setting; only the numbers annotated *inside* the figures are
                 computed on the decimated sample.
+            moving_areas: Where the corrections must not be fitted. ``"auto"``
+                (default): when a *correction_pipeline* is given and the pipeline
+                holds no ``StableAreaMask``, add one built from the pzone's stored
+                outlines (:meth:`get_moving_areas`) on the fit side, and log it at
+                info level; if the pzone has none, warn that the corrections are
+                fitted on all ground. Resolved once per pzone, before the pair
+                loop. A path, a :class:`geoutils.Vector` or a GeoDataFrame is used
+                for every pair. ``None`` adds nothing (fit on all ground).
+                An explicit ``StableAreaMask`` in *filter_pipeline* always wins.
             sync_geodb: If ``True`` (default) and a *correction_pipeline* is given,
                 sync last-correction stats (:data:`CORR_STATS_SYNC`) and
                 ``pa_n_corrections`` into the Pairs geodatabase layer for the pairs
@@ -8309,9 +8617,10 @@ class Session:
 
         Returns:
             Dict mapping ``pa_key`` → ``{"ew": Path, "ns": Path}`` or ``None`` if
-            skipped.  When a *filter_pipeline* is given, the per-component
-            stable-ground keep-masks are also written into the pair folder as
-            1-bit GeoTIFFs and reported as ``"ew_mask"`` / ``"ns_mask"``
+            skipped.  When a filter pipeline applies (given, or built from
+            *moving_areas*), the per-component fit masks are also written into
+            the pair folder as 1-bit GeoTIFFs and reported as
+            ``"ew_mask"`` / ``"ns_mask"``
             (see :meth:`~geomulticorr.core.pair.Pair.save_correction_masks`).
 
         Raises:
@@ -8327,11 +8636,10 @@ class Session:
             instead. Warnings and errors surface either way, including the
             misaligned-DEM warning from the topographic corrections.
         """
-        import geoutils as gu
-        import matplotlib.pyplot as plt
         from geomulticorr.corrections.corrections import CorrectionPipeline
-        from geomulticorr.corrections.masks import FilterPipeline
+        from geomulticorr.corrections.masks import FilterPipeline, as_pipeline
 
+        filter_pipeline = as_pipeline(filter_pipeline)
         if correction_pipeline is None and filter_pipeline is None:
             raise ValueError(
                 "Provide at least one of correction_pipeline= or filter_pipeline=."
@@ -8347,14 +8655,22 @@ class Session:
         pairs = self.get_pairs(criterias, image_type=image_type)
         results: dict = {}
 
-        _RAMP_TOPO_CLASSES = {
-            "RampCorrection",
-            "TopoCorrection",
-            "TopoRampCorrection",
-            "SlopeRampCorrection",
-        }
-
         summary_rows: list[dict] = []
+
+        # Per-pzone filter pipeline, with the moving-area mask added when asked
+        # for. Resolved once here, never per pair.
+        pz_pipelines = (
+            self._with_moving_areas(
+                filter_pipeline,
+                moving_areas,
+                sorted({p.pa_pz_name for p in pairs}),
+            )
+            if correction_pipeline is not None and moving_areas is not None
+            else {}
+        )
+        writes_masks = filter_pipeline is not None or any(
+            v is not None for v in pz_pipelines.values()
+        )
 
         # One header for the whole run, in place of per-pair *and* per-step logs.
         filt_steps = (
@@ -8387,7 +8703,7 @@ class Session:
         )
         logger.file(
             "Writing per pair: <pa_key>-F_EW_corr.tif | <pa_key>-F_NS_corr.tif"
-            + (" | -F_EWmask.tif | -F_NSmask.tif" if filt_steps else "")
+            + (" | -F_EW_stable.tif | -F_NS_stable.tif" if writes_masks else "")
         )
         logger.file(
             "Corrected stats appended to <pa_key>.json "
@@ -8421,6 +8737,8 @@ class Session:
                     "stats": "—",
                     "ew_corr": "—",
                     "ns_corr": "—",
+                    "nmad_ew": "—",
+                    "nmad_ns": "—",
                 }
 
                 if not pair.pa_ew_path.exists() or not pair.pa_ns_path.exists():
@@ -8434,7 +8752,10 @@ class Session:
 
                 # A pair corrected before masks were persisted has no mask files;
                 # regenerate it so the stable-ground record catches up.
-                masks_ok = filter_pipeline is None or (
+                fp = pz_pipelines.get(
+                    getattr(pair, "pa_pz_name", None), filter_pipeline
+                )
+                masks_ok = fp is None or (
                     pair.pa_ew_mask_path.exists() and pair.pa_ns_mask_path.exists()
                 )
                 if not overwrite and ew_corr.exists() and ns_corr.exists() and masks_ok:
@@ -8447,201 +8768,25 @@ class Session:
                     continue  # bar.track() advances on continue
 
                 try:
-                    x_raw = gu.Raster(str(pair.pa_ew_path), nodata=0)
-                    y_raw = gu.Raster(str(pair.pa_ns_path), nodata=0)
-
-                    # Auto-inject cc= from the pair folder if not already provided
-                    pair_kwargs = dict(kwargs)
-                    if "cc" not in pair_kwargs and pair.pa_cc_path.exists():
-                        pair_kwargs["cc"] = gu.Raster(str(pair.pa_cc_path))
-
-                    # Validate required kwargs upfront
-                    all_steps = []
-                    if filter_pipeline is not None:
-                        fp = filter_pipeline
-                        all_steps += (
-                            fp.masks if isinstance(fp, FilterPipeline) else [fp]
-                        )
-                    if correction_pipeline is not None:
-                        cp = correction_pipeline
-                        all_steps += (
-                            cp.steps if isinstance(cp, CorrectionPipeline) else [cp]
-                        )
-                    missing = [
-                        f"{type(s).__name__} requires '{k}'"
-                        for s in all_steps
-                        for k in getattr(s, "_REQUIRED_KWARGS", ())
-                        if k not in pair_kwargs
-                    ]
-                    if missing:
-                        raise ValueError(
-                            "Missing required kwargs — pass them to apply_pairs_corrections():\n  "
-                            + "\n  ".join(missing)
-                        )
-
-                    # Step 1: filter pipeline → masked rasters + stable-area masks
-                    x_stable = y_stable = None
-                    if filter_pipeline is not None:
-                        x_stable = filter_pipeline.compute(x_raw, **pair_kwargs)
-                        y_stable = filter_pipeline.compute(y_raw, **pair_kwargs)
-                        x_filt, y_filt = filter_pipeline.apply(
-                            x_raw, y_raw, **pair_kwargs
-                        )
-                    else:
-                        x_filt, y_filt = x_raw, y_raw
-
-                    # Step 2: correction pipeline — fit + apply each step, track names
-                    import copy
-                    import geomulticorr.stats.stats as gmc_stats
-
-                    x_corr, y_corr = x_filt, y_filt
-                    ramp_topo_names: list[str] = []
-                    if correction_pipeline is not None:
-                        cp_x = copy.deepcopy(correction_pipeline)
-                        cp_y = copy.deepcopy(correction_pipeline)
-                        steps_x = (
-                            cp_x.steps
-                            if isinstance(cp_x, CorrectionPipeline)
-                            else [cp_x]
-                        )
-                        steps_y = (
-                            cp_y.steps
-                            if isinstance(cp_y, CorrectionPipeline)
-                            else [cp_y]
-                        )
-                        for idx, (step_x, step_y) in enumerate(zip(steps_x, steps_y)):
-                            step_name = type(step_x).__name__
-                            before_x, before_y = x_corr, y_corr
-                            step_x.fit(x_corr, stable_mask=x_stable, **pair_kwargs)
-                            x_corr = step_x.apply(x_corr)
-                            step_y.fit(y_corr, stable_mask=y_stable, **pair_kwargs)
-                            y_corr = step_y.apply(y_corr)
-                            gmc_stats.save_corrected_stats(
-                                pair, x_corr, y_corr, step_name
-                            )
-
-                            # Per-step before/after control figure (correct template
-                            # per correction type; both EW/NS steps feed the panels)
-                            if save_plot:
-                                try:
-                                    from geomulticorr.utils.gmc_functions import (
-                                        plot_correction_result,
-                                    )
-
-                                    fig = plot_correction_result(
-                                        step_x,
-                                        step_y,
-                                        before_x,
-                                        x_corr,
-                                        before_y,
-                                        y_corr,
-                                        fig_name=pair.pa_key,
-                                        preview_px=plot_opts["preview_px"],
-                                        **pair_kwargs,
-                                    )
-                                    plot_path = (
-                                        pair.pa_path
-                                        / f"{pair.pa_key}_{idx:02d}_{step_name}_disp.jpg"
-                                    )
-                                    fig.savefig(
-                                        str(plot_path),
-                                        dpi=plot_opts["dpi"],
-                                        format="JPEG",
-                                    )
-                                    plt.close(fig)
-                                except Exception as plot_exc:
-                                    logger.warning(
-                                        f"Could not save control plot for {step_name}: {plot_exc}"
-                                    )
-
-                            if step_name == "MedianCentering":
-                                rec["median"] = "[green]ok[/green]"
-                            elif step_name in _RAMP_TOPO_CLASSES:
-                                ramp_topo_names.append(step_name)
-
-                        # After all corrections: copy the last step's block into
-                        # the canonical 'final_corrected_stats' section.
-                        if steps_x:
-                            gmc_stats.save_final_corrected_stats(
-                                pair, last_correction_name=type(steps_x[-1]).__name__
-                            )
-
-                    if ramp_topo_names:
-                        rec["ramp_topo"] = (
-                            "[green]" + "+".join(ramp_topo_names) + "[/green]"
-                        )
-                    rec["stats"] = (
-                        "[green]ok[/green]"
-                        if pair.pa_stats_path.exists()
-                        else "[red]missing[/red]"
+                    results[pair.pa_key] = _correct_one_pair(
+                        pair,
+                        rec,
+                        fp=fp,
+                        correction_pipeline=correction_pipeline,
+                        kwargs=kwargs,
+                        save_plot=save_plot,
+                        plot_opts=plot_opts,
+                        ew_corr=ew_corr,
+                        ns_corr=ns_corr,
                     )
-
-                    # Optional corrected-map dashboard (final state + stable areas)
-                    if save_plot:
-                        try:
-                            from geomulticorr.utils.gmc_functions import (
-                                plot_show_corrected_results,
-                            )
-
-                            fig = plot_show_corrected_results(
-                                x_corr,
-                                y_corr,
-                                pair_kwargs.get("cc"),
-                                x_stable=x_stable,
-                                y_stable=y_stable,
-                                fig_name=pair.pa_key,
-                                preview_px=plot_opts["preview_px"],
-                                hexbin_gridsize=plot_opts["hexbin_gridsize"],
-                            )
-                            plot_path = (
-                                pair.pa_path / f"{pair.pa_key}_corrections_disp.jpg"
-                            )
-                            fig.savefig(
-                                str(plot_path), dpi=plot_opts["dpi"], format="JPEG"
-                            )
-                            plt.close(fig)
-                        except Exception as plot_exc:
-                            logger.warning(
-                                f"Could not save corrected dashboard: {plot_exc}"
-                            )
-
-                    x_corr.save(str(ew_corr))
-                    y_corr.save(str(ns_corr))
-                    rec["ew_corr"] = (
-                        "[green]ok[/green]"
-                        if ew_corr.exists()
-                        else "[red]missing[/red]"
-                    )
-                    rec["ns_corr"] = (
-                        "[green]ok[/green]"
-                        if ns_corr.exists()
-                        else "[red]missing[/red]"
-                    )
-                    pair_result = {"ew": ew_corr, "ns": ns_corr}
-
-                    # Persist the stable-ground masks the corrections were fitted
-                    # on, as 1-bit GeoTIFFs alongside the rasters they describe.
-                    # A failure here must not lose the corrected output.
-                    if x_stable is not None or y_stable is not None:
-                        try:
-                            masks = pair.save_correction_masks(
-                                x_stable, y_stable, reference=x_raw
-                            )
-                            pair_result.update(
-                                {f"{k}_mask": v for k, v in masks.items()}
-                            )
-                        except Exception as mask_exc:
-                            logger.warning(
-                                f"Could not save correction masks for "
-                                f"'{pair.pa_key}': {mask_exc}"
-                            )
-
-                    results[pair.pa_key] = pair_result
-
                 except Exception as exc:
                     logger.error(f"Failed for '{pair.pa_key}': {exc}")
                     rec["ew_corr"] = rec["ns_corr"] = "[red]error[/red]"
                     results[pair.pa_key] = None
+                finally:
+                    # Whatever happened, give this pair's memory back before
+                    # the next one starts.
+                    _release_memory()
 
                 summary_rows.append(rec)
 
@@ -8661,6 +8806,142 @@ class Session:
                 )
 
         return results
+
+    def write_derived_rasters(
+        self,
+        criterias: str | list[str] = "",
+        image_type: str | None = None,
+        products: str | Sequence[str] = ("magnitude", "velocity"),
+        overwrite: bool = False,
+        print_summary: bool = True,
+        verbose: bool = False,
+    ) -> dict:
+        """Write magnitude and velocity rasters for the corrected pairs, on demand.
+
+        Reads each pair's ``-F_EW_corr.tif`` and ``-F_NS_corr.tif`` and writes,
+        next to them, float32 GeoTIFFs with nodata ``-9999``:
+
+        ===============  =========================  ==============================
+        product          file                       content
+        ===============  =========================  ==============================
+        ``magnitude``    ``-F_MAG_corr.tif``        sqrt(EW² + NS²), metres
+        ``velocity``     ``-F_VEL_corr.tif``        magnitude / Δt, metres per year
+        ``ew_velocity``  ``-F_EW_VEL_corr.tif``     EW / Δt, metres per year
+        ``ns_velocity``  ``-F_NS_VEL_corr.tif``     NS / Δt, metres per year
+        ===============  =========================  ==============================
+
+        Nothing is recomputed from the correlation, and the files are cheap, so
+        they are written on demand rather than by :meth:`apply_pairs_corrections`.
+        The fit masks (``-F_EW_stable.tif`` / ``-F_NS_stable.tif``) are not an
+        input: moving ground is in these rasters as in the corrected maps.
+
+        Args:
+            criterias: Same filter syntax as :meth:`get_pairs`.
+            image_type: Keep only pairs of this image type.
+            products: A product name or a sequence of them (see the table).
+            overwrite: Rewrite files that already exist. Otherwise a product that
+                exists is left alone, product by product.
+            print_summary: Print the per-pair table.
+            verbose: Keep the per-pair progress lines.
+
+        Returns:
+            Dict ``pa_key`` → ``{product: Path}`` of the files written by this call
+            (empty when everything already existed), or ``None`` for a pair that
+            has no corrected maps or failed.
+
+        Raises:
+            ValueError: *products* holds an unknown name.
+        """
+        from geomulticorr.core.console import print_derived_rasters_summary
+        from geomulticorr.utils._derived import check_products
+
+        names = check_products(products)
+        pairs = self.get_pairs(criterias, image_type=image_type)
+        results: dict = {}
+        rows: list[dict] = []
+
+        logger.info(
+            f"Writing derived rasters ({', '.join(names)}) — {len(pairs)} pair(s)"
+        )
+        with BatchProgress(
+            len(pairs), description="write_derived_rasters", verbose=verbose
+        ) as bar:
+            for pair in bar.track(pairs, key=lambda p: p.pa_key):
+                rec = {"pair": pair.pa_key}
+                if not (
+                    pair.pa_ew_corr_path.exists() and pair.pa_ns_corr_path.exists()
+                ):
+                    rec.update({p: "[red]no corrected maps[/red]" for p in names})
+                    results[pair.pa_key] = None
+                    rows.append(rec)
+                    continue
+                try:
+                    written = pair.write_derived(names, overwrite=overwrite)
+                    for product in names:
+                        rec[product] = (
+                            "[green]written[/green]"
+                            if product in written
+                            else "[dim]exists[/dim]"
+                        )
+                    results[pair.pa_key] = written
+                except Exception as exc:
+                    logger.error(f"Derived rasters failed for '{pair.pa_key}': {exc}")
+                    rec.update({p: "[red]error[/red]" for p in names})
+                    results[pair.pa_key] = None
+                finally:
+                    _release_memory()
+                rows.append(rec)
+
+        print_derived_rasters_summary(rows, names, print_summary=print_summary)
+        return results
+
+    def _with_moving_areas(self, filter_pipeline, moving_areas, pz_names) -> dict:
+        """Per-pzone filter pipeline with the moving-area mask on the fit side.
+
+        See the *moving_areas* argument of :meth:`apply_pairs_corrections`.
+        An explicit ``StableAreaMask`` in *filter_pipeline* is never duplicated.
+
+        Args:
+            filter_pipeline: A ``FilterPipeline`` or None.
+            moving_areas: ``"auto"``, a path, a ``gu.Vector`` or a GeoDataFrame.
+            pz_names: Pzones present in the pairs to correct.
+
+        Returns:
+            Dict ``pz_name`` → ``FilterPipeline`` (or None when nothing applies).
+        """
+        from geomulticorr.corrections.masks import FilterPipeline, StableAreaMask
+
+        explicit = filter_pipeline is not None and any(
+            isinstance(m, StableAreaMask) for m in filter_pipeline.masks
+        )
+        out: dict = {}
+        for pz in pz_names:
+            if explicit:
+                out[pz] = filter_pipeline
+                continue
+            if isinstance(moving_areas, str) and moving_areas == "auto":
+                if not self.moving_areas_path(pz).exists():
+                    logger.warning(
+                        f"No moving areas loaded for '{pz}': the corrections are "
+                        f"fitted on all ground, moving areas included. Load them with "
+                        f"session.load_moving_areas({pz!r}, <source>), or pass "
+                        f"moving_areas=None to silence this."
+                    )
+                    out[pz] = filter_pipeline
+                    continue
+                areas = self.get_moving_areas(pz)
+                source = self.moving_areas_path(pz).name
+            elif isinstance(moving_areas, (str, pathlib.Path)):
+                areas, source = gu.Vector(str(moving_areas)), str(moving_areas)
+            else:
+                areas, source = moving_areas, "custom"
+            base = [] if filter_pipeline is None else filter_pipeline.masks
+            out[pz] = FilterPipeline(base + [StableAreaMask(areas)])
+            logger.info(
+                f"'{pz}': corrections are fitted outside the moving areas "
+                f"({source}); moving ground stays in the output"
+            )
+        return out
 
     def _search_engine(
         self, layername: str, criterias: str | list[str] = ""
