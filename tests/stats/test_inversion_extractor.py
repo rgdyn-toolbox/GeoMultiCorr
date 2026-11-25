@@ -282,3 +282,210 @@ class TestHelpers:
 
     def test_raster_crs(self, real_extractor):
         assert real_extractor._raster_crs().to_string() == DEFAULT_CRS
+
+
+# ── points keep their geometry and their attributes (task #26) ────────────────
+
+
+class TestOriginalGeometry:
+    @pytest.mark.parametrize("buffer_m", [None, 4.0, 30.0])
+    def test_points_stay_points_whatever_the_buffer(
+        self, real_extractor, tmp_path, buffer_m
+    ):
+        pts = [_center(1, 2), _center(2, 2)]
+        out = real_extractor.extract(
+            _write_gpkg(tmp_path, pts, point_id=["a", "b"]),
+            buffer_m=buffer_m,
+            components=["EW"],
+        )
+        assert set(out.geometry.geom_type) == {"Point"}
+        by_id = out.drop_duplicates("point_id").set_index("point_id").geometry
+        assert by_id["a"].equals(pts[0]) and by_id["b"].equals(pts[1])
+
+    def test_buffer_still_measures_over_the_buffer(self, real_extractor, tmp_path):
+        gpkg = _write_gpkg(tmp_path, [_center(2, 2)])
+        sampled = real_extractor.extract(gpkg, components=["EW"])
+        zonal = real_extractor.extract(gpkg, buffer_m=7.0, components=["EW"])
+        assert (sampled["count"] == 1).all() and (zonal["count"] > 1).all()
+
+    def test_polygons_are_unchanged(self, real_extractor, tmp_path):
+        poly = box(_X0, _Y0 - 6, _X0 + 6, _Y0)
+        out = real_extractor.extract(_write_gpkg(tmp_path, [poly]), components=["EW"])
+        assert set(out.geometry.geom_type) == {"Polygon"}
+        assert out.geometry.iloc[0].equals(poly)
+
+
+class TestAttributes:
+    @staticmethod
+    def _gpkg(tmp_path, **extra):
+        return _write_gpkg(
+            tmp_path,
+            [_center(1, 2), _center(0, 0)],
+            point_id=["a", "b"],
+            name=["north", "south"],
+            depth_m=[1.5, 2.5],
+            **extra,
+        )
+
+    def test_long_format_carries_the_input_columns(self, real_extractor, tmp_path):
+        out = real_extractor.extract(self._gpkg(tmp_path), components=["EW"])
+        assert {"name", "depth_m"} <= set(out.columns)
+        a = out[out["point_id"] == "a"]
+        assert (a["name"] == "north").all() and (a["depth_m"] == 1.5).all()
+        assert len(out) == 4  # 2 points x 2 dates
+        assert out.columns[-1] == "geometry"
+
+    def test_keep_attributes_false(self, real_extractor, tmp_path):
+        out = real_extractor.extract(
+            self._gpkg(tmp_path), components=["EW"], keep_attributes=False
+        )
+        assert "name" not in out.columns and "depth_m" not in out.columns
+
+    def test_wide_is_the_attribute_table_plus_one_column_per_date(
+        self, real_extractor, tmp_path
+    ):
+        wide = real_extractor.extract(
+            self._gpkg(tmp_path), output_format="wide", stats=("mean",)
+        )
+        assert len(wide) == 2
+        cols = list(wide.columns)
+        assert cols[0] == "point_id" and cols[-1] == "geometry"
+        assert cols.index("name") < cols.index("EW_2021-09-01_mean")
+        row = wide[wide["point_id"] == "a"].iloc[0]
+        assert row["name"] == "north" and row["EW_2021-09-01_mean"] == 12.0
+        assert set(wide.geometry.geom_type) == {"Point"}
+
+    def test_colliding_names_are_kept_as_src(self, real_extractor, tmp_path):
+        gpkg = _write_gpkg(
+            tmp_path,
+            [_center(1, 2)],
+            point_id=["a"],
+            mean=[999.0],
+            date=["old"],
+            component=["x"],
+        )
+        out = real_extractor.extract(gpkg, components=["EW"])
+        assert (out["mean"] == 12.0).all()  # the extraction wins
+        assert (out["src_mean"] == 999.0).all() and (out["src_date"] == "old").all()
+        assert (out["component"] == "EW").all() and (out["src_component"] == "x").all()
+
+    def test_wide_result_round_trips_through_a_gpkg(self, real_extractor, tmp_path):
+        wide = real_extractor.extract(self._gpkg(tmp_path), output_format="wide")
+        target = tmp_path / "series.gpkg"
+        wide.to_file(target, layer="series", driver="GPKG")
+        back = gpd.read_file(target, layer="series")
+        assert len(back) == 2 and set(back.geometry.geom_type) == {"Point"}
+        assert back.set_index("point_id").loc["a", "EW_2021-09-01_mean"] == 12.0
+        assert back.crs == wide.crs
+
+    def test_duplicate_ids_warn(self, real_extractor, tmp_path, caplog_gmc):
+        gpkg = _write_gpkg(
+            tmp_path, [_center(1, 2), _center(0, 0)], point_id=["a", "a"]
+        )
+        real_extractor.extract(gpkg, components=["EW"])
+        assert "not unique" in caplog_gmc.text
+
+
+class TestSourceArgument:
+    def test_geodataframe_in_memory(self, real_extractor, tmp_path):
+        gdf = gpd.GeoDataFrame(
+            {"point_id": ["a"], "tag": ["t"]}, geometry=[_center(1, 2)], crs=DEFAULT_CRS
+        )
+        out = real_extractor.extract(gdf, components=["EW"])
+        assert (out["mean"] == 12.0).all() and (out["tag"] == "t").all()
+        assert list(gdf.columns) == ["point_id", "tag", "geometry"]  # input untouched
+
+    def test_geodataframe_in_another_crs_is_reprojected(self, real_extractor):
+        gdf = gpd.GeoDataFrame(geometry=[_center(1, 2)], crs=DEFAULT_CRS).to_crs(
+            "EPSG:4326"
+        )
+        out = real_extractor.extract(gdf, components=["EW"])
+        assert (out["mean"] == 12.0).all()
+        assert out.crs == real_extractor._raster_crs()
+
+    def test_geoutils_vector(self, real_extractor):
+        import geoutils as gu
+
+        vec = gu.Vector(gpd.GeoDataFrame(geometry=[_center(1, 2)], crs=DEFAULT_CRS))
+        assert (real_extractor.extract(vec, components=["EW"])["mean"] == 12.0).all()
+
+    def test_gpkg_path_is_a_deprecated_alias(self, real_extractor, tmp_path):
+        gpkg = _write_gpkg(tmp_path, [_center(1, 2)])
+        with pytest.warns(DeprecationWarning, match="gpkg_path"):
+            old = real_extractor.extract(gpkg_path=gpkg, components=["EW"])
+        new = real_extractor.extract(gpkg, components=["EW"])
+        assert old.drop(columns="geometry").equals(new.drop(columns="geometry"))
+
+    def test_both_or_neither_source(self, real_extractor, tmp_path):
+        gpkg = _write_gpkg(tmp_path, [_center(1, 2)])
+        with pytest.raises(TypeError, match="not both"):
+            real_extractor.extract(gpkg, gpkg_path=gpkg)
+        with pytest.raises(TypeError, match="source"):
+            real_extractor.extract()
+
+    def test_unsupported_source_type(self, real_extractor):
+        with pytest.raises(TypeError, match="path or a GeoDataFrame"):
+            real_extractor.extract(42)
+
+    def test_layer_selects_within_a_file(self, real_extractor, tmp_path):
+        path = tmp_path / "two.gpkg"
+        gpd.GeoDataFrame(geometry=[_center(1, 2)], crs=DEFAULT_CRS).to_file(
+            path, layer="one", driver="GPKG"
+        )
+        gpd.GeoDataFrame(geometry=[_center(0, 0)], crs=DEFAULT_CRS).to_file(
+            path, layer="two", driver="GPKG"
+        )
+        out = real_extractor.extract(path, layer="two", components=["EW"])
+        assert (out["mean"] == 0.0).all()
+
+
+class TestStatsSelection:
+    def test_only_the_requested_columns(self, real_extractor, tmp_path):
+        gpkg = _write_gpkg(tmp_path, [_center(2, 2)])
+        out = real_extractor.extract(
+            gpkg, buffer_m=4.0, components=["EW"], stats=("mean", "count")
+        )
+        assert {"mean", "count"} <= set(out.columns)
+        assert not ({"median", "min", "max", "std"} & set(out.columns))
+
+    def test_point_sampling_honours_stats(self, real_extractor, tmp_path):
+        out = real_extractor.extract(
+            _write_gpkg(tmp_path, [_center(1, 2)]), components=["EW"], stats="median"
+        )
+        assert (out["median"] == 12.0).all() and "mean" not in out.columns
+
+    def test_wide_only_has_the_requested_stats(self, real_extractor, tmp_path):
+        wide = real_extractor.extract(
+            _write_gpkg(tmp_path, [_center(1, 2)]),
+            output_format="wide",
+            stats=["mean"],
+        )
+        value_cols = [c for c in wide.columns if c.startswith(("EW_", "NS_"))]
+        assert value_cols and all(c.endswith("_mean") for c in value_cols)
+
+    @pytest.mark.parametrize("bad", [["mean", "p90"], []])
+    def test_unknown_or_empty_stats(self, real_extractor, tmp_path, bad):
+        with pytest.raises(ValueError, match="statistic"):
+            real_extractor.extract(_write_gpkg(tmp_path, [_center(1, 2)]), stats=bad)
+
+
+class TestCallersStillWork:
+    def test_cumulative_time_series_accepts_the_new_frame(
+        self, real_extractor, tmp_path
+    ):
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from geomulticorr.utils.gmc_functions import plot_cumulative_time_series
+
+        gpkg = _write_gpkg(
+            tmp_path,
+            [_center(1, 2), _center(0, 0)],
+            point_id=["a", "b"],
+            name=["x", "y"],
+        )
+        frame = real_extractor.extract(gpkg, buffer_m=4.0)
+        fig = plot_cumulative_time_series({"run": frame})
+        plt.close(fig)

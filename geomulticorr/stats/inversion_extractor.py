@@ -38,10 +38,12 @@ Typical usage
 >>> stats_df = extractor.compute_stats()
 >>> gdf = extractor.extract("/path/to/points.gpkg", buffer_m=5.0)
 >>> gdf_wide = extractor.extract("/path/to/points.gpkg", output_format="wide")
+>>> gdf_wide.to_file("series_at_points.gpkg", layer="series")   # opens in QGIS
 """
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -60,6 +62,10 @@ if TYPE_CHECKING:
 
 _VALID_GEOM_TYPES = {"Point", "MultiPoint", "Polygon", "MultiPolygon"}
 _STATS = ["mean", "median", "min", "max", "std", "count"]
+
+#: Columns the extraction itself writes. An attribute of the input layer with one
+#: of these names is kept as ``src_<name>`` instead of overwriting it.
+_RESERVED_COLUMNS = {"point_id", "date", "component", "geometry", "_row", *_STATS}
 
 #: Sub-folder of an inversion directory holding each component's TOT rasters.
 #: Shared with :mod:`geomulticorr.inversion._stack`, which imports from here
@@ -237,72 +243,107 @@ class InversionExtractor:
 
     def extract(
         self,
-        gpkg_path: str | Path,
+        source: str | Path | gpd.GeoDataFrame | None = None,
         layer: str | None = None,
         buffer_m: float | None = None,
         components: list[str] | None = None,
         output_format: str = "long",
+        keep_attributes: bool = True,
+        stats: tuple[str, ...] | list[str] = tuple(_STATS),
+        *,
+        gpkg_path: str | Path | None = None,
     ) -> gpd.GeoDataFrame:
-        """Extract raster values at GPKG geometry locations.
+        """Extract raster values at point or polygon locations.
 
         For each combination of component and date, samples the TOT raster at
         the given geometries.  When *buffer_m* is provided and the input
-        contains point geometries, each point is buffered before extraction,
-        yielding proper zonal statistics (mean/median/min/max/std/count).
-        Polygon and MultiPolygon geometries are always treated as zones
-        regardless of *buffer_m*.
+        contains point geometries, each point is buffered **only to measure**:
+        the statistics are zonal over the buffer, but the output keeps the
+        original point geometry.  Polygon and MultiPolygon geometries are
+        always treated as zones regardless of *buffer_m* and keep their shape.
 
         Point extraction without buffering returns a single sampled value
-        per point; all stat columns (mean, median, min, max) are set to
-        that value for attribute-table consistency.
+        per point; every requested statistic is set to that value for
+        attribute-table consistency.
 
         Args:
-            gpkg_path: Path to a GeoPackage file (points or polygons).
-            layer: Layer name within the GeoPackage. Defaults to the first layer.
+            source: A GeoPackage / vector file path, **or** a
+                :class:`geopandas.GeoDataFrame` already in memory (points or
+                polygons, any CRS: it is reprojected to the raster CRS).
+            layer: Layer name within the file. Defaults to the first layer.
+                Ignored for a GeoDataFrame.
             buffer_m: Buffer radius in metres (CRS units assumed to be metric).
                 Applied only to Point/MultiPoint geometries.
             components: Restrict extraction to a subset of available components.
             output_format: ``"long"`` (default) — one row per
                 (geometry × date × component); or ``"wide"`` — one row per
                 geometry with compound column names
-                ``{component}_{YYYY-MM-DD}_{stat}``.
+                ``{component}_{YYYY-MM-DD}_{stat}``: the attribute table of the
+                input layer, extended with one column per date.
+            keep_attributes: Carry the columns of the input layer into the result
+                (default ``True``). An attribute whose name collides with a
+                column written here (``point_id``, ``date``, ``component``, a
+                statistic) is kept as ``src_<name>``.
+            stats: Which statistics to compute, among ``"mean"``, ``"median"``,
+                ``"min"``, ``"max"``, ``"std"``, ``"count"`` (default: all).
+            gpkg_path: Deprecated alias of *source*.
 
         Returns:
-            GeoDataFrame in the requested format.  The CRS matches the
-            inversion rasters.
+            GeoDataFrame in the requested format, in the raster CRS, with the
+            **input geometries** (a point stays a point). Write it with
+            ``result.to_file(path, layer=...)``; wide format has one row per
+            point and opens directly in QGIS.
 
         Raises:
-            ValueError: If the GeoPackage contains unsupported geometry types
-                (e.g. LineString).
+            ValueError: If the layer contains unsupported geometry types
+                (e.g. LineString), or *stats* holds an unknown name.
+            TypeError: If *source* is missing or of an unsupported type.
         """
-        gpkg_path = Path(gpkg_path)
-        gdf = gpd.read_file(gpkg_path, layer=layer)
+        if gpkg_path is not None:
+            if source is not None:
+                raise TypeError("pass `source`, not both `source` and `gpkg_path`")
+            warnings.warn(
+                "extract(gpkg_path=...) is deprecated; pass the layer as `source`.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            source = gpkg_path
+        if source is None:
+            raise TypeError("extract() missing the required argument `source`")
+        stats = _check_stats(stats)
+        gdf, label = _load_source(source, layer)
 
         geom_types = set(gdf.geometry.geom_type.dropna().unique())
         unsupported = geom_types - _VALID_GEOM_TYPES
         if unsupported:
             raise ValueError(
-                f"Unsupported geometry types in '{gpkg_path.name}': {unsupported}. "
+                f"Unsupported geometry types in '{label}': {unsupported}. "
                 f"Expected one of {_VALID_GEOM_TYPES}."
             )
 
         # Reproject to raster CRS
         raster_crs = self._raster_crs()
         if gdf.crs is None:
-            logger.warning(
-                "Input GeoPackage has no CRS — assuming it matches raster CRS."
-            )
+            logger.warning("Input layer has no CRS — assuming it matches raster CRS.")
         elif gdf.crs != raster_crs:
             gdf = gdf.to_crs(raster_crs)
+        gdf = gdf.reset_index(drop=True)
 
         # Precompute point IDs
         point_ids = _extract_ids(gdf)
+        if len(set(point_ids)) != len(point_ids):
+            logger.warning(
+                "point_id is not unique in the input layer: the wide format keeps "
+                "the first row of each id."
+            )
 
-        # Optionally buffer points
+        # The geometries the result carries are the input ones; buffers only
+        # exist to measure.
+        out_geoms = list(gdf.geometry)
+        zone_geoms = out_geoms
         is_point = geom_types.issubset({"Point", "MultiPoint"})
-        extract_gdf = gdf.copy()
         if buffer_m and is_point:
-            extract_gdf["geometry"] = extract_gdf.geometry.buffer(buffer_m)
+            zone_geoms = list(gdf.geometry.buffer(buffer_m))
             logger.info(f"Points buffered by {buffer_m} m for zonal extraction.")
 
         use_zonal = (buffer_m is not None and is_point) or not is_point
@@ -317,15 +358,30 @@ class InversionExtractor:
                 date_fmt = _fmt_date(date_str)
                 if use_zonal:
                     rows = _extract_zonal(
-                        extract_gdf, raster_path, point_ids, date_fmt, comp
+                        zone_geoms, raster_path, point_ids, date_fmt, comp, stats
                     )
                 else:
                     rows = _extract_points(
-                        extract_gdf, raster_path, point_ids, date_fmt, comp
+                        zone_geoms, raster_path, point_ids, date_fmt, comp, stats
                     )
+                for row in rows:
+                    row["geometry"] = out_geoms[row["_row"]]
                 records.extend(rows)
 
         result = gpd.GeoDataFrame(records, crs=raster_crs)
+
+        if keep_attributes and len(result):
+            attrs = _attribute_frame(gdf)
+            if len(attrs.columns):
+                result = result.merge(
+                    attrs, left_on="_row", right_index=True, how="left"
+                )
+        if "_row" in result.columns:
+            result = result.drop(columns="_row")
+        if len(result):  # geometry last, as in a vector layer
+            result = result[
+                [c for c in result.columns if c != "geometry"] + ["geometry"]
+            ]
 
         if output_format == "wide":
             return _to_wide(result)
@@ -356,49 +412,90 @@ def _extract_ids(gdf: gpd.GeoDataFrame) -> list:
     return gdf.index.tolist()
 
 
+def _check_stats(stats) -> tuple[str, ...]:
+    """Validate the requested statistics; keeps the given order, drops repeats."""
+    if isinstance(stats, str):
+        stats = (stats,)
+    names = tuple(dict.fromkeys(stats))
+    unknown = [s for s in names if s not in _STATS]
+    if unknown or not names:
+        raise ValueError(
+            f"Unknown statistic(s) {unknown or list(stats)!r}; choose among {_STATS}."
+        )
+    return names
+
+
+def _load_source(source, layer) -> tuple[gpd.GeoDataFrame, str]:
+    """``(GeoDataFrame, label)`` from a path, a GeoDataFrame or a ``geoutils.Vector``."""
+    if isinstance(source, gpd.GeoDataFrame):
+        return source.copy(), "GeoDataFrame"
+    if isinstance(source, (str, Path)):
+        return gpd.read_file(Path(source), layer=layer), Path(source).name
+    ds = getattr(source, "ds", None)  # geoutils.Vector
+    if isinstance(ds, gpd.GeoDataFrame):
+        return ds.copy(), "Vector"
+    raise TypeError(
+        "source must be a path or a GeoDataFrame, got " f"{type(source).__name__}"
+    )
+
+
+def _attribute_frame(gdf: gpd.GeoDataFrame) -> pd.DataFrame:
+    """The non-geometry columns of the input, positionally indexed, safe to merge.
+
+    ``point_id`` is dropped (it is the identifier already written), and any
+    column named like one of the extraction's own columns is renamed
+    ``src_<name>``.
+    """
+    attrs = pd.DataFrame(gdf.drop(columns=gdf.geometry.name)).reset_index(drop=True)
+    attrs = attrs.drop(columns=[c for c in ("point_id",) if c in attrs.columns])
+    return attrs.rename(
+        columns={c: f"src_{c}" for c in attrs.columns if c in _RESERVED_COLUMNS}
+    )
+
+
 def _extract_zonal(
-    gdf: gpd.GeoDataFrame,
+    zone_geoms: list,
     raster_path: Path,
     point_ids: list,
     date_fmt: str,
     comp: str,
+    stats: tuple[str, ...] = tuple(_STATS),
 ) -> list[dict]:
-    """Extract zonal statistics from a raster for each geometry."""
+    """Extract zonal statistics from a raster for each zone geometry.
+
+    Rows carry ``_row`` (the position in the input layer), not a geometry: the
+    caller attaches the original one.
+    """
     zs = rasterstats.zonal_stats(
-        gdf.geometry,
+        zone_geoms,
         str(raster_path),
-        stats=_STATS,
+        stats=list(stats),
         all_touched=False,
     )
     rows = []
     for i, stat in enumerate(zs):
-        rows.append(
-            {
-                "point_id": point_ids[i],
-                "date": date_fmt,
-                "component": comp,
-                "mean": stat.get("mean"),
-                "median": stat.get("median"),
-                "min": stat.get("min"),
-                "max": stat.get("max"),
-                "std": stat.get("std"),
-                "count": stat.get("count"),
-                "geometry": gdf.geometry.iloc[i],
-            }
-        )
+        row = {
+            "_row": i,
+            "point_id": point_ids[i],
+            "date": date_fmt,
+            "component": comp,
+        }
+        row.update({name: stat.get(name) for name in stats})
+        rows.append(row)
     return rows
 
 
 def _extract_points(
-    gdf: gpd.GeoDataFrame,
+    point_geoms: list,
     raster_path: Path,
     point_ids: list,
     date_fmt: str,
     comp: str,
+    stats: tuple[str, ...] = tuple(_STATS),
 ) -> list[dict]:
     """Sample raster at point locations (nearest pixel, no buffer)."""
     values = rasterstats.point_query(
-        gdf.geometry,
+        point_geoms,
         str(raster_path),
         interpolate="nearest",
     )
@@ -406,38 +503,42 @@ def _extract_points(
     for i, val in enumerate(values):
         v = float(val) if val is not None else np.nan
         is_finite = np.isfinite(v)
-        rows.append(
-            {
-                "point_id": point_ids[i],
-                "date": date_fmt,
-                "component": comp,
-                "mean": v,
-                "median": v,
-                "min": v,
-                "max": v,
-                "std": 0.0 if is_finite else np.nan,
-                "count": 1 if is_finite else 0,
-                "geometry": gdf.geometry.iloc[i],
-            }
-        )
+        every = {
+            "mean": v,
+            "median": v,
+            "min": v,
+            "max": v,
+            "std": 0.0 if is_finite else np.nan,
+            "count": 1 if is_finite else 0,
+        }
+        row = {
+            "_row": i,
+            "point_id": point_ids[i],
+            "date": date_fmt,
+            "component": comp,
+        }
+        row.update({name: every[name] for name in stats})
+        rows.append(row)
     return rows
 
 
 def _to_wide(long_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Pivot long-format extraction result to wide format.
 
-    Output columns: ``point_id``, geometry, then
-    ``{component}_{YYYY-MM-DD}_{stat}`` for each (component, date, stat)
-    combination, sorted by component → date → stat.
+    Output columns: ``point_id``, the attributes carried from the input layer
+    (if any), then ``{component}_{YYYY-MM-DD}_{stat}`` for each (component,
+    date, stat) combination sorted by component → date → stat, then geometry.
+    One row per ``point_id`` (the first one, if an id repeats).
     """
-    geometry_map = long_gdf.drop_duplicates("point_id").set_index("point_id")[
-        "geometry"
+    stat_cols = [s for s in _STATS if s in long_gdf.columns]
+    attr_cols = [
+        c for c in long_gdf.columns if c not in _RESERVED_COLUMNS and c != "geometry"
     ]
+    first = long_gdf.drop_duplicates("point_id").set_index("point_id")
 
     # Build a plain DataFrame from the long-format records
     df = pd.DataFrame(long_gdf.drop(columns="geometry"))
 
-    stat_cols = ["mean", "median", "min", "max", "std", "count"]
     wide_frames: list[pd.DataFrame] = []
     for stat in stat_cols:
         pivoted = df.pivot_table(
@@ -458,10 +559,12 @@ def _to_wide(long_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         key=lambda c: (c.split("_", 1)[0], *c.rsplit("_", 1)),
     )
     wide_df = wide_df[col_order]
+    if attr_cols:
+        wide_df = pd.concat([first.loc[wide_df.index, attr_cols], wide_df], axis=1)
 
     wide_gdf = gpd.GeoDataFrame(
         wide_df.reset_index(),
-        geometry=geometry_map.loc[wide_df.index].values,
+        geometry=first.loc[wide_df.index, "geometry"].values,
         crs=long_gdf.crs,
     )
     return wide_gdf
