@@ -1,0 +1,26 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+        exclude: \.txt$
+      - id: trailing-whitespace
+        types: [python]
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 26.5.1            # keep equal to `black --version` in gmc_env
+    hooks:
+      - id: black
+
+  - repo: local
+    hooks:
+      - id: check-license-header
+        name: Check license headers
+        entry: python .github/scripts/check_license_header.py
+        language: python
+        types: [python]
+        files: ^(geomulticorr|tests)/

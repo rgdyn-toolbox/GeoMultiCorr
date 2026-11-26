@@ -6,7 +6,7 @@
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
 #
-# tests/stats/test_stats.py
+# test_stats.py
 # creation date: 2026-07-02.
 #
 # This program is free software: you can redistribute it and/or modify

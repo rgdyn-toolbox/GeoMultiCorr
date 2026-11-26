@@ -6,7 +6,7 @@
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
 #
-# __init__.py
+# gmc_functions.py
 # creation date: 2026-05-12.
 #
 # This program is free software: you can redistribute it and/or modify
@@ -26,6 +26,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
+
 import os
 import sys
 import shutil

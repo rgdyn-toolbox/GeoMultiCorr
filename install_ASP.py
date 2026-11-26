@@ -2,27 +2,27 @@
 # coding=utf-8
 # ---------------------------------------------------------------------------- #
 # Copyright (C) 2026 GeoMultiCorr developers | All rights reserved.
-# 
+#
 # This file is part of the GeoMultiCorr (GMC) project.
 # https://github.com/rgdyn-toolbox/GeoMultiCorr
-# 
+#
 # install_ASP.py
 # creation date: 2026-05-07.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
 # by the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 # https://www.gnu.org/licenses/agpl-3.0.txt
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # ---------------------------------------------------------------------------- #
@@ -50,11 +50,14 @@ import urllib.request
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-GITHUB_API_URL = "https://api.github.com/repos/NeoGeographyToolkit/StereoPipeline/releases"
+GITHUB_API_URL = (
+    "https://api.github.com/repos/NeoGeographyToolkit/StereoPipeline/releases"
+)
 INSTALL_DIR = pathlib.Path.home() / "ASP_install"
 BASHRC = pathlib.Path.home() / ".bashrc"
 
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
+
 
 def resolve_asset_url() -> tuple[str, str]:
     """Return (download_url, filename) for the latest stable Linux x86_64 release."""
@@ -75,6 +78,7 @@ def resolve_asset_url() -> tuple[str, str]:
 
     raise RuntimeError("No stable Linux x86_64 asset found on GitHub.")
 
+
 def _progress_hook(block_count: int, block_size: int, total_size: int) -> None:
     downloaded = block_count * block_size
     if total_size > 0:
@@ -82,7 +86,12 @@ def _progress_hook(block_count: int, block_size: int, total_size: int) -> None:
         mb_done = downloaded / 1_048_576
         mb_total = total_size / 1_048_576
         bar = "#" * int(pct / 2)
-        print(f"\r  [{bar:<50}] {pct:5.1f}%  {mb_done:.0f}/{mb_total:.0f} MB", end="", flush=True)
+        print(
+            f"\r  [{bar:<50}] {pct:5.1f}%  {mb_done:.0f}/{mb_total:.0f} MB",
+            end="",
+            flush=True,
+        )
+
 
 def download(url: str, dest: pathlib.Path) -> None:
     """Download *url* to *dest*, skipping if already present."""
@@ -92,6 +101,7 @@ def download(url: str, dest: pathlib.Path) -> None:
     print(f"Downloading {dest.name} ...")
     urllib.request.urlretrieve(url, dest, reporthook=_progress_hook)
     print()  # newline after progress bar
+
 
 def extract(archive: pathlib.Path, dest_dir: pathlib.Path) -> pathlib.Path:
     """Extract *archive* into *dest_dir* and return the top-level directory."""
@@ -103,6 +113,7 @@ def extract(archive: pathlib.Path, dest_dir: pathlib.Path) -> pathlib.Path:
     extracted = dest_dir / top
     print(f"Extracted to: {extracted}")
     return extracted
+
 
 def register_path(bin_dir: pathlib.Path) -> None:
     """Append an export PATH line to ~/.bashrc if not already present."""
@@ -118,6 +129,7 @@ def register_path(bin_dir: pathlib.Path) -> None:
         f.write(f"\n# Added by install_ASP.py\n{export_line}\n")
     print(f"PATH entry added to {BASHRC}.")
 
+
 def verify(bin_dir: pathlib.Path) -> None:
     stereo = bin_dir / "stereo"
     if stereo.exists():
@@ -125,6 +137,7 @@ def verify(bin_dir: pathlib.Path) -> None:
     else:
         print(f"ERROR: 'stereo' binary not found in {bin_dir}.", file=sys.stderr)
         sys.exit(1)
+
 
 def main() -> None:
     # Resolve asset
@@ -155,6 +168,7 @@ def main() -> None:
 
     print("\nDone. To activate ASP in your current shell, run:")
     print(f"  source {BASHRC}")
+
 
 if __name__ == "__main__":
     main()

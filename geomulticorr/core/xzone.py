@@ -177,7 +177,7 @@ def draw_time_series(disps=disps, color='black', bounds=None, savepath=None):
     fig, ax = plt.subplots(figsize=(10,6.5))
 
     for period in disps.iloc:
-        
+
         # Recupere les bornes de la periode d'etude
         ya = period.period[0]
         yb = period.period[1]
